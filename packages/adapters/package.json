@@ -1,0 +1,15 @@
+{
+  "name": "@veridone/adapters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@veridone/core": "workspace:*",
+    "zod": "4.4.3"
+  }
+}
