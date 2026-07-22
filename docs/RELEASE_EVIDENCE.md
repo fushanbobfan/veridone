@@ -1,4 +1,4 @@
-# v1.0.1 release evidence
+# v1.0.2 release evidence
 
 This file maps the v1 release claim to reproducible evidence. A green badge is not treated as proof by itself; follow the linked workflow to inspect every job and log.
 
@@ -6,7 +6,7 @@ This file maps the v1 release claim to reproducible evidence. A green badge is n
 
 - Repository: <https://github.com/fushanbobfan/veridone>
 - Synthetic demo: <https://fushanbobfan.github.io/veridone/>
-- Release: <https://github.com/fushanbobfan/veridone/releases/tag/v1.0.1>
+- Release: <https://github.com/fushanbobfan/veridone/releases/tag/v1.0.2>
 - Security reporting: <https://github.com/fushanbobfan/veridone/security/advisories/new>
 
 ## Gate map

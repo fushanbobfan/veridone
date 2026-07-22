@@ -24,7 +24,7 @@ Never include real credentials, private receipt contents, local workspace backup
 - Imported command text remains inert.
 - Executable checks require explicit local approval and literal arguments.
 - Verdicts are human and append-only.
-- The service binds to loopback unless the operator explicitly opts into a broader threat model.
+- The v1 service binds only to loopback and rejects every non-loopback host; remote and multi-user deployments are out of scope.
 - Public demos contain visibly synthetic data and no filesystem/process capability.
 
 ## Reporting security issues
