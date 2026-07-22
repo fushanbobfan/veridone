@@ -5,7 +5,7 @@ import {
   resolveWithinApprovedRoots,
   runBoundedProcess,
 } from '@veridone/adapters';
-import { canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
+import { assessDeclaredScope, canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
 
 import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
 
@@ -31,7 +31,7 @@ function redact(value: string): string {
     .replace(/\b(gh[oprsu]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b/gu, '[REDACTED]');
 }
 
-async function aggregateCheckVersion(checks: CheckRecord[]): Promise<string> {
+export async function aggregateCheckVersion(checks: CheckRecord[]): Promise<string> {
   return sha256Hex(canonicalJson(checks.map((check) => check.definitionHash).sort()));
 }
 
@@ -39,6 +39,7 @@ export async function runApprovedCheck(
   database: VeriDoneDatabase,
   checkId: string,
   workItemId: string,
+  signal?: AbortSignal,
 ): Promise<EvidenceRecord> {
   const check = database.getCheck(checkId);
   if (!check) throw new Error('The approved check does not exist.');
@@ -65,9 +66,31 @@ export async function runApprovedCheck(
     checkDefinitionVersion,
   });
   database.upsertRepository(before.repositoryPath, before.snapshot);
-  database.linkWorkItem(workItem.id, repository.id);
+  if (workItem.snapshotFingerprint !== before.snapshot.fingerprint) {
+    throw new Error(
+      'The work item binding is stale. Explicitly rebind it to the current repository state before running checks.',
+    );
+  }
 
   const startedAt = new Date().toISOString();
+  const versionResult =
+    check.versionArgs.length === 0
+      ? null
+      : await runBoundedProcess({
+          executable: check.executable,
+          args: check.versionArgs,
+          cwd: workingDirectory,
+          timeoutMs: 5_000,
+          maxOutputBytes: 4_096,
+          env: minimalEnvironment(),
+          ...(signal ? { signal } : {}),
+        });
+  const toolVersion = versionResult
+    ? (redact(`${versionResult.stdout}\n${versionResult.stderr}`)
+        .trim()
+        .split(/\r?\n/u)[0]
+        ?.slice(0, 4_096) ?? null)
+    : null;
   const result = await runBoundedProcess({
     executable: check.executable,
     args: check.args,
@@ -75,6 +98,7 @@ export async function runApprovedCheck(
     timeoutMs: check.timeoutMs,
     maxOutputBytes: check.maxOutputBytes,
     env: minimalEnvironment(),
+    ...(signal ? { signal } : {}),
   });
   const completedAt = new Date().toISOString();
   const after = await captureGitSnapshot(repository.path, {
@@ -98,6 +122,7 @@ export async function runApprovedCheck(
       checkId,
       result: checkResult,
       exitCode: result.exitCode,
+      toolVersion,
       stdout,
       stderr,
       snapshotFingerprint: before.snapshot.fingerprint,
@@ -118,6 +143,8 @@ export async function runApprovedCheck(
     startedAt,
     completedAt,
     durationMs: result.durationMs,
+    toolVersion,
+    exitCode: result.exitCode,
     stdout,
     stderr,
     artifactHashes: [artifactHash],
@@ -128,14 +155,33 @@ export async function runApprovedCheck(
 export function acceptanceReadiness(
   database: VeriDoneDatabase,
   workItemId: string,
-): { ready: boolean; checkCount: number; passingCount: number; evidenceIds: string[] } {
+): {
+  ready: boolean;
+  checkCount: number;
+  passingCount: number;
+  evidenceIds: string[];
+  scopeDeclared: boolean;
+  scopeDriftPaths: string[];
+} {
+  const empty = {
+    ready: false,
+    checkCount: 0,
+    passingCount: 0,
+    evidenceIds: [],
+    scopeDeclared: false,
+    scopeDriftPaths: [],
+  };
   const workItem = database.getWorkItem(workItemId);
   if (!workItem?.repositoryId) {
-    return { ready: false, checkCount: 0, passingCount: 0, evidenceIds: [] };
+    return empty;
   }
   const repository = database.getRepository(workItem.repositoryId);
-  if (!repository) return { ready: false, checkCount: 0, passingCount: 0, evidenceIds: [] };
+  if (!repository) return empty;
   const checks = database.listChecks().filter((check) => check.repositoryId === repository.id);
+  const scope = assessDeclaredScope(
+    repository.snapshot.statusEntries,
+    checks.flatMap((check) => check.scopePaths),
+  );
   const allEvidence = database.listEvidence(workItemId);
   const latest = checks
     .map((check) => allEvidence.find((evidence) => evidence.checkId === check.id))
@@ -144,12 +190,16 @@ export function acceptanceReadiness(
     (evidence) =>
       evidence.result === 'passed' &&
       evidence.snapshotFingerprint === repository.snapshot.fingerprint &&
+      evidence.contractVersion === repository.snapshot.contractVersion &&
+      evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
       evidence.invalidReason === null,
   );
   return {
-    ready: checks.length > 0 && passing.length === checks.length,
+    ready: checks.length > 0 && passing.length === checks.length && scope.satisfied,
     checkCount: checks.length,
     passingCount: passing.length,
     evidenceIds: passing.map((evidence) => evidence.id),
+    scopeDeclared: scope.declared,
+    scopeDriftPaths: scope.outsidePaths,
   };
 }

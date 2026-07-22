@@ -1,36 +1,82 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { fetchBootstrap, linkWorkItem, runCheck, type BootstrapDto } from './api.js';
+import { cancelCheck, fetchBootstrap, linkWorkItem, runCheck, type BootstrapDto } from './api.js';
 import { AddSourceDialog } from './components/AddSourceDialog.js';
 import { CheckDialog } from './components/CheckDialog.js';
 import { Navigation } from './components/Navigation.js';
+import type { WorkspaceSection } from './components/Navigation.js';
 import { ReviewDetail } from './components/ReviewDetail.js';
 import { ReviewInbox } from './components/ReviewInbox.js';
 import { VerdictDialog } from './components/VerdictDialog.js';
+import { WorkspaceDialog } from './components/WorkspaceDialog.js';
+import { WorkspaceExplorerDialog } from './components/WorkspaceExplorerDialog.js';
 import { demoReviews, type ReviewState } from './data.js';
 import { workItemToReview } from './local-data.js';
 
 type Theme = 'light' | 'dark';
+type ThemePreference = Theme | 'system';
+type ReviewSort = 'priority' | 'newest' | 'repository';
 
-function initialTheme(): Theme {
+function initialView(): {
+  reviewId: string;
+  filter: 'all' | ReviewState;
+  query: string;
+  sort: ReviewSort;
+} {
+  const parameters = new URLSearchParams(window.location.search);
+  const requestedFilter = parameters.get('filter');
+  const requestedSort = parameters.get('sort');
+  return {
+    reviewId: parameters.get('review') ?? demoReviews[0]?.id ?? '',
+    filter:
+      requestedFilter === 'stale' ||
+      requestedFilter === 'blocked' ||
+      requestedFilter === 'ready' ||
+      requestedFilter === 'decided'
+        ? requestedFilter
+        : ('all' as const),
+    query: parameters.get('q') ?? '',
+    sort:
+      requestedSort === 'newest' || requestedSort === 'repository'
+        ? requestedSort
+        : ('priority' as const),
+  };
+}
+
+function initialTheme(): ThemePreference {
   const stored = localStorage.getItem('veridone-theme');
-  if (stored === 'light' || stored === 'dark') return stored;
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
+  return 'system';
 }
 
 export function App() {
-  const [selectedId, setSelectedId] = useState(demoReviews[0]?.id ?? '');
-  const [filter, setFilter] = useState<'all' | ReviewState>('all');
-  const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [initial] = useState(initialView);
+  const [selectedId, setSelectedId] = useState(initial.reviewId);
+  const [filter, setFilter] = useState<'all' | ReviewState>(initial.filter);
+  const [query, setQuery] = useState(initial.query);
+  const [sort, setSort] = useState<ReviewSort>(initial.sort);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(initialTheme);
+  const [systemTheme, setSystemTheme] = useState<Theme>(() =>
+    window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
+  );
+  const theme: Theme = themePreference === 'system' ? systemTheme : themePreference;
   const [mobilePane, setMobilePane] = useState<'inbox' | 'detail'>('inbox');
   const [decisions, setDecisions] = useState<Record<string, string>>({});
   const [bootstrap, setBootstrap] = useState<BootstrapDto | null>(null);
+  const [connectionState, setConnectionState] = useState<'loading' | 'ready' | 'demo'>(
+    import.meta.env.MODE === 'test' ? 'demo' : 'loading',
+  );
+  const [serviceUnavailable, setServiceUnavailable] = useState(false);
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [checkDialogOpen, setCheckDialogOpen] = useState(false);
-  const [verdictDecision, setVerdictDecision] = useState<'accepted' | 'changes-requested' | null>(
-    null,
-  );
+  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [workspaceSection, setWorkspaceSection] = useState<WorkspaceSection | null>(null);
+  const [verdictIntent, setVerdictIntent] = useState<{
+    decision: 'accepted' | 'changes-requested' | 'rejected';
+    overrideRequired: boolean;
+  } | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const reviews = useMemo(
     () =>
@@ -47,6 +93,7 @@ export function App() {
   const reloadWorkspace = async () => {
     const next = await fetchBootstrap();
     setBootstrap(next);
+    setConnectionState(next.mode === 'local' ? 'ready' : 'demo');
     setSelectedId((current) =>
       next.workItems.some((item) => item.id === current) ? current : (next.workItems[0]?.id ?? ''),
     );
@@ -55,21 +102,67 @@ export function App() {
   useEffect(() => {
     if (import.meta.env.MODE === 'test') return;
     const controller = new AbortController();
-    fetchBootstrap(controller.signal)
-      .then((next) => {
-        setBootstrap(next);
-        if (next.mode === 'local' && next.workItems[0]) setSelectedId(next.workItems[0].id);
-      })
-      .catch(() => {
-        // Static/public deployments intentionally fall back to the labeled synthetic demo.
-      });
-    return () => controller.abort();
+    const update = () =>
+      fetchBootstrap(controller.signal)
+        .then((next) => {
+          setBootstrap(next);
+          setConnectionState(next.mode === 'local' ? 'ready' : 'demo');
+          setServiceUnavailable(false);
+          if (next.mode === 'local' && next.workItems[0]) setSelectedId(next.workItems[0].id);
+        })
+        .catch(() => {
+          // Static/public deployments intentionally fall back to the labeled synthetic demo.
+          setConnectionState('demo');
+          setServiceUnavailable(import.meta.env.VITE_PUBLIC_DEMO !== '1');
+        });
+    void update();
+    const interval = window.setInterval(() => void update(), 15_000);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem('veridone-theme', theme);
-  }, [theme]);
+    localStorage.setItem('veridone-theme', themePreference);
+  }, [theme, themePreference]);
+
+  useEffect(() => {
+    const preference = window.matchMedia('(prefers-color-scheme: light)');
+    const update = () => setSystemTheme(preference.matches ? 'light' : 'dark');
+    preference.addEventListener?.('change', update);
+    return () => preference.removeEventListener?.('change', update);
+  }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (selectedId) url.searchParams.set('review', selectedId);
+    else url.searchParams.delete('review');
+    if (filter === 'all') url.searchParams.delete('filter');
+    else url.searchParams.set('filter', filter);
+    if (query) url.searchParams.set('q', query);
+    else url.searchParams.delete('q');
+    if (sort === 'priority') url.searchParams.delete('sort');
+    else url.searchParams.set('sort', sort);
+    window.history.replaceState(null, '', url);
+  }, [filter, query, selectedId, sort]);
+
+  if (connectionState === 'loading') {
+    return (
+      <main className="loading-workspace" aria-busy="true" aria-live="polite">
+        <div className="brand-lockup">
+          <span className="brand-mark" aria-hidden="true">
+            V
+          </span>
+          <span>VeriDone</span>
+        </div>
+        <span className="loading-line" />
+        <span className="loading-line short" />
+        <p>Refreshing repository fingerprints and local evidence…</p>
+      </main>
+    );
+  }
 
   if (!selected) {
     return (
@@ -82,7 +175,7 @@ export function App() {
         </div>
         <span className="section-label">Local workspace</span>
         <h1>No evidence sources yet</h1>
-        <p>Approve a root, then add a Git repository or harness receipt.</p>
+        <p>Approve a root, then add a Git repository or agent receipt.</p>
         <button className="primary-action" type="button" onClick={() => setSourceDialogOpen(true)}>
           Add first source
         </button>
@@ -90,6 +183,7 @@ export function App() {
           <AddSourceDialog
             open={sourceDialogOpen}
             csrfToken={bootstrap.csrfToken}
+            roots={bootstrap.roots}
             onClose={() => setSourceDialogOpen(false)}
             onAdded={reloadWorkspace}
           />
@@ -99,6 +193,7 @@ export function App() {
   }
 
   const localWorkItem = bootstrap?.workItems.find((item) => item.id === selected.id);
+  const localVerdict = bootstrap?.verdicts.find((verdict) => verdict.workItemId === selected.id);
   const localRepository = localWorkItem?.repositoryId
     ? bootstrap?.repositories.find((repository) => repository.id === localWorkItem.repositoryId)
     : null;
@@ -129,6 +224,20 @@ export function App() {
       }
       return;
     }
+    if (localWorkItem.snapshotFingerprint !== localRepository?.snapshot.fingerprint) {
+      setActionBusy(true);
+      try {
+        await linkWorkItem(localWorkItem.id, localWorkItem.repositoryId, bootstrap.csrfToken);
+        await reloadWorkspace();
+      } catch (caught) {
+        setActionError(
+          caught instanceof Error ? caught.message : 'The work item could not be rebound.',
+        );
+      } finally {
+        setActionBusy(false);
+      }
+      return;
+    }
     if (localChecks.length === 0) {
       setCheckDialogOpen(true);
       return;
@@ -137,7 +246,9 @@ export function App() {
     setActionBusy(true);
     try {
       for (const check of localChecks) {
-        await runCheck(check.id, localWorkItem.id, bootstrap.csrfToken);
+        const runId = crypto.randomUUID();
+        setActiveRunId(runId);
+        await runCheck(check.id, localWorkItem.id, bootstrap.csrfToken, runId);
       }
       await reloadWorkspace();
     } catch (caught) {
@@ -145,7 +256,19 @@ export function App() {
         caught instanceof Error ? caught.message : 'The checks could not be completed.',
       );
     } finally {
+      setActiveRunId(null);
       setActionBusy(false);
+    }
+  };
+
+  const cancelEvidenceAction = async () => {
+    if (!bootstrap || !activeRunId) return;
+    try {
+      await cancelCheck(activeRunId, bootstrap.csrfToken);
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : 'The check could not be cancelled.',
+      );
     }
   };
 
@@ -155,11 +278,13 @@ export function App() {
         ? bootstrap.repositories.length > 0
           ? `Link to ${bootstrap.repositories[0]?.name ?? 'repository'}`
           : 'Add a repository'
-        : localChecks.length === 0
-          ? 'Approve a check'
-          : selected.state === 'ready'
-            ? 'Re-run approved checks'
-            : 'Run approved checks'
+        : localWorkItem.snapshotFingerprint !== localRepository?.snapshot.fingerprint
+          ? 'Rebind to current state'
+          : localChecks.length === 0
+            ? 'Approve a check'
+            : selected.state === 'ready'
+              ? 'Re-run approved checks'
+              : 'Run approved checks'
       : selected.state === 'ready'
         ? undefined
         : 'Run open checks';
@@ -186,21 +311,50 @@ export function App() {
         theme={theme}
         reviewCount={reviews.length}
         serviceMode={bootstrap?.mode ?? 'demo'}
-        onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+        themePreference={themePreference}
+        onToggleTheme={() =>
+          setThemePreference((current) =>
+            current === 'system'
+              ? theme === 'dark'
+                ? 'light'
+                : 'dark'
+              : current === 'light'
+                ? 'dark'
+                : 'system',
+          )
+        }
+        {...(bootstrap?.mode === 'local'
+          ? {
+              onOpenWorkspace: () => setWorkspaceDialogOpen(true),
+              onOpenSection: (section: WorkspaceSection) => setWorkspaceSection(section),
+            }
+          : {})}
       />
       <ReviewInbox
         items={reviews}
         selectedId={selected.id}
         filter={filter}
-        dataLabel={bootstrap?.mode === 'local' ? 'Live local evidence' : 'Synthetic demo data'}
+        query={query}
+        sort={sort}
+        dataLabel={
+          bootstrap?.mode === 'local'
+            ? 'Live local evidence'
+            : serviceUnavailable
+              ? 'Local service unavailable · synthetic demo'
+              : 'Synthetic demo data'
+        }
+        sourceIssues={bootstrap?.sourceIssues ?? []}
         {...(bootstrap?.mode === 'local' ? { onAddSource: () => setSourceDialogOpen(true) } : {})}
         onFilter={setFilter}
+        onQuery={setQuery}
+        onSort={setSort}
         onSelect={selectReview}
       />
       {bootstrap && (
         <AddSourceDialog
           open={sourceDialogOpen}
           csrfToken={bootstrap.csrfToken}
+          roots={bootstrap.roots}
           onClose={() => setSourceDialogOpen(false)}
           onAdded={reloadWorkspace}
         />
@@ -208,17 +362,19 @@ export function App() {
       <ReviewDetail
         item={selected}
         decision={
-          localWorkItem?.humanVerdict
-            ? `Human verdict: ${localWorkItem.humanVerdict}`
+          localVerdict
+            ? `${localVerdict.decision}${localVerdict.overrideReason ? ` · override: ${localVerdict.overrideReason}` : ''}`
             : (decisions[selected.id] ?? null)
         }
         {...(evidenceActionLabel ? { evidenceActionLabel } : {})}
         evidenceActionBusy={actionBusy}
+        {...(activeRunId ? { onCancelEvidence: cancelEvidenceAction } : {})}
         onBack={() => setMobilePane('inbox')}
         {...(isLocal ? { onEvidenceAction: performEvidenceAction, onExport: exportPacket } : {})}
+        onViewContract={() => setWorkspaceSection('contracts')}
         onAccept={() => {
           if (isLocal) {
-            setVerdictDecision('accepted');
+            setVerdictIntent({ decision: 'accepted', overrideRequired: false });
           } else {
             setDecisions((current) => ({
               ...current,
@@ -228,7 +384,7 @@ export function App() {
         }}
         onRequestChanges={() => {
           if (isLocal) {
-            setVerdictDecision('changes-requested');
+            setVerdictIntent({ decision: 'changes-requested', overrideRequired: false });
           } else {
             setDecisions((current) => ({
               ...current,
@@ -236,6 +392,21 @@ export function App() {
             }));
           }
         }}
+        onReject={() => {
+          if (isLocal) {
+            setVerdictIntent({ decision: 'rejected', overrideRequired: false });
+          } else {
+            setDecisions((current) => ({
+              ...current,
+              [selected.id]: 'Rejected by you',
+            }));
+          }
+        }}
+        {...(isLocal
+          ? {
+              onOverride: () => setVerdictIntent({ decision: 'accepted', overrideRequired: true }),
+            }
+          : {})}
       />
       {bootstrap && localRepository && (
         <CheckDialog
@@ -246,14 +417,32 @@ export function App() {
           onAdded={reloadWorkspace}
         />
       )}
-      {bootstrap && localWorkItem && verdictDecision && (
+      {bootstrap && localWorkItem && verdictIntent && (
         <VerdictDialog
           open
           workItemId={localWorkItem.id}
-          decision={verdictDecision}
+          decision={verdictIntent.decision}
+          overrideRequired={verdictIntent.overrideRequired}
           csrfToken={bootstrap.csrfToken}
-          onClose={() => setVerdictDecision(null)}
+          onClose={() => setVerdictIntent(null)}
           onRecorded={reloadWorkspace}
+        />
+      )}
+      {bootstrap?.mode === 'local' && (
+        <WorkspaceDialog
+          open={workspaceDialogOpen}
+          bootstrap={bootstrap}
+          onClose={() => setWorkspaceDialogOpen(false)}
+          onImported={reloadWorkspace}
+        />
+      )}
+      {bootstrap && (
+        <WorkspaceExplorerDialog
+          open={workspaceSection !== null}
+          section={workspaceSection ?? 'repositories'}
+          bootstrap={bootstrap}
+          onSection={setWorkspaceSection}
+          onClose={() => setWorkspaceSection(null)}
         />
       )}
       {actionError && (

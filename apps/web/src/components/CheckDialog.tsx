@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { CheckCircle2, X } from 'lucide-react';
 
 import { createCheck } from '../api.js';
+import { useDialogFocus } from './useDialogFocus.js';
 
 export function CheckDialog({
   open,
@@ -18,21 +19,18 @@ export function CheckDialog({
 }) {
   const titleId = useId();
   const closeButton = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLElement>(null);
   const [label, setLabel] = useState('Unit and integration tests');
   const [kind, setKind] = useState('test');
   const [executable, setExecutable] = useState('node');
   const [args, setArgs] = useState('["node_modules/vitest/vitest.mjs", "run"]');
+  const [versionArgs, setVersionArgs] = useState('["--version"]');
+  const [scopePaths, setScopePaths] = useState('');
   const [cwdRelative, setCwdRelative] = useState('.');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    closeButton.current?.focus();
-    const escape = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
-    window.addEventListener('keydown', escape);
-    return () => window.removeEventListener('keydown', escape);
-  }, [onClose, open]);
+  useDialogFocus(open, onClose, dialog, closeButton);
 
   if (!open) return null;
 
@@ -45,6 +43,13 @@ export function CheckDialog({
       if (!Array.isArray(parsedArgs) || !parsedArgs.every((value) => typeof value === 'string')) {
         throw new Error('Arguments must be a JSON array of strings.');
       }
+      const parsedVersionArgs = JSON.parse(versionArgs) as unknown;
+      if (
+        !Array.isArray(parsedVersionArgs) ||
+        !parsedVersionArgs.every((value) => typeof value === 'string')
+      ) {
+        throw new Error('Version arguments must be a JSON array of strings.');
+      }
       await createCheck(
         {
           repositoryId,
@@ -52,6 +57,11 @@ export function CheckDialog({
           kind,
           executable,
           args: parsedArgs,
+          versionArgs: parsedVersionArgs,
+          scopePaths: scopePaths
+            .split(/\r?\n/u)
+            .map((value) => value.trim())
+            .filter(Boolean),
           cwdRelative,
           timeoutMs: 120_000,
           maxOutputBytes: 1_000_000,
@@ -70,6 +80,7 @@ export function CheckDialog({
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
       <section
+        ref={dialog}
         className="source-dialog check-dialog"
         role="dialog"
         aria-modal="true"
@@ -146,6 +157,26 @@ export function CheckDialog({
               required
             />
           </label>
+          <div className="two-fields">
+            <label>
+              <span className="field-label">Tool version argument array</span>
+              <input
+                className="text-field mono"
+                value={versionArgs}
+                onChange={(event) => setVersionArgs(event.currentTarget.value)}
+                required
+              />
+            </label>
+            <label>
+              <span className="field-label">Declared scope prefixes (optional)</span>
+              <textarea
+                className="text-field compact-code-field mono"
+                value={scopePaths}
+                onChange={(event) => setScopePaths(event.currentTarget.value)}
+                placeholder={'apps/web\ndocs'}
+              />
+            </label>
+          </div>
           <div className="safety-callout">
             <CheckCircle2 aria-hidden="true" size={16} />
             <span>

@@ -32,8 +32,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error('VERIDONE_PORT must be an integer between 1 and 65535.');
   }
-  if (host !== '127.0.0.1' && host !== '::1' && env.VERIDONE_ALLOW_REMOTE !== '1') {
-    throw new Error('Remote binding requires VERIDONE_ALLOW_REMOTE=1.');
+  if (host !== '127.0.0.1' && host !== '::1') {
+    throw new Error('VeriDone v1 only supports loopback hosts (127.0.0.1 or ::1).');
   }
 
   const dataDirectory = path.resolve(env.VERIDONE_DATA_DIR ?? defaultDataDirectory());

@@ -1,48 +1,55 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Check, MessageSquareWarning, X } from 'lucide-react';
 
 import { createVerdict } from '../api.js';
+import { useDialogFocus } from './useDialogFocus.js';
 
 export function VerdictDialog({
   open,
   workItemId,
   decision,
+  overrideRequired = false,
   csrfToken,
   onClose,
   onRecorded,
 }: {
   open: boolean;
   workItemId: string;
-  decision: 'accepted' | 'changes-requested';
+  decision: 'accepted' | 'changes-requested' | 'rejected';
+  overrideRequired?: boolean;
   csrfToken: string;
   onClose: () => void;
   onRecorded: () => Promise<void>;
 }) {
   const titleId = useId();
   const closeButton = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLElement>(null);
   const [note, setNote] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    closeButton.current?.focus();
-    const escape = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
-    window.addEventListener('keydown', escape);
-    return () => window.removeEventListener('keydown', escape);
-  }, [onClose, open]);
+  useDialogFocus(open, onClose, dialog, closeButton);
 
   if (!open) return null;
   const accepting = decision === 'accepted';
+  const rejecting = decision === 'rejected';
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
     setError(null);
     try {
-      await createVerdict(workItemId, decision, note, csrfToken);
+      await createVerdict(
+        workItemId,
+        decision,
+        note,
+        csrfToken,
+        overrideRequired ? overrideReason : null,
+      );
       await onRecorded();
       setNote('');
+      setOverrideReason('');
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The verdict could not be recorded.');
@@ -54,6 +61,7 @@ export function VerdictDialog({
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
       <section
+        ref={dialog}
         className="source-dialog verdict-dialog"
         role="dialog"
         aria-modal="true"
@@ -63,7 +71,15 @@ export function VerdictDialog({
         <header>
           <div>
             <span className="section-label">Human verdict</span>
-            <h2 id={titleId}>{accepting ? 'Accept this work' : 'Request changes'}</h2>
+            <h2 id={titleId}>
+              {overrideRequired
+                ? 'Accept with override'
+                : accepting
+                  ? 'Accept this work'
+                  : rejecting
+                    ? 'Reject this work'
+                    : 'Request changes'}
+            </h2>
           </div>
           <button className="icon-button" type="button" onClick={onClose} ref={closeButton}>
             <X aria-hidden="true" size={18} />
@@ -71,9 +87,13 @@ export function VerdictDialog({
           </button>
         </header>
         <p className="dialog-intro">
-          {accepting
-            ? 'Your decision is bound to the current fingerprint and selected evidence.'
-            : 'Record what must change so the decision remains auditable.'}
+          {overrideRequired
+            ? 'Required gates are open. Record why you are accepting despite that evidence gap.'
+            : accepting
+              ? 'Your decision is bound to the current fingerprint and selected evidence.'
+              : rejecting
+                ? 'A rejection remains append-only and bound to the current repository state.'
+                : 'Record what must change so the decision remains auditable.'}
         </p>
         <form onSubmit={submit}>
           <label>
@@ -85,11 +105,25 @@ export function VerdictDialog({
               placeholder={
                 accepting
                   ? 'What did you personally review?'
-                  : 'What evidence or implementation must change?'
+                  : rejecting
+                    ? 'Why should this work not be accepted?'
+                    : 'What evidence or implementation must change?'
               }
               required
             />
           </label>
+          {overrideRequired && (
+            <label>
+              <span className="field-label">Override reason</span>
+              <textarea
+                className="text-field verdict-note"
+                value={overrideReason}
+                onChange={(event) => setOverrideReason(event.currentTarget.value)}
+                placeholder="Why is accepting with open or stale gates justified?"
+                required
+              />
+            </label>
+          )}
           <div className="dialog-message" aria-live="polite">
             {error && <span className="error-message">{error}</span>}
           </div>
@@ -103,7 +137,15 @@ export function VerdictDialog({
               ) : (
                 <MessageSquareWarning aria-hidden="true" size={15} />
               )}
-              {saving ? 'Recording…' : accepting ? 'Record acceptance' : 'Record request'}
+              {saving
+                ? 'Recording…'
+                : overrideRequired
+                  ? 'Record override acceptance'
+                  : accepting
+                    ? 'Record acceptance'
+                    : rejecting
+                      ? 'Record rejection'
+                      : 'Record request'}
             </button>
           </footer>
         </form>

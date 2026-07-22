@@ -18,7 +18,7 @@ The local operator is trusted to approve roots, define checks, and issue verdict
 
 **Threat:** crafted paths access files outside approved roots or escape during export/import.
 
-**Control:** canonicalize existing paths, compare with platform-aware root boundaries, reject symlink escapes, reject absolute/archive traversal paths, and re-check boundaries immediately before access.
+**Control:** canonicalize existing paths, compare with platform-aware root boundaries, reject symlink escapes and traversal, and re-check boundaries immediately before access.
 
 ### Local web attacks
 
@@ -52,13 +52,13 @@ The local operator is trusted to approve roots, define checks, and issue verdict
 
 ### Denial of service
 
-**Threat:** large receipts, output floods, archive bombs, hanging processes, or huge repository scans exhaust resources.
+**Threat:** large receipts/workspace JSON, output floods, hanging processes, or huge repository scans exhaust resources.
 
-**Control:** file and archive limits, bounded concurrency, timeouts, output caps, cancellation, pagination, incremental scanning, and explicit errors instead of partial silent imports.
+**Control:** receipt and streaming request-body limits, bounded concurrency, timeouts, output caps, cancellation, bounded discovery depth/count, and explicit errors instead of partial silent imports.
 
 ## Security defaults
 
-- Bind to `127.0.0.1`.
+- Refuse non-loopback bind addresses.
 - No telemetry.
 - No automatic command execution.
 - No repository writes, Git pushes, merges, or deployments.
@@ -67,4 +67,4 @@ The local operator is trusted to approve roots, define checks, and issue verdict
 
 ## Vulnerability reporting
 
-Before public v1.0, `SECURITY.md` at the repository root will document supported versions and a private reporting route. Public issues should not contain exploit details for unresolved vulnerabilities.
+The root [security policy](../SECURITY.md) documents supported versions and GitHub private vulnerability reporting. Public issues should not contain exploit details for unresolved vulnerabilities.

@@ -18,6 +18,7 @@ export interface ReviewItem {
   source: string;
   state: ReviewState;
   updatedLabel: string;
+  updatedAt: string;
   reason: string;
   requiredSatisfied: number;
   requiredTotal: number;
@@ -26,7 +27,9 @@ export interface ReviewItem {
   deletions: number;
   dirty: boolean;
   sensitive: boolean;
+  riskPaths: string[];
   scopeDrift: boolean;
+  scopeDriftPaths: string[];
   claim: string;
   claimSource: string;
   criteria: ReviewCriterion[];
@@ -42,6 +45,7 @@ export const demoReviews: ReviewItem[] = [
     source: 'Codex',
     state: 'stale',
     updatedLabel: '8 min ago',
+    updatedAt: '2026-07-21T20:52:00.000Z',
     reason: 'Two checks belong to the previous worktree fingerprint.',
     requiredSatisfied: 3,
     requiredTotal: 5,
@@ -50,7 +54,9 @@ export const demoReviews: ReviewItem[] = [
     deletions: 67,
     dirty: true,
     sensitive: true,
+    riskPaths: ['apps/server/src/packet.ts', 'apps/server/src/workspace.ts'],
     scopeDrift: false,
+    scopeDriftPaths: [],
     claim: 'Export validation, integrity manifests, and all related tests are complete.',
     claimSource: 'Codex run · 8 minutes ago',
     criteria: [
@@ -100,6 +106,7 @@ export const demoReviews: ReviewItem[] = [
     source: 'Codex',
     state: 'ready',
     updatedLabel: '21 min ago',
+    updatedAt: '2026-07-21T20:39:00.000Z',
     reason: 'All required gates have fresh evidence. Human review remains.',
     requiredSatisfied: 4,
     requiredTotal: 4,
@@ -108,7 +115,9 @@ export const demoReviews: ReviewItem[] = [
     deletions: 14,
     dirty: false,
     sensitive: false,
+    riskPaths: [],
     scopeDrift: false,
+    scopeDriftPaths: [],
     claim: 'Complete and degraded harness receipts import with source provenance preserved.',
     claimSource: 'Codex run · 21 minutes ago',
     criteria: [
@@ -151,6 +160,7 @@ export const demoReviews: ReviewItem[] = [
     source: 'Claude Code',
     state: 'blocked',
     updatedLabel: '47 min ago',
+    updatedAt: '2026-07-21T20:13:00.000Z',
     reason: 'Focus does not return to the trigger after closing the evidence dialog.',
     requiredSatisfied: 2,
     requiredTotal: 4,
@@ -159,7 +169,9 @@ export const demoReviews: ReviewItem[] = [
     deletions: 31,
     dirty: false,
     sensitive: false,
+    riskPaths: [],
     scopeDrift: true,
+    scopeDriftPaths: ['apps/web/src/theme.ts'],
     claim: 'Keyboard navigation and dialog focus management are fixed.',
     claimSource: 'Claude Code run · 47 minutes ago',
     criteria: [

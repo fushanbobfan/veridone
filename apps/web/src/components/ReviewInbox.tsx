@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { ArrowDownWideNarrow, Plus, Search } from 'lucide-react';
 import { motion } from 'motion/react';
 
 import type { ReviewItem, ReviewState } from '../data.js';
@@ -15,20 +15,52 @@ export function ReviewInbox({
   items,
   selectedId,
   filter,
+  query,
+  sort,
   dataLabel,
+  sourceIssues,
   onAddSource,
   onFilter,
+  onQuery,
+  onSort,
   onSelect,
 }: {
   items: ReviewItem[];
   selectedId: string;
   filter: 'all' | ReviewState;
+  query: string;
+  sort: 'priority' | 'newest' | 'repository';
   dataLabel: string;
+  sourceIssues: Array<{ repositoryId: string; message: string }>;
   onAddSource?: () => void;
   onFilter: (filter: 'all' | ReviewState) => void;
+  onQuery: (query: string) => void;
+  onSort: (sort: 'priority' | 'newest' | 'repository') => void;
   onSelect: (id: string) => void;
 }) {
-  const visible = filter === 'all' ? items : items.filter((item) => item.state === filter);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const stateRank: Record<ReviewState, number> = { stale: 0, blocked: 1, ready: 2, decided: 3 };
+  const visible = items
+    .filter((item) => filter === 'all' || item.state === filter)
+    .filter((item) =>
+      normalizedQuery
+        ? [item.title, item.repository, item.branch, item.source, item.reason].some((value) =>
+            value.toLocaleLowerCase().includes(normalizedQuery),
+          )
+        : true,
+    )
+    .toSorted((left, right) => {
+      if (sort === 'repository') {
+        return (
+          left.repository.localeCompare(right.repository) || left.title.localeCompare(right.title)
+        );
+      }
+      if (sort === 'newest') return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+      return (
+        stateRank[left.state] - stateRank[right.state] ||
+        left.requiredSatisfied / left.requiredTotal - right.requiredSatisfied / right.requiredTotal
+      );
+    });
 
   return (
     <section className="inbox-panel" id="inbox" aria-labelledby="inbox-title">
@@ -48,6 +80,16 @@ export function ReviewInbox({
           )}
         </div>
         <p>Work that looks complete, ordered by what still needs proof.</p>
+        {sourceIssues.length > 0 && (
+          <div className="source-issue" role="status">
+            <strong>
+              {sourceIssues.length} repository{' '}
+              {sourceIssues.length === 1 ? 'source is' : 'sources are'}
+              unavailable
+            </strong>
+            <span>{sourceIssues[0]?.message}</span>
+          </div>
+        )}
       </header>
 
       <div className="filter-strip" aria-label="Filter reviews">
@@ -69,10 +111,37 @@ export function ReviewInbox({
         ))}
       </div>
 
+      <div className="inbox-tools">
+        <label className="search-control">
+          <Search aria-hidden="true" size={14} />
+          <span className="sr-only">Search reviews</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => onQuery(event.currentTarget.value)}
+            placeholder="Search claims, repositories, sources…"
+          />
+        </label>
+        <label className="sort-control">
+          <ArrowDownWideNarrow aria-hidden="true" size={14} />
+          <span className="sr-only">Sort reviews</span>
+          <select
+            value={sort}
+            onChange={(event) => onSort(event.currentTarget.value as typeof sort)}
+          >
+            <option value="priority">Needs proof</option>
+            <option value="newest">Recently updated</option>
+            <option value="repository">Repository</option>
+          </select>
+        </label>
+      </div>
+
       <div className="review-list" aria-live="polite">
         {visible.length === 0 ? (
           <div className="empty-state">
-            <span>Nothing in this view.</span>
+            <span>
+              {normalizedQuery ? 'No reviews match this search.' : 'Nothing in this view.'}
+            </span>
             <button type="button" onClick={() => onFilter('all')}>
               Show all reviews
             </button>

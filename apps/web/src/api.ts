@@ -14,6 +14,14 @@ export interface RepositoryDto {
     head: string;
     branch: string | null;
     statusEntries: string[];
+    worktreeHash: string;
+    diffStats: {
+      changedFiles: number;
+      additions: number;
+      deletions: number;
+      binaryFiles: number;
+      untrackedFiles: number;
+    };
     fingerprint: string;
     capturedAt: string;
   };
@@ -33,6 +41,21 @@ export interface ReceiptDto {
   importedAt: string;
 }
 
+export interface ReceiptPreviewDto {
+  runId: string;
+  taskType: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  stageCount: number;
+  degraded: boolean;
+  sourcePath: string;
+  sourceType: string;
+  sourceLabel: string;
+  title: string;
+  claim: string;
+}
+
 export interface WorkItemDto {
   id: string;
   repositoryId: string | null;
@@ -46,6 +69,14 @@ export interface WorkItemDto {
   humanVerdict: 'accepted' | 'changes-requested' | 'rejected' | null;
 }
 
+export interface ContractDto {
+  id: string;
+  version: string;
+  title: string;
+  criteria: Array<{ id?: string; title?: string; required?: boolean }>;
+  createdAt: string;
+}
+
 export interface CheckDto {
   id: string;
   repositoryId: string;
@@ -53,6 +84,8 @@ export interface CheckDto {
   kind: string;
   executable: string;
   args: string[];
+  versionArgs: string[];
+  scopePaths: string[];
   cwdRelative: string;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -72,6 +105,8 @@ export interface EvidenceDto {
   head: string;
   completedAt: string;
   durationMs: number;
+  toolVersion: string | null;
+  exitCode: number | null;
   invalidReason: string | null;
 }
 
@@ -82,15 +117,18 @@ export interface VerdictDto {
   note: string;
   decidedAt: string;
   snapshotFingerprint: string;
+  overrideReason: string | null;
 }
 
 export interface BootstrapDto {
   mode: 'local' | 'demo';
   csrfToken: string;
+  sourceIssues: Array<{ repositoryId: string; message: string }>;
   roots: ApprovedRootDto[];
   repositories: RepositoryDto[];
   receipts: ReceiptDto[];
   workItems: WorkItemDto[];
+  contracts: ContractDto[];
   checks: CheckDto[];
   evidence: EvidenceDto[];
   verdicts: VerdictDto[];
@@ -132,6 +170,27 @@ export async function addLocalSource(
   });
 }
 
+export async function discoverRepositories(rootId: string, csrfToken: string): Promise<string[]> {
+  const result = await mutate<{ repositories: string[] }>(
+    '/api/v1/repositories/discover',
+    csrfToken,
+    { rootId },
+  );
+  return result.repositories;
+}
+
+export async function previewReceipts(
+  path: string,
+  csrfToken: string,
+): Promise<ReceiptPreviewDto[]> {
+  const result = await mutate<{ previews: ReceiptPreviewDto[] }>(
+    '/api/v1/receipts/preview',
+    csrfToken,
+    { path },
+  );
+  return result.previews;
+}
+
 async function mutate<T>(url: string, csrfToken: string, body: unknown): Promise<T> {
   return request<T>(url, {
     method: 'POST',
@@ -157,6 +216,8 @@ export interface NewCheckInput {
   kind: string;
   executable: string;
   args: string[];
+  versionArgs: string[];
+  scopePaths: string[];
   cwdRelative: string;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -170,8 +231,13 @@ export async function runCheck(
   checkId: string,
   workItemId: string,
   csrfToken: string,
+  runId: string,
 ): Promise<void> {
-  await mutate(`/api/v1/checks/${checkId}/run`, csrfToken, { workItemId });
+  await mutate(`/api/v1/checks/${checkId}/run`, csrfToken, { workItemId, runId });
+}
+
+export async function cancelCheck(runId: string, csrfToken: string): Promise<void> {
+  await mutate(`/api/v1/check-runs/${runId}/cancel`, csrfToken, {});
 }
 
 export async function createVerdict(
@@ -179,10 +245,18 @@ export async function createVerdict(
   decision: 'accepted' | 'changes-requested' | 'rejected',
   note: string,
   csrfToken: string,
+  overrideReason: string | null = null,
 ): Promise<void> {
   await mutate(`/api/v1/work-items/${workItemId}/verdicts`, csrfToken, {
     decision,
     note,
-    overrideReason: null,
+    overrideReason,
   });
+}
+
+export async function importWorkspaceDocument(
+  document: unknown,
+  csrfToken: string,
+): Promise<{ imported: Record<string, number> }> {
+  return mutate('/api/v1/workspace/import', csrfToken, document);
 }

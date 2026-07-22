@@ -1,3 +1,5 @@
+import { assessDeclaredScope, pathFromStatusEntry } from '@veridone/core';
+
 import type { BootstrapDto, WorkItemDto } from './api.js';
 import type { ReviewItem } from './data.js';
 
@@ -13,10 +15,13 @@ function relativeTime(iso: string): string {
 
 export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): ReviewItem {
   const repository = bootstrap.repositories.find((candidate) => candidate.id === item.repositoryId);
-  const receipt = bootstrap.receipts.find(
-    (candidate) => `harness:${candidate.runId}` === item.sourceRef,
+  const receipt = bootstrap.receipts.find((candidate) =>
+    item.sourceRef.endsWith(`:${candidate.runId}`),
   );
   const isBound = Boolean(repository && item.snapshotFingerprint);
+  const bindingFresh = Boolean(
+    repository && item.snapshotFingerprint === repository.snapshot.fingerprint,
+  );
   const isDegraded = receipt?.degraded ?? false;
   const checks = bootstrap.checks.filter((check) => check.repositoryId === item.repositoryId);
   const checkAssessments = checks.map((check) => {
@@ -30,10 +35,23 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
     return { check, evidence, fresh };
   });
   const passingChecks = checkAssessments.filter((assessment) => assessment.fresh).length;
-  const checksReady = checks.length > 0 && passingChecks === checks.length;
+  const scope = assessDeclaredScope(
+    repository?.snapshot.statusEntries ?? [],
+    checks.flatMap((check) => check.scopePaths),
+  );
+  const checksReady = checks.length > 0 && passingChecks === checks.length && scope.satisfied;
   const verdict = bootstrap.verdicts.find((candidate) => candidate.workItemId === item.id);
-  const requiredTotal = 2 + Math.max(checks.length, 1);
-  const requiredSatisfied = 1 + (isBound ? 1 : 0) + passingChecks;
+  const requiredTotal = 2 + Math.max(checks.length, 1) + (scope.declared ? 1 : 0);
+  const requiredSatisfied =
+    1 + (bindingFresh ? 1 : 0) + passingChecks + (scope.declared && scope.satisfied ? 1 : 0);
+  const riskPaths =
+    repository?.snapshot.statusEntries
+      .map(pathFromStatusEntry)
+      .filter((entry) =>
+        /(^|[\\/])(\.env|auth|oauth|crypto|security|permission|secret|token|credential|exports?|packet|workspace|check-runner|path-boundary|\.github)([.\\/]|$)/iu.test(
+          entry,
+        ),
+      ) ?? [];
 
   return {
     id: item.id,
@@ -47,27 +65,36 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
         ? 'decided'
         : isDegraded
           ? 'blocked'
-          : isBound && checksReady
+          : bindingFresh && checksReady
             ? 'ready'
-            : 'blocked',
+            : isBound && !bindingFresh
+              ? 'stale'
+              : 'blocked',
     updatedLabel: relativeTime(item.updatedAt),
+    updatedAt: item.updatedAt,
     reason: isDegraded
       ? 'The imported run contains a degraded or failing stage.'
-      : isBound && checksReady
-        ? 'Every approved check has fresh passing evidence. Human review remains.'
-        : isBound
-          ? checks.length === 0
-            ? 'The claim is bound, but no acceptance checks have been approved.'
-            : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
-          : 'The receipt is valid, but its claim is not bound to a repository snapshot.',
+      : bindingFresh && checksReady
+        ? 'Every approved check and declared scope gate has fresh evidence. Human review remains.'
+        : scope.declared && !scope.satisfied
+          ? `${scope.outsidePaths.length} changed file(s) fall outside the declared scope.`
+          : isBound && !bindingFresh
+            ? 'The repository changed after this claim was bound. Rebind before running checks.'
+            : bindingFresh
+              ? checks.length === 0
+                ? 'The claim is bound, but no acceptance checks have been approved.'
+                : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
+              : 'The receipt is valid, but its claim is not bound to a repository snapshot.',
     requiredSatisfied,
     requiredTotal,
-    changedFiles: repository?.snapshot.statusEntries.length ?? 0,
-    additions: 0,
-    deletions: 0,
+    changedFiles: repository?.snapshot.diffStats.changedFiles ?? 0,
+    additions: repository?.snapshot.diffStats.additions ?? 0,
+    deletions: repository?.snapshot.diffStats.deletions ?? 0,
     dirty: (repository?.snapshot.statusEntries.length ?? 0) > 0,
-    sensitive: false,
-    scopeDrift: false,
+    sensitive: riskPaths.length > 0,
+    riskPaths,
+    scopeDrift: scope.declared && !scope.satisfied,
+    scopeDriftPaths: scope.outsidePaths,
     claim: item.claim,
     claimSource: `${item.sourceLabel} · ${relativeTime(item.updatedAt)}`,
     criteria: [
@@ -86,7 +113,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
         detail: isBound
           ? `${repository?.snapshot.head.slice(0, 8)} · current fingerprint`
           : 'No repository snapshot has been linked',
-        state: isBound ? 'passed' : 'missing',
+        state: bindingFresh ? 'passed' : isBound ? 'stale' : 'missing',
         evidenceLabel: 'Git snapshot',
       },
       ...(checkAssessments.length === 0
@@ -114,6 +141,19 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
                   : ('missing' as const),
             evidenceLabel: check.kind,
           }))),
+      ...(scope.declared
+        ? [
+            {
+              id: 'declared-scope',
+              title: 'Changed files remain inside declared scope',
+              detail: scope.satisfied
+                ? `${scope.changedPaths.length} changed path(s) match approved prefixes`
+                : `${scope.outsidePaths.length} outside: ${scope.outsidePaths.slice(0, 3).join(', ')}`,
+              state: scope.satisfied ? ('passed' as const) : ('failed' as const),
+              evidenceLabel: 'Scope inspection',
+            },
+          ]
+        : []),
     ],
   };
 }

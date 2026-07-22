@@ -3,19 +3,23 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 
 import {
   captureGitSnapshot,
   discoverGitRepositories,
-  readHarnessReceipt,
+  readReceiptCollection,
 } from '@veridone/adapters';
 import { canonicalJson, evidenceKindSchema, sha256Hex } from '@veridone/core';
 
-import { acceptanceReadiness, runApprovedCheck } from './check-runner.js';
+import { CheckCapacityError, CheckExecutionManager } from './check-execution.js';
+import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
 import type { ServerConfig } from './config.js';
 import type { VeriDoneDatabase } from './database.js';
 import { buildAcceptancePacket } from './packet.js';
+import { exportWorkspace, importWorkspace } from './workspace.js';
 
 const rootRequestSchema = z.object({
   path: z.string().min(1).max(4_096),
@@ -25,12 +29,27 @@ const rootIdSchema = z.object({ rootId: z.string().uuid() });
 const repositoryRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const receiptRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const linkRequestSchema = z.object({ repositoryId: z.string().min(1).max(128) });
+const relativeScopePathSchema = z
+  .string()
+  .min(1)
+  .max(1_024)
+  .transform((value) => value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/$/u, ''))
+  .refine(
+    (value) =>
+      !path.isAbsolute(value) &&
+      value !== '..' &&
+      !value.startsWith('../') &&
+      !value.includes('/../'),
+    'Declared scope paths must remain inside the repository.',
+  );
 const checkRequestSchema = z.object({
   repositoryId: z.string().min(1).max(128),
   label: z.string().min(1).max(200),
   kind: evidenceKindSchema,
   executable: z.string().min(1).max(4_096),
   args: z.array(z.string().max(4_096)).max(100),
+  versionArgs: z.array(z.string().max(4_096)).max(10).default(['--version']),
+  scopePaths: z.array(relativeScopePathSchema).max(100).default([]),
   cwdRelative: z
     .string()
     .min(1)
@@ -44,7 +63,10 @@ const checkRequestSchema = z.object({
     .default(120_000),
   maxOutputBytes: z.number().int().min(1_024).max(10_000_000).default(1_000_000),
 });
-const runCheckRequestSchema = z.object({ workItemId: z.string().uuid() });
+const runCheckRequestSchema = z.object({
+  workItemId: z.string().uuid(),
+  runId: z.string().uuid().optional(),
+});
 const verdictRequestSchema = z.object({
   decision: z.enum(['accepted', 'changes-requested', 'rejected']),
   note: z.string().max(10_000).default(''),
@@ -55,11 +77,57 @@ export interface AppOptions {
   database: VeriDoneDatabase;
   config: ServerConfig;
   csrfToken?: string;
+  checkExecutionManager?: CheckExecutionManager;
 }
 
 export function createApp(options: AppOptions): Hono {
   const app = new Hono();
   const csrfToken = options.csrfToken ?? randomBytes(32).toString('base64url');
+  const checkExecutionManager = options.checkExecutionManager ?? new CheckExecutionManager();
+
+  app.use(
+    '*',
+    secureHeaders({
+      strictTransportSecurity: false,
+      xFrameOptions: 'DENY',
+      referrerPolicy: 'no-referrer',
+      contentSecurityPolicy: {
+        defaultSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    }),
+  );
+
+  const refreshKnownRepositories = async () => {
+    const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
+    const results = await Promise.all(
+      options.database.listRepositories().map(async (repository) => {
+        try {
+          const checks = options.database
+            .listChecks()
+            .filter((check) => check.repositoryId === repository.id);
+          const captured = await captureGitSnapshot(repository.path, {
+            approvedRoots,
+            contractVersion: repository.snapshot.contractVersion,
+            checkDefinitionVersion:
+              checks.length > 0
+                ? await aggregateCheckVersion(checks)
+                : repository.snapshot.checkDefinitionVersion,
+          });
+          options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
+          return null;
+        } catch (error) {
+          return {
+            repositoryId: repository.id,
+            message: error instanceof Error ? error.message : 'Repository refresh failed.',
+          };
+        }
+      }),
+    );
+    return results.filter((result) => result !== null);
+  };
 
   app.use('*', async (context, next) => {
     const origin = context.req.header('Origin');
@@ -68,9 +136,6 @@ export function createApp(options: AppOptions): Hono {
     }
 
     await next();
-    context.header('X-Content-Type-Options', 'nosniff');
-    context.header('X-Frame-Options', 'DENY');
-    context.header('Referrer-Policy', 'no-referrer');
     context.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     context.header('Cache-Control', 'no-store');
     if (origin) {
@@ -97,18 +162,43 @@ export function createApp(options: AppOptions): Hono {
     context.json({ status: 'ok', mode: options.config.demoMode ? 'demo' : 'local' }),
   );
 
-  app.get('/api/v1/bootstrap', (context) =>
-    context.json({
+  app.get('/api/v1/bootstrap', async (context) => {
+    const sourceIssues = await refreshKnownRepositories();
+    return context.json({
       mode: options.config.demoMode ? 'demo' : 'local',
       csrfToken,
+      sourceIssues,
       roots: options.database.listApprovedRoots(),
       repositories: options.database.listRepositories(),
       receipts: options.database.listReceipts(),
       workItems: options.database.listWorkItems(),
+      contracts: options.database.listContracts(),
       checks: options.database.listChecks(),
       evidence: options.database.listEvidence(),
       verdicts: options.database.listVerdicts(),
+    });
+  });
+
+  app.get('/api/v1/workspace/export', async (context) => {
+    const document = await exportWorkspace(options.database);
+    context.header('Content-Type', 'application/json; charset=utf-8');
+    context.header(
+      'Content-Disposition',
+      `attachment; filename="veridone-workspace-${new Date().toISOString().slice(0, 10)}.json"`,
+    );
+    return context.body(`${JSON.stringify(document, null, 2)}\n`);
+  });
+
+  app.post(
+    '/api/v1/workspace/import',
+    bodyLimit({
+      maxSize: 25_000_000,
+      onError: (context) => context.json({ error: 'workspace_too_large' }, 413),
     }),
+    async (context) => {
+      const result = await importWorkspace(options.database, await context.req.json());
+      return context.json(result, 201);
+    },
   );
 
   app.post('/api/v1/roots', async (context) => {
@@ -160,15 +250,19 @@ export function createApp(options: AppOptions): Hono {
   app.post('/api/v1/receipts/preview', async (context) => {
     const request = receiptRequestSchema.parse(await context.req.json());
     const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
-    const { preview } = await readHarnessReceipt(request.path, approvedRoots);
-    return context.json({ preview });
+    const previews = (await readReceiptCollection(request.path, approvedRoots)).map(
+      (result) => result.preview,
+    );
+    return context.json({ preview: previews[0], previews });
   });
 
   app.post('/api/v1/receipts/import', async (context) => {
     const request = receiptRequestSchema.parse(await context.req.json());
     const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
-    const { preview } = await readHarnessReceipt(request.path, approvedRoots);
-    return context.json(options.database.importReceipt(preview), 201);
+    const previews = (await readReceiptCollection(request.path, approvedRoots)).map(
+      (result) => result.preview,
+    );
+    return context.json({ imported: options.database.importReceipts(previews) }, 201);
   });
 
   app.post('/api/v1/work-items/:id/link', async (context) => {
@@ -182,20 +276,41 @@ export function createApp(options: AppOptions): Hono {
     const request = checkRequestSchema.parse(await context.req.json());
     const definitionHash = await sha256Hex(canonicalJson(request));
     const check = options.database.addCheck({ ...request, definitionHash });
+    const repository = options.database.getRepository(request.repositoryId);
+    if (!repository) throw new Error('The repository does not exist.');
+    const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
+    const checks = options.database
+      .listChecks()
+      .filter((candidate) => candidate.repositoryId === repository.id);
+    const captured = await captureGitSnapshot(repository.path, {
+      approvedRoots,
+      contractVersion: repository.snapshot.contractVersion,
+      checkDefinitionVersion: await aggregateCheckVersion(checks),
+    });
+    options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
     return context.json({ check }, 201);
   });
 
   app.post('/api/v1/checks/:id/run', async (context) => {
     const request = runCheckRequestSchema.parse(await context.req.json());
-    const evidence = await runApprovedCheck(
+    const { runId, evidence } = await checkExecutionManager.run(
       options.database,
       context.req.param('id'),
       request.workItemId,
+      request.runId,
     );
     return context.json({
+      runId,
       evidence,
       readiness: acceptanceReadiness(options.database, request.workItemId),
     });
+  });
+
+  app.post('/api/v1/check-runs/:id/cancel', (context) => {
+    if (!checkExecutionManager.cancel(context.req.param('id'))) {
+      return context.json({ error: 'check_run_not_active' }, 404);
+    }
+    return context.json({ cancelled: true }, 202);
   });
 
   app.post('/api/v1/work-items/:id/verdicts', async (context) => {
@@ -242,6 +357,9 @@ export function createApp(options: AppOptions): Hono {
   app.onError((error, context) => {
     if (error instanceof z.ZodError) {
       return context.json({ error: 'invalid_request', issues: error.issues }, 400);
+    }
+    if (error instanceof CheckCapacityError) {
+      return context.json({ error: 'check_capacity_reached', limit: error.limit }, 429);
     }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return context.json({ error: 'request_failed', message }, 400);

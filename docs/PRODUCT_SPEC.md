@@ -34,7 +34,7 @@ An individual maintainer or small team that uses Codex, Claude Code, CI, local a
 
 ### 1. Onboard
 
-The maintainer creates a workspace, selects one or more approved roots, adds repositories, and optionally adds receipt directories. VeriDone discovers compatible sources read-only and previews what will be imported.
+The maintainer selects one or more approved roots, discovers repositories read-only, and adds an agent-receipt file or directory. VeriDone validates and previews the complete receipt batch before an explicit import.
 
 ### 2. Triage
 
@@ -49,7 +49,7 @@ The review page shows:
 - acceptance criteria and coverage by evidence;
 - check results, freshness, duration, bounded output, and artifact hashes;
 - risk flags and explicit unknowns;
-- CI and pull-request state when configured.
+- CI claims imported through the portable receipt format.
 
 ### 4. Verify
 

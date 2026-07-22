@@ -1,6 +1,10 @@
 import type { RepositorySnapshot } from './model.js';
 
-export type FingerprintInput = Omit<RepositorySnapshot, 'fingerprint' | 'capturedAt'>;
+export type FingerprintInput = Omit<
+  RepositorySnapshot,
+  'fingerprint' | 'capturedAt' | 'worktreeHash' | 'diffStats'
+> &
+  Partial<Pick<RepositorySnapshot, 'worktreeHash' | 'diffStats'>>;
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -32,15 +36,36 @@ export async function createRepositorySnapshot(
   input: FingerprintInput,
   capturedAt = new Date().toISOString(),
 ): Promise<RepositorySnapshot> {
-  const normalized: FingerprintInput = {
+  const normalized: Omit<RepositorySnapshot, 'fingerprint' | 'capturedAt'> = {
     ...input,
     statusEntries: [...input.statusEntries].sort(),
     submoduleEntries: [...input.submoduleEntries].sort(),
+    worktreeHash:
+      input.worktreeHash ??
+      (await sha256Hex(canonicalJson({ statusEntries: [...input.statusEntries].sort() }))),
+    diffStats: input.diffStats ?? {
+      changedFiles: input.statusEntries.length,
+      additions: 0,
+      deletions: 0,
+      binaryFiles: 0,
+      untrackedFiles: input.statusEntries.filter((entry) => entry.startsWith('??')).length,
+    },
+  };
+
+  const repositoryState = {
+    repositoryId: normalized.repositoryId,
+    head: normalized.head,
+    branch: normalized.branch,
+    statusEntries: normalized.statusEntries,
+    submoduleEntries: normalized.submoduleEntries,
+    worktreeHash: normalized.worktreeHash,
   };
 
   return {
     ...normalized,
-    fingerprint: await sha256Hex(canonicalJson(normalized)),
+    // A claim binds to repository state. Policy versions are checked separately so that
+    // approving a new check invalidates old evidence without pretending the Git state changed.
+    fingerprint: await sha256Hex(canonicalJson(repositoryState)),
     capturedAt,
   };
 }

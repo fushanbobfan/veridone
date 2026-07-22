@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   captureGitSnapshot,
   readHarnessReceipt,
+  readReceiptCollection,
   resolveWithinApprovedRoots,
   runBoundedProcess,
 } from './index.js';
@@ -85,6 +86,34 @@ describe('bounded process execution', () => {
     expect(result.state).toBe('output-capped');
     expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBe(100);
   });
+
+  it('distinguishes timeout, cancellation, and spawn failures', async () => {
+    const cwd = await temporaryDirectory();
+    const timedOut = await runBoundedProcess({
+      executable: process.execPath,
+      args: ['-e', 'setTimeout(() => {}, 10000)'],
+      cwd,
+      timeoutMs: 50,
+    });
+    expect(timedOut.state).toBe('timed-out');
+
+    const controller = new AbortController();
+    const running = runBoundedProcess({
+      executable: process.execPath,
+      args: ['-e', 'setTimeout(() => {}, 10000)'],
+      cwd,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50).unref();
+    await expect(running).resolves.toMatchObject({ state: 'cancelled' });
+
+    const spawnFailure = await runBoundedProcess({
+      executable: path.join(cwd, 'definitely-not-an-executable'),
+      args: [],
+      cwd,
+    });
+    expect(spawnFailure).toMatchObject({ state: 'spawn-error', exitCode: null });
+  });
 });
 
 describe('real adapters', () => {
@@ -102,6 +131,7 @@ describe('real adapters', () => {
     expect(result.snapshot.head).toBe('0000000000000000000000000000000000000000');
     expect(result.snapshot.branch).toBe('main');
     expect(result.snapshot.statusEntries).toEqual(['?? README.md']);
+    expect(result.snapshot.diffStats).toMatchObject({ changedFiles: 1, untrackedFiles: 1 });
   });
 
   it('captures a Git snapshot and detects worktree changes', async () => {
@@ -126,11 +156,25 @@ describe('real adapters', () => {
       contractVersion: '1',
       checkDefinitionVersion: '1',
     });
+    await writeFile(path.join(repository, 'README.md'), '# Changed again\n');
+    const dirtier = await captureGitSnapshot(repository, {
+      approvedRoots: [repository],
+      contractVersion: '1',
+      checkDefinitionVersion: '1',
+    });
 
     expect(clean.snapshot.statusEntries).toEqual([]);
     expect(dirty.snapshot.statusEntries).toEqual([' M README.md']);
     expect(dirty.snapshot.fingerprint).not.toBe(clean.snapshot.fingerprint);
-  });
+    expect(dirty.snapshot.diffStats).toMatchObject({
+      changedFiles: 1,
+      additions: 1,
+      deletions: 1,
+    });
+    expect(dirtier.snapshot.statusEntries).toEqual(dirty.snapshot.statusEntries);
+    expect(dirtier.snapshot.worktreeHash).not.toBe(dirty.snapshot.worktreeHash);
+    expect(dirtier.snapshot.fingerprint).not.toBe(dirty.snapshot.fingerprint);
+  }, 20_000);
 
   it('validates a harness receipt without trusting its output', async () => {
     const root = await temporaryDirectory();
@@ -173,5 +217,44 @@ describe('real adapters', () => {
 
     const result = await readHarnessReceipt(receiptPath, [root]);
     expect(result.preview.degraded).toBe(false);
+  });
+
+  it('imports a portable Codex receipt without inventing claim text', async () => {
+    const root = await temporaryDirectory();
+    const receiptPath = path.join(root, 'codex-receipt.json');
+    await writeFile(
+      receiptPath,
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'codex-portable-1',
+        source: 'codex',
+        title: 'Ship the evidence explorer',
+        claim: 'Implemented the explorer and verified its keyboard flow.',
+        started_at: '2026-07-21T20:00:00.000Z',
+        completed_at: '2026-07-21T20:02:00.000Z',
+        status: 'complete',
+        stages: [{ name: 'test', status: 'passed' }],
+      }),
+    );
+
+    const result = await readHarnessReceipt(receiptPath, [root]);
+    expect(result.preview).toMatchObject({
+      sourceType: 'codex',
+      sourceLabel: 'Codex receipt',
+      title: 'Ship the evidence explorer',
+      claim: 'Implemented the explorer and verified its keyboard flow.',
+      degraded: false,
+    });
+  });
+
+  it('rejects receipt collections that exceed their byte budget before parsing', async () => {
+    const root = await temporaryDirectory();
+    const receiptDirectory = path.join(root, 'receipts');
+    await mkdir(receiptDirectory);
+    await writeFile(path.join(receiptDirectory, 'oversized.json'), Buffer.alloc(1_025, 32));
+
+    await expect(
+      readReceiptCollection(receiptDirectory, [root], { maxTotalBytes: 1_024 }),
+    ).rejects.toThrow('1024-byte total limit');
   });
 });

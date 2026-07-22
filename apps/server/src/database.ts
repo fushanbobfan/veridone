@@ -127,6 +127,20 @@ const migrationTwo = `
   CREATE INDEX verdicts_work_item_idx ON verdicts(work_item_id, decided_at DESC);
 `;
 
+const migrationThree = `
+  ALTER TABLE repositories ADD COLUMN worktree_hash TEXT NOT NULL
+    DEFAULT '0000000000000000000000000000000000000000000000000000000000000000';
+  ALTER TABLE repositories ADD COLUMN diff_stats_json TEXT NOT NULL
+    DEFAULT '{"changedFiles":0,"additions":0,"deletions":0,"binaryFiles":0,"untrackedFiles":0}';
+`;
+
+const migrationFour = `
+  ALTER TABLE checks ADD COLUMN version_args_json TEXT NOT NULL DEFAULT '["--version"]';
+  ALTER TABLE checks ADD COLUMN scope_paths_json TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE evidence ADD COLUMN tool_version TEXT;
+  ALTER TABLE evidence ADD COLUMN exit_code INTEGER;
+`;
+
 export interface ApprovedRootRecord {
   id: string;
   path: string;
@@ -142,7 +156,10 @@ export interface RepositoryRecord {
   updatedAt: string;
 }
 
-export interface ReceiptRecord extends Omit<ReceiptPreview, 'sourcePath'> {
+export interface ReceiptRecord extends Omit<
+  ReceiptPreview,
+  'sourcePath' | 'sourceType' | 'sourceLabel' | 'title' | 'claim'
+> {
   id: string;
   sourcePath: string;
   importedAt: string;
@@ -161,6 +178,14 @@ export interface WorkItemRecord {
   humanVerdict: 'accepted' | 'changes-requested' | 'rejected' | null;
 }
 
+export interface ContractRecord {
+  id: string;
+  version: string;
+  title: string;
+  criteria: unknown[];
+  createdAt: string;
+}
+
 export interface CheckRecord {
   id: string;
   repositoryId: string;
@@ -168,6 +193,8 @@ export interface CheckRecord {
   kind: string;
   executable: string;
   args: string[];
+  versionArgs: string[];
+  scopePaths: string[];
   cwdRelative: string;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -190,6 +217,8 @@ export interface EvidenceRecord {
   startedAt: string;
   completedAt: string;
   durationMs: number;
+  toolVersion: string | null;
+  exitCode: number | null;
   stdout: string;
   stderr: string;
   artifactHashes: string[];
@@ -227,6 +256,8 @@ export class VeriDoneDatabase {
     const migrations = [
       { version: 1, sql: migrationOne },
       { version: 2, sql: migrationTwo },
+      { version: 3, sql: migrationThree },
+      { version: 4, sql: migrationFour },
     ];
 
     for (const migration of migrations) {
@@ -329,6 +360,8 @@ export class VeriDoneDatabase {
       fingerprint: snapshot.fingerprint,
       statusEntries: JSON.stringify(snapshot.statusEntries),
       submoduleEntries: JSON.stringify(snapshot.submoduleEntries),
+      worktreeHash: snapshot.worktreeHash,
+      diffStats: JSON.stringify(snapshot.diffStats),
       contractVersion: snapshot.contractVersion,
       checkDefinitionVersion: snapshot.checkDefinitionVersion,
       capturedAt: snapshot.capturedAt,
@@ -338,10 +371,12 @@ export class VeriDoneDatabase {
       .prepare(
         `INSERT INTO repositories (
           id, canonical_path, name, branch, head, fingerprint, status_entries_json,
-          submodule_entries_json, contract_version, check_definition_version, captured_at, updated_at
+          submodule_entries_json, worktree_hash, diff_stats_json, contract_version,
+          check_definition_version, captured_at, updated_at
         ) VALUES (
           @id, @path, @name, @branch, @head, @fingerprint, @statusEntries,
-          @submoduleEntries, @contractVersion, @checkDefinitionVersion, @capturedAt, @updatedAt
+          @submoduleEntries, @worktreeHash, @diffStats, @contractVersion,
+          @checkDefinitionVersion, @capturedAt, @updatedAt
         ) ON CONFLICT(canonical_path) DO UPDATE SET
           id = excluded.id,
           name = excluded.name,
@@ -350,6 +385,8 @@ export class VeriDoneDatabase {
           fingerprint = excluded.fingerprint,
           status_entries_json = excluded.status_entries_json,
           submodule_entries_json = excluded.submodule_entries_json,
+          worktree_hash = excluded.worktree_hash,
+          diff_stats_json = excluded.diff_stats_json,
           contract_version = excluded.contract_version,
           check_definition_version = excluded.check_definition_version,
           captured_at = excluded.captured_at,
@@ -386,6 +423,8 @@ export class VeriDoneDatabase {
       branch: row.branch === null ? null : String(row.branch),
       statusEntries: JSON.parse(String(row.status_entries_json)) as string[],
       submoduleEntries: JSON.parse(String(row.submodule_entries_json)) as string[],
+      worktreeHash: String(row.worktree_hash),
+      diffStats: JSON.parse(String(row.diff_stats_json)) as RepositorySnapshot['diffStats'],
       contractVersion: String(row.contract_version),
       checkDefinitionVersion: String(row.check_definition_version),
       fingerprint: String(row.fingerprint),
@@ -410,11 +449,11 @@ export class VeriDoneDatabase {
     const workItem: WorkItemRecord = {
       id: randomUUID(),
       repositoryId: null,
-      sourceType: 'harness',
-      sourceRef: `harness:${preview.runId}`,
-      title: `${preview.taskType} · ${preview.runId.slice(0, 12)}`,
-      claim: `The harness reported this ${preview.taskType} run as ${preview.status}.`,
-      sourceLabel: 'Harness receipt',
+      sourceType: preview.sourceType,
+      sourceRef: `${preview.sourceType}:${preview.runId}`,
+      title: preview.title,
+      claim: preview.claim,
+      sourceLabel: preview.sourceLabel,
       updatedAt: preview.completedAt ?? preview.startedAt,
       snapshotFingerprint: null,
       humanVerdict: null,
@@ -466,6 +505,14 @@ export class VeriDoneDatabase {
     return { receipt: persistedReceipt, workItem: persistedWorkItem };
   }
 
+  importReceipts(
+    previews: ReceiptPreview[],
+  ): Array<{ receipt: ReceiptRecord; workItem: WorkItemRecord }> {
+    return this.connection.transaction(() =>
+      previews.map((preview) => this.importReceipt(preview)),
+    )();
+  }
+
   listReceipts(): ReceiptRecord[] {
     return (
       this.connection.prepare('SELECT * FROM receipts ORDER BY started_at DESC').all() as Array<
@@ -512,6 +559,20 @@ export class VeriDoneDatabase {
     return this.listWorkItems().find((item) => item.id === id) ?? null;
   }
 
+  listContracts(): ContractRecord[] {
+    return (
+      this.connection
+        .prepare('SELECT * FROM acceptance_contracts ORDER BY created_at')
+        .all() as Array<Record<string, unknown>>
+    ).map((row) => ({
+      id: String(row.id),
+      version: String(row.version),
+      title: String(row.title),
+      criteria: JSON.parse(String(row.criteria_json)) as unknown[],
+      createdAt: String(row.created_at),
+    }));
+  }
+
   linkWorkItem(workItemId: string, repositoryId: string): WorkItemRecord {
     const repository = this.getRepository(repositoryId);
     if (!repository) throw new Error('The repository does not exist.');
@@ -539,13 +600,20 @@ export class VeriDoneDatabase {
       .prepare(
         `INSERT INTO checks (
           id, repository_id, label, kind, executable, args_json, cwd_relative,
-          timeout_ms, max_output_bytes, definition_hash, approved_at
+          timeout_ms, max_output_bytes, definition_hash, approved_at,
+          version_args_json, scope_paths_json
         ) VALUES (
           @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
-          @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt
+          @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
+          @versionArgsJson, @scopePathsJson
         )`,
       )
-      .run({ ...record, argsJson: JSON.stringify(record.args) });
+      .run({
+        ...record,
+        argsJson: JSON.stringify(record.args),
+        versionArgsJson: JSON.stringify(record.versionArgs),
+        scopePathsJson: JSON.stringify(record.scopePaths),
+      });
     return record;
   }
 
@@ -561,6 +629,8 @@ export class VeriDoneDatabase {
       kind: String(row.kind),
       executable: String(row.executable),
       args: JSON.parse(String(row.args_json)) as string[],
+      versionArgs: JSON.parse(String(row.version_args_json)) as string[],
+      scopePaths: JSON.parse(String(row.scope_paths_json)) as string[],
       cwdRelative: String(row.cwd_relative),
       timeoutMs: Number(row.timeout_ms),
       maxOutputBytes: Number(row.max_output_bytes),
@@ -580,13 +650,13 @@ export class VeriDoneDatabase {
         `INSERT INTO evidence (
           id, work_item_id, check_id, kind, label, result, repository_id,
           snapshot_fingerprint, head, contract_version, check_definition_version,
-          started_at, completed_at, duration_ms, stdout, stderr, artifact_hashes_json,
-          invalid_reason
+          started_at, completed_at, duration_ms, tool_version, exit_code, stdout, stderr,
+          artifact_hashes_json, invalid_reason
         ) VALUES (
           @id, @workItemId, @checkId, @kind, @label, @result, @repositoryId,
           @snapshotFingerprint, @head, @contractVersion, @checkDefinitionVersion,
-          @startedAt, @completedAt, @durationMs, @stdout, @stderr, @artifactHashesJson,
-          @invalidReason
+          @startedAt, @completedAt, @durationMs, @toolVersion, @exitCode, @stdout, @stderr,
+          @artifactHashesJson, @invalidReason
         )`,
       )
       .run({ ...record, artifactHashesJson: JSON.stringify(record.artifactHashes) });
@@ -616,6 +686,8 @@ export class VeriDoneDatabase {
       startedAt: String(row.started_at),
       completedAt: String(row.completed_at),
       durationMs: Number(row.duration_ms),
+      toolVersion: row.tool_version === null ? null : String(row.tool_version),
+      exitCode: row.exit_code === null ? null : Number(row.exit_code),
       stdout: String(row.stdout),
       stderr: String(row.stderr),
       artifactHashes: JSON.parse(String(row.artifact_hashes_json)) as string[],

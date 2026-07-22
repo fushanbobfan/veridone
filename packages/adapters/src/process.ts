@@ -35,10 +35,30 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
     const child = spawn(request.executable, request.args, {
       cwd: request.cwd,
       env: request.env ? { ...request.env } : undefined,
+      detached: process.platform !== 'win32',
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
+
+    const terminateProcessTree = () => {
+      if (child.pid === undefined) return;
+      if (process.platform === 'win32') {
+        const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+          shell: false,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        killer.once('error', () => child.kill());
+        killer.unref();
+        return;
+      }
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    };
 
     const finish = (exitCode: number | null) => {
       if (settled) return;
@@ -63,7 +83,7 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
 
       if (accepted.length < chunk.length && state === 'completed') {
         state = 'output-capped';
-        child.kill();
+        terminateProcessTree();
       }
     };
 
@@ -79,14 +99,15 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
     const abort = () => {
       if (state !== 'completed') return;
       state = 'cancelled';
-      child.kill();
+      terminateProcessTree();
     };
     request.signal?.addEventListener('abort', abort, { once: true });
+    if (request.signal?.aborted) abort();
 
     const timer = setTimeout(() => {
       if (state !== 'completed') return;
       state = 'timed-out';
-      child.kill();
+      terminateProcessTree();
     }, timeoutMs);
     timer.unref();
   });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assessDeclaredScope,
   assessContract,
   assessEvidenceFreshness,
   assessTriage,
@@ -75,6 +76,30 @@ describe('repository-bound evidence', () => {
       usable: false,
     });
   });
+
+  it('separates repository identity from acceptance-policy freshness', async () => {
+    const { snapshot, evidence } = await fixture();
+    const policyChanged = await createRepositorySnapshot(
+      {
+        repositoryId: snapshot.repositoryId,
+        head: snapshot.head,
+        branch: snapshot.branch,
+        statusEntries: snapshot.statusEntries,
+        submoduleEntries: snapshot.submoduleEntries,
+        worktreeHash: snapshot.worktreeHash,
+        diffStats: snapshot.diffStats,
+        contractVersion: snapshot.contractVersion,
+        checkDefinitionVersion: '2',
+      },
+      capturedAt,
+    );
+
+    expect(policyChanged.fingerprint).toBe(snapshot.fingerprint);
+    expect(assessEvidenceFreshness(evidence, policyChanged)).toMatchObject({
+      state: 'stale-check-definition',
+      usable: false,
+    });
+  });
 });
 
 describe('acceptance gates', () => {
@@ -119,5 +144,25 @@ describe('triage', () => {
     expect(result.state).toBe('stale');
     expect(result.score).toBeGreaterThan(80);
     expect(result.reasons).toHaveLength(3);
+  });
+});
+
+describe('declared scope', () => {
+  it('uses path boundaries instead of unsafe string prefixes', () => {
+    expect(
+      assessDeclaredScope([' M apps/web/src/App.tsx', '?? apps/webhook/escape.ts'], ['apps/web']),
+    ).toMatchObject({
+      declared: true,
+      satisfied: false,
+      outsidePaths: ['apps/webhook/escape.ts'],
+    });
+  });
+
+  it('treats an absent declaration as unknown rather than drift', () => {
+    expect(assessDeclaredScope([' M SECURITY.md'], [])).toMatchObject({
+      declared: false,
+      satisfied: true,
+      outsidePaths: [],
+    });
   });
 });

@@ -19,12 +19,11 @@ The public deployment runs the same client and domain behavior against a clearly
 
 ## Packages
 
-- `apps/web` — responsive React UI, routes, accessibility, and browser tests.
+- `apps/web` — responsive React UI, URL-backed review state, accessibility, and browser tests.
 - `apps/server` — loopback HTTP API, filesystem boundary, check process lifecycle, and persistence composition root.
 - `packages/core` — framework-independent domain types, fingerprints, freshness, priority, gates, verdicts, and export manifests.
-- `packages/adapters` — Git, generic receipt, harness receipt, CI, and filesystem implementations.
-- `packages/ui` — shared accessible components and design tokens.
-- `fixtures` — synthetic demo and test workspaces, never presented as real user data.
+- `packages/adapters` — Git, portable/harness receipt, path-boundary, and bounded-process implementations.
+- `e2e` — isolated repository/receipt fixtures created at runtime plus browser acceptance tests.
 
 ## Core domain
 
@@ -34,7 +33,7 @@ An operator-owned collection of approved roots, repositories, receipt sources, p
 
 ### Work item
 
-A unit of work to review. It may originate from a receipt, commit range, branch, pull request, or manual title. Multiple source records can be linked without being trusted as evidence.
+A unit of work to review. In v1 it originates from a portable or harness receipt and can be linked to a current repository snapshot without treating the receipt as evidence.
 
 ### Claim
 
@@ -58,40 +57,39 @@ An append-only human decision bound to a work item, contract version, snapshot, 
 
 ## Persistence
 
-SQLite is the local source of truth. Migrations are versioned and tested. Large artifacts are stored in an application data directory by content hash; the database stores metadata and references. Atomic writes and foreign keys are required.
+SQLite is the local source of truth. Migrations are versioned and tested. Evidence output is capped before persistence; the database stores redacted output plus content hashes. Foreign keys, WAL journaling, and transactional verdict/import writes are enabled.
 
-Workspace export is a versioned ZIP containing validated JSON, rendered summaries, selected artifacts, and a SHA-256 manifest. Import occurs into a staging namespace, validates every path and hash, and commits only after the full bundle passes.
+Workspace export is versioned JSON containing supported domain records and a SHA-256 payload hash. Import validates the complete schema and integrity hash before a single SQLite transaction merges stable IDs. It does not delete existing records.
 
 ## Fingerprints and freshness
 
-A repository fingerprint includes:
+A repository content fingerprint includes:
 
 - repository identity and canonical path hash;
 - HEAD commit;
 - index and worktree status entries;
 - submodule state when present;
-- acceptance contract version;
-- check definition version.
+- raw staged diff and byte hashes for modified/untracked working files.
 
-Evidence is `fresh` only when its binding matches the current fingerprint and the check observed no mutation. It becomes `stale`, `mismatched`, `invalid`, or `unbound` for explainable reasons.
+Acceptance-policy versions are checked separately from repository content. Evidence is `fresh` only when repository identity, HEAD, content fingerprint, contract version, and aggregate check-definition version match and the check observed no mutation. It becomes `stale`, `mismatched`, `invalid`, or `unbound` for explainable reasons.
 
 ## Check execution
 
 Checks are declared locally with an executable and argument array. The runner:
 
-1. validates the declaration against policy;
+1. validates the declaration, working directory, version arguments, and scope prefixes against policy;
 2. resolves the working directory inside an approved repository;
 3. captures the initial fingerprint and tool version;
 4. spawns without a shell and with a minimal environment;
 5. streams capped stdout/stderr with redaction;
-6. enforces timeout and cancellation;
+6. enforces timeout, cancellation, output cap, and service-wide concurrency;
 7. captures the final fingerprint;
 8. stores evidence only after classifying mutation and exit state.
 
 ## API
 
-The local API uses versioned routes and shared runtime schemas. Mutating requests require an origin check and per-process anti-CSRF token. Hosted demo mode exposes only synthetic read APIs and in-browser ephemeral interactions.
+The local API uses versioned routes and runtime schemas. Mutating requests require an origin check and per-process anti-CSRF token. A static deployment falls back to labeled synthetic records and keeps demo verdict interactions ephemeral in the browser.
 
 ## Portability
 
-The server supports Windows, macOS, and Linux. Path handling uses canonical platform-aware comparisons. CI covers all three operating systems for core and adapter behavior; browser E2E runs on Linux and a Windows smoke test validates process and path boundaries.
+The server supports Windows, macOS, and Linux. Path handling uses canonical platform-aware comparisons. The CI matrix exercises core, API, path, and process behavior on all three operating systems; browser E2E runs separately on Linux.

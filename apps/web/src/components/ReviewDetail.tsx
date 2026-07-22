@@ -20,9 +20,13 @@ export function ReviewDetail({
   evidenceActionBusy = false,
   onBack,
   onEvidenceAction,
+  onCancelEvidence,
   onAccept,
   onRequestChanges,
+  onReject,
+  onOverride,
   onExport,
+  onViewContract,
 }: {
   item: ReviewItem;
   decision: string | null;
@@ -30,9 +34,13 @@ export function ReviewDetail({
   evidenceActionBusy?: boolean;
   onBack: () => void;
   onEvidenceAction?: () => void;
+  onCancelEvidence?: () => void;
   onAccept: () => void;
   onRequestChanges: () => void;
+  onReject: () => void;
+  onOverride?: () => void;
   onExport?: () => void;
+  onViewContract?: () => void;
 }) {
   const ready = item.state === 'ready';
   const percentage = Math.round((item.requiredSatisfied / item.requiredTotal) * 100);
@@ -130,7 +138,7 @@ export function ReviewDetail({
                   <h3 id="criteria-title">Required evidence</h3>
                 </div>
                 <div className="heading-actions">
-                  <button className="text-button" type="button">
+                  <button className="text-button" type="button" onClick={onViewContract}>
                     View contract <ArrowUpRight aria-hidden="true" size={14} />
                   </button>
                   {onExport && (
@@ -141,11 +149,11 @@ export function ReviewDetail({
                 </div>
               </div>
 
-              <div className="criteria-list">
+              <div className="criteria-list" role="list">
                 {item.criteria.map((criterion, index) => (
-                  <motion.button
+                  <motion.div
                     className="criterion-row"
-                    type="button"
+                    role="listitem"
                     key={criterion.id}
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -164,8 +172,7 @@ export function ReviewDetail({
                     </span>
                     <span className="criterion-evidence">{criterion.evidenceLabel}</span>
                     <StatusMark state={criterion.state} compact />
-                    <ChevronRight className="criterion-arrow" aria-hidden="true" size={15} />
-                  </motion.button>
+                  </motion.div>
                 ))}
               </div>
             </section>
@@ -199,11 +206,15 @@ export function ReviewDetail({
                       <button
                         className="run-button"
                         type="button"
-                        onClick={onEvidenceAction}
-                        disabled={evidenceActionBusy}
+                        onClick={evidenceActionBusy ? onCancelEvidence : onEvidenceAction}
+                        disabled={evidenceActionBusy && !onCancelEvidence}
                       >
                         <Play aria-hidden="true" size={14} fill="currentColor" />
-                        {evidenceActionBusy ? 'Working…' : evidenceActionLabel}
+                        {evidenceActionBusy && onCancelEvidence
+                          ? 'Cancel check'
+                          : evidenceActionBusy
+                            ? 'Working…'
+                            : evidenceActionLabel}
                       </button>
                     )}
                   </div>
@@ -227,8 +238,8 @@ export function ReviewDetail({
                     <strong>Review attention</strong>
                     <span>
                       {item.sensitive
-                        ? 'This change touches export and path-boundary code.'
-                        : 'The diff extends beyond the declared contract scope.'}
+                        ? `Sensitive review surface: ${item.riskPaths.slice(0, 3).join(', ')}${item.riskPaths.length > 3 ? ` and ${item.riskPaths.length - 3} more` : ''}.`
+                        : `Outside declared scope: ${item.scopeDriftPaths.slice(0, 3).join(', ')}${item.scopeDriftPaths.length > 3 ? ` and ${item.scopeDriftPaths.length - 3} more` : ''}.`}
                     </span>
                   </div>
                 </div>
@@ -247,6 +258,14 @@ export function ReviewDetail({
               </small>
             </div>
             <div className="decision-actions">
+              {!ready && onOverride && (
+                <button type="button" className="override-action" onClick={onOverride}>
+                  Override lock
+                </button>
+              )}
+              <button type="button" className="reject-action" onClick={onReject}>
+                Reject
+              </button>
               <button type="button" className="secondary-action" onClick={onRequestChanges}>
                 Request changes
               </button>
