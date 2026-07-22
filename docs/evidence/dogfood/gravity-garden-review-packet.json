@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "application": "veridone",
+  "privacyMode": "strict",
+  "generatedAt": "2026-07-22T19:26:49.760Z",
+  "workItem": {
+    "id": "88817ba9-5576-4c38-9ab6-3d4972b65c49",
+    "repositoryId": "d5c51302d274442ad7c2c0668fa70b7c746d965847aa98ca125d1ceca9c80f78",
+    "sourceType": "codex",
+    "sourceRef": "codex:codex-dogfood-gravity-garden-f56b498",
+    "title": "Verify Gravity Garden public snapshot",
+    "claim": "Codex reports that public commit f56b49894191921e4ffbb17738a2e2c717bcc02b was cloned with a clean worktree and its documented npm test suite passed. VeriDone must verify the repository state and approved check independently.",
+    "sourceLabel": "Codex receipt",
+    "updatedAt": "2026-07-22T19:25:41.668Z",
+    "snapshotFingerprint": "ca98d1d10e476f72c6e98a617008a10875a1d70e9eac701843e2dcebc67eb8ca",
+    "humanVerdict": null
+  },
+  "repository": {
+    "id": "d5c51302d274442ad7c2c0668fa70b7c746d965847aa98ca125d1ceca9c80f78",
+    "name": "gravity-garden",
+    "branch": "main",
+    "head": "f56b49894191921e4ffbb17738a2e2c717bcc02b",
+    "fingerprint": "ca98d1d10e476f72c6e98a617008a10875a1d70e9eac701843e2dcebc67eb8ca",
+    "worktreeHash": "2fe2552c6ffa6edd90a8834fd1654e0fd477451adc0ab260cf540fb3421dc01a",
+    "diffStats": {
+      "changedFiles": 0,
+      "additions": 0,
+      "deletions": 0,
+      "binaryFiles": 0,
+      "untrackedFiles": 0
+    },
+    "statusEntries": []
+  },
+  "contract": {
+    "id": "default",
+    "version": "default-v1",
+    "title": "Default acceptance contract",
+    "criteria": [
+      {
+        "id": "approved-checks",
+        "title": "Every approved check has fresh passing evidence",
+        "required": true
+      }
+    ],
+    "createdAt": "2026-07-22T19:22:55.822Z"
+  },
+  "evidence": [
+    {
+      "id": "914ded22-b11e-4472-bfd6-cac53b6719ec",
+      "workItemId": "88817ba9-5576-4c38-9ab6-3d4972b65c49",
+      "checkId": "c8f73dfd-b856-4d98-8e5a-c9e92f143488",
+      "kind": "test",
+      "label": "Gravity Garden full documented test suite",
+      "result": "passed",
+      "repositoryId": "d5c51302d274442ad7c2c0668fa70b7c746d965847aa98ca125d1ceca9c80f78",
+      "snapshotFingerprint": "ca98d1d10e476f72c6e98a617008a10875a1d70e9eac701843e2dcebc67eb8ca",
+      "head": "f56b49894191921e4ffbb17738a2e2c717bcc02b",
+      "contractVersion": "default-v1",
+      "checkDefinitionVersion": "404ac47da085016bfaf5dc6088ed261dc8a65795a31fb275a72b94ce6bb1b563",
+      "startedAt": "2026-07-22T19:26:49.158Z",
+      "completedAt": "2026-07-22T19:26:49.760Z",
+      "durationMs": 516,
+      "toolVersion": "v24.18.0",
+      "exitCode": 0,
+      "artifactHashes": ["c4650ab1867f1617870413cb0bd298479ecdeb6442d597f80fd3349e8b68b132"],
+      "invalidReason": null
+    }
+  ],
+  "verdicts": [],
+  "manifest": {
+    "algorithm": "sha256",
+    "payloadHash": "2b6c0c020a117772bd0c20fc7996ce1134aa918ff14dcffc15f313a3784cfae6",
+    "evidenceArtifacts": ["c4650ab1867f1617870413cb0bd298479ecdeb6442d597f80fd3349e8b68b132"]
+  }
+}

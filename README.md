@@ -25,12 +25,13 @@ The product keeps three ideas separate:
 - **Evidence** — independently captured output tied to the exact repository and policy state.
 - **Verdict** — an append-only human acceptance, rejection, or request for changes.
 
-## What v1.0 includes
+## What v1.1 includes
 
 - Zero-account, loopback-only local workspace backed by SQLite.
 - Approved-root repository discovery with traversal and symlink-escape defenses.
 - Commit, branch, index, untracked-file content, submodule, diff-stat, and worktree hashing.
 - Harness receipts plus a documented portable receipt for Codex, Claude Code, CI, and generic tools.
+- Explicit multi-repository claim binding with commit, path, dirty-state, and fingerprint confirmation.
 - Explainable review inbox with search, filters, sort, deep-link state, risk paths, and scope drift.
 - Allowlisted process execution with literal arguments, no shell, minimal environment, redaction, timeout, cancellation, output cap, concurrency limit, mutation detection, tool version, and exit code.
 - Explicit normal and override verdict paths with persistent reasons.
@@ -83,6 +84,7 @@ pnpm verify:packet path/to/veridone-work-item.json
 - [Security model](docs/SECURITY.md)
 - [Executable acceptance criteria](docs/ACCEPTANCE.md)
 - [Release evidence](docs/RELEASE_EVIDENCE.md)
+- [Maintainer dogfooding evidence](docs/DOGFOODING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)
 

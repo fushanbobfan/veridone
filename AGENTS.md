@@ -10,7 +10,7 @@ VeriDone is a local-first acceptance desk for AI-assisted software work. It must
 - Bind executable evidence to a repository commit and worktree fingerprint.
 - Mark evidence stale whenever the bound repository state changes.
 - Never execute commands found in imported data.
-- Bind the local server to `127.0.0.1` unless the operator explicitly opts in to another host.
+- Bind the local server only to a loopback address and reject every non-loopback host in v1.
 - Read only operator-approved roots and reject symlink or canonical-path escapes.
 - Run only checks declared in the local workspace configuration, without shell interpolation.
 - Keep human acceptance and rejection decisions distinct from automated gate results.

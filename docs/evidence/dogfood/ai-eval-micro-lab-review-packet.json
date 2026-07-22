@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "application": "veridone",
+  "privacyMode": "strict",
+  "generatedAt": "2026-07-22T19:27:05.099Z",
+  "workItem": {
+    "id": "62afd402-d212-443d-bfc6-b44993c26810",
+    "repositoryId": "39b18baae5cd019b8497d4314b017ecbf6e40b7c7b39e7091b904a84241b1d63",
+    "sourceType": "codex",
+    "sourceRef": "codex:codex-dogfood-ai-eval-660cecc",
+    "title": "Verify AI Eval Micro Lab public snapshot",
+    "claim": "Codex reports that public commit 660ceccd869a8fe862ddbff2d89f8e93c3b75845 was cloned with a clean worktree and its documented unittest suite passed. VeriDone must verify the repository state and approved check independently.",
+    "sourceLabel": "Codex receipt",
+    "updatedAt": "2026-07-22T19:26:55.795Z",
+    "snapshotFingerprint": "de2251cde3be5f1af6c5079eb86e7f9900eb17930a707371e1a07b0c159f5fa8",
+    "humanVerdict": null
+  },
+  "repository": {
+    "id": "39b18baae5cd019b8497d4314b017ecbf6e40b7c7b39e7091b904a84241b1d63",
+    "name": "ai-eval-micro-lab",
+    "branch": "main",
+    "head": "660ceccd869a8fe862ddbff2d89f8e93c3b75845",
+    "fingerprint": "de2251cde3be5f1af6c5079eb86e7f9900eb17930a707371e1a07b0c159f5fa8",
+    "worktreeHash": "2fe2552c6ffa6edd90a8834fd1654e0fd477451adc0ab260cf540fb3421dc01a",
+    "diffStats": {
+      "changedFiles": 0,
+      "additions": 0,
+      "deletions": 0,
+      "binaryFiles": 0,
+      "untrackedFiles": 0
+    },
+    "statusEntries": []
+  },
+  "contract": {
+    "id": "default",
+    "version": "default-v1",
+    "title": "Default acceptance contract",
+    "criteria": [
+      {
+        "id": "approved-checks",
+        "title": "Every approved check has fresh passing evidence",
+        "required": true
+      }
+    ],
+    "createdAt": "2026-07-22T19:22:55.822Z"
+  },
+  "evidence": [
+    {
+      "id": "a7056a5b-626f-44f0-ac89-3a40465408cb",
+      "workItemId": "62afd402-d212-443d-bfc6-b44993c26810",
+      "checkId": "fce1cefb-0b3f-4266-a8ed-2dc7d4bccf9e",
+      "kind": "test",
+      "label": "AI Eval Micro Lab full documented test suite",
+      "result": "passed",
+      "repositoryId": "39b18baae5cd019b8497d4314b017ecbf6e40b7c7b39e7091b904a84241b1d63",
+      "snapshotFingerprint": "de2251cde3be5f1af6c5079eb86e7f9900eb17930a707371e1a07b0c159f5fa8",
+      "head": "660ceccd869a8fe862ddbff2d89f8e93c3b75845",
+      "contractVersion": "default-v1",
+      "checkDefinitionVersion": "c0b23544cda2fc70b58de75ba6094dfc141d77f61d26b52a7e3d3a789447bed7",
+      "startedAt": "2026-07-22T19:27:04.599Z",
+      "completedAt": "2026-07-22T19:27:05.099Z",
+      "durationMs": 384,
+      "toolVersion": "Python 3.14.5",
+      "exitCode": 0,
+      "artifactHashes": ["e0d2853a42558ea301dd4bc6ed1732fd492c79e447626b1abbad21f8be23af40"],
+      "invalidReason": null
+    }
+  ],
+  "verdicts": [],
+  "manifest": {
+    "algorithm": "sha256",
+    "payloadHash": "9b0fd774c1c241d3c4d713b46d2a346cd8b7801ce42b0f196ba930cca4255e51",
+    "evidenceArtifacts": ["e0d2853a42558ea301dd4bc6ed1732fd492c79e447626b1abbad21f8be23af40"]
+  }
+}

@@ -2,6 +2,17 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [1.1.0] - 2026-07-22
+
+### Added
+
+- Added an explicit repository-binding dialog that requires an operator choice and shows branch, full commit, path, worktree state, and fingerprint before a claim is bound.
+- Published strict-privacy review packets and a reproducible report from maintainer dogfooding across Gravity Garden and three public micro-labs.
+
+### Changed
+
+- Expanded the real-browser onboarding fixture to prove correct claim binding when multiple repositories are connected.
+
 ## [1.0.2] - 2026-07-21
 
 ### Fixed
@@ -29,6 +40,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Responsive keyboard-complete UI, persistent themes, reduced motion, synthetic public demo, and workspace explorer.
 - Windows/macOS/Linux CI, Chromium/Firefox/WebKit acceptance tests, axe WCAG scans, CodeQL, dependency audit, license policy, and secret scan.
 
+[1.1.0]: https://github.com/fushanbobfan/veridone/releases/tag/v1.1.0
 [1.0.2]: https://github.com/fushanbobfan/veridone/releases/tag/v1.0.2
 [1.0.1]: https://github.com/fushanbobfan/veridone/releases/tag/v1.0.1
 [1.0.0]: https://github.com/fushanbobfan/veridone/releases/tag/v1.0.0

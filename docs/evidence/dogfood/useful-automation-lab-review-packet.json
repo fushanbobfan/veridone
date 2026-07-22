@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "application": "veridone",
+  "privacyMode": "strict",
+  "generatedAt": "2026-07-22T19:27:22.186Z",
+  "workItem": {
+    "id": "7851625d-7117-4e9f-831a-74602de6ea54",
+    "repositoryId": "f6907a87be4e6db1e582c0c46e1ac52decc5c45b194abadd1a68258fcc08b363",
+    "sourceType": "codex",
+    "sourceRef": "codex:codex-dogfood-useful-automation-2549721",
+    "title": "Verify Useful Automation Lab public snapshot",
+    "claim": "Codex reports that public commit 2549721dfd5fc1e4b31089fd0c2abcf4f51c2a29 was cloned with a clean worktree and its documented unittest suite passed. VeriDone must verify the repository state and approved check independently.",
+    "sourceLabel": "Codex receipt",
+    "updatedAt": "2026-07-22T19:27:12.023Z",
+    "snapshotFingerprint": "226c6a3d65b2fc894b69b36b72955b245641d9234ee0fe87bacdfbf033e17ba4",
+    "humanVerdict": null
+  },
+  "repository": {
+    "id": "f6907a87be4e6db1e582c0c46e1ac52decc5c45b194abadd1a68258fcc08b363",
+    "name": "useful-automation-lab",
+    "branch": "main",
+    "head": "2549721dfd5fc1e4b31089fd0c2abcf4f51c2a29",
+    "fingerprint": "226c6a3d65b2fc894b69b36b72955b245641d9234ee0fe87bacdfbf033e17ba4",
+    "worktreeHash": "2fe2552c6ffa6edd90a8834fd1654e0fd477451adc0ab260cf540fb3421dc01a",
+    "diffStats": {
+      "changedFiles": 0,
+      "additions": 0,
+      "deletions": 0,
+      "binaryFiles": 0,
+      "untrackedFiles": 0
+    },
+    "statusEntries": []
+  },
+  "contract": {
+    "id": "default",
+    "version": "default-v1",
+    "title": "Default acceptance contract",
+    "criteria": [
+      {
+        "id": "approved-checks",
+        "title": "Every approved check has fresh passing evidence",
+        "required": true
+      }
+    ],
+    "createdAt": "2026-07-22T19:22:55.822Z"
+  },
+  "evidence": [
+    {
+      "id": "5702c65b-bc84-4bbb-997d-3d53d9e65ffd",
+      "workItemId": "7851625d-7117-4e9f-831a-74602de6ea54",
+      "checkId": "19d5f355-c099-485e-aa9b-68ac94153555",
+      "kind": "test",
+      "label": "Useful Automation Lab full documented test suite",
+      "result": "passed",
+      "repositoryId": "f6907a87be4e6db1e582c0c46e1ac52decc5c45b194abadd1a68258fcc08b363",
+      "snapshotFingerprint": "226c6a3d65b2fc894b69b36b72955b245641d9234ee0fe87bacdfbf033e17ba4",
+      "head": "2549721dfd5fc1e4b31089fd0c2abcf4f51c2a29",
+      "contractVersion": "default-v1",
+      "checkDefinitionVersion": "34ec165ecf7a2a87848cc781d7cce33b8ceae1bdf3802fb05ba7ec558676fde5",
+      "startedAt": "2026-07-22T19:27:21.405Z",
+      "completedAt": "2026-07-22T19:27:22.186Z",
+      "durationMs": 684,
+      "toolVersion": "Python 3.14.5",
+      "exitCode": 0,
+      "artifactHashes": ["0425eee42086ca1898e1cea7c12bc07c6cf06065e8017c92786f3c90c3db0960"],
+      "invalidReason": null
+    }
+  ],
+  "verdicts": [],
+  "manifest": {
+    "algorithm": "sha256",
+    "payloadHash": "fcbdcf66329cf95fe3b1f737d0114fcf149ee4ba9cf5512a3d2acc29577ea7e3",
+    "evidenceArtifacts": ["0425eee42086ca1898e1cea7c12bc07c6cf06065e8017c92786f3c90c3db0960"]
+  }
+}

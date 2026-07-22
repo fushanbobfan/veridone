@@ -4,6 +4,7 @@ import { cancelCheck, fetchBootstrap, linkWorkItem, runCheck, type BootstrapDto 
 import { AddSourceDialog } from './components/AddSourceDialog.js';
 import { CheckDialog } from './components/CheckDialog.js';
 import { Navigation } from './components/Navigation.js';
+import { RepositoryLinkDialog } from './components/RepositoryLinkDialog.js';
 import type { WorkspaceSection } from './components/Navigation.js';
 import { ReviewDetail } from './components/ReviewDetail.js';
 import { ReviewInbox } from './components/ReviewInbox.js';
@@ -69,6 +70,7 @@ export function App() {
   const [serviceUnavailable, setServiceUnavailable] = useState(false);
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [checkDialogOpen, setCheckDialogOpen] = useState(false);
+  const [repositoryDialogOpen, setRepositoryDialogOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [workspaceSection, setWorkspaceSection] = useState<WorkspaceSection | null>(null);
   const [verdictIntent, setVerdictIntent] = useState<{
@@ -206,22 +208,11 @@ export function App() {
     if (!bootstrap || !localWorkItem) return;
     setActionError(null);
     if (!localWorkItem.repositoryId) {
-      const repository = bootstrap.repositories[0];
-      if (!repository) {
+      if (bootstrap.repositories.length === 0) {
         setSourceDialogOpen(true);
         return;
       }
-      setActionBusy(true);
-      try {
-        await linkWorkItem(localWorkItem.id, repository.id, bootstrap.csrfToken);
-        await reloadWorkspace();
-      } catch (caught) {
-        setActionError(
-          caught instanceof Error ? caught.message : 'The repository could not be linked.',
-        );
-      } finally {
-        setActionBusy(false);
-      }
+      setRepositoryDialogOpen(true);
       return;
     }
     if (localWorkItem.snapshotFingerprint !== localRepository?.snapshot.fingerprint) {
@@ -276,7 +267,7 @@ export function App() {
     isLocal && bootstrap
       ? !localWorkItem?.repositoryId
         ? bootstrap.repositories.length > 0
-          ? `Link to ${bootstrap.repositories[0]?.name ?? 'repository'}`
+          ? 'Link to repository'
           : 'Add a repository'
         : localWorkItem.snapshotFingerprint !== localRepository?.snapshot.fingerprint
           ? 'Rebind to current state'
@@ -415,6 +406,18 @@ export function App() {
           csrfToken={bootstrap.csrfToken}
           onClose={() => setCheckDialogOpen(false)}
           onAdded={reloadWorkspace}
+        />
+      )}
+      {bootstrap && localWorkItem && (
+        <RepositoryLinkDialog
+          open={repositoryDialogOpen}
+          workItemTitle={localWorkItem.title}
+          repositories={bootstrap.repositories}
+          onClose={() => setRepositoryDialogOpen(false)}
+          onLink={async (repositoryId) => {
+            await linkWorkItem(localWorkItem.id, repositoryId, bootstrap.csrfToken);
+            await reloadWorkspace();
+          }}
         />
       )}
       {bootstrap && localWorkItem && verdictIntent && (

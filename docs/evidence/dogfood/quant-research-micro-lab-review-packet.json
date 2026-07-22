@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "application": "veridone",
+  "privacyMode": "strict",
+  "generatedAt": "2026-07-22T19:27:37.257Z",
+  "workItem": {
+    "id": "e3e0524c-f50b-4362-a203-2aa515880775",
+    "repositoryId": "82b26cefb1453fcf9ae548a7961a7e40a5e2f59bd7757c78441d1a3782df3438",
+    "sourceType": "codex",
+    "sourceRef": "codex:codex-dogfood-quant-research-c9a9fca",
+    "title": "Verify Quant Research Micro Lab public snapshot",
+    "claim": "Codex reports that public commit c9a9fca214cf45a10de4eb98574c92dd757f901e was cloned with a clean worktree and its documented unittest suite passed. VeriDone must verify the repository state and approved check independently.",
+    "sourceLabel": "Codex receipt",
+    "updatedAt": "2026-07-22T19:27:28.603Z",
+    "snapshotFingerprint": "1142a35500c7caa2bde2dd95530f2ff818337f1e2a11f7aa7bf6f6281d1896a0",
+    "humanVerdict": null
+  },
+  "repository": {
+    "id": "82b26cefb1453fcf9ae548a7961a7e40a5e2f59bd7757c78441d1a3782df3438",
+    "name": "quant-research-micro-lab",
+    "branch": "main",
+    "head": "c9a9fca214cf45a10de4eb98574c92dd757f901e",
+    "fingerprint": "1142a35500c7caa2bde2dd95530f2ff818337f1e2a11f7aa7bf6f6281d1896a0",
+    "worktreeHash": "2fe2552c6ffa6edd90a8834fd1654e0fd477451adc0ab260cf540fb3421dc01a",
+    "diffStats": {
+      "changedFiles": 0,
+      "additions": 0,
+      "deletions": 0,
+      "binaryFiles": 0,
+      "untrackedFiles": 0
+    },
+    "statusEntries": []
+  },
+  "contract": {
+    "id": "default",
+    "version": "default-v1",
+    "title": "Default acceptance contract",
+    "criteria": [
+      {
+        "id": "approved-checks",
+        "title": "Every approved check has fresh passing evidence",
+        "required": true
+      }
+    ],
+    "createdAt": "2026-07-22T19:22:55.822Z"
+  },
+  "evidence": [
+    {
+      "id": "95bdf13d-4a9f-4708-9960-d566d61e26c1",
+      "workItemId": "e3e0524c-f50b-4362-a203-2aa515880775",
+      "checkId": "188f1339-e619-4d7a-beef-2eed077b33de",
+      "kind": "test",
+      "label": "Quant Research Micro Lab full documented test suite",
+      "result": "passed",
+      "repositoryId": "82b26cefb1453fcf9ae548a7961a7e40a5e2f59bd7757c78441d1a3782df3438",
+      "snapshotFingerprint": "1142a35500c7caa2bde2dd95530f2ff818337f1e2a11f7aa7bf6f6281d1896a0",
+      "head": "c9a9fca214cf45a10de4eb98574c92dd757f901e",
+      "contractVersion": "default-v1",
+      "checkDefinitionVersion": "1aa38b658fef00bcd8d5081c7ac5362b3a21af1afe795b21bcf26231978ca2b5",
+      "startedAt": "2026-07-22T19:27:36.813Z",
+      "completedAt": "2026-07-22T19:27:37.257Z",
+      "durationMs": 360,
+      "toolVersion": "Python 3.14.5",
+      "exitCode": 0,
+      "artifactHashes": ["ba07c5550c3110d86cca9cf4a549e0db121d5b1d3552e7484aa09db672d90aa2"],
+      "invalidReason": null
+    }
+  ],
+  "verdicts": [],
+  "manifest": {
+    "algorithm": "sha256",
+    "payloadHash": "d91cbbfd0377ec8b0aca0692499a67a73c426d9528643734699ece1f50b297d2",
+    "evidenceArtifacts": ["ba07c5550c3110d86cca9cf4a549e0db121d5b1d3552e7484aa09db672d90aa2"]
+  }
+}
