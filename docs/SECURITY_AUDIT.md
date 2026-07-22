@@ -1,6 +1,6 @@
 # v1 security best-practices audit
 
-Date: 2026-07-21
+Date: 2026-07-21 (updated for v1.0.1)
 
 ## Executive summary
 
@@ -65,4 +65,5 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 - Unit/integration tests cover origin/CSRF, streaming size limits, traversal/symlink boundaries, hostile literal arguments, cancellation/timeout/output cap/spawn error, mutation, scope drift, workspace rollback, packet tampering, and privacy redaction.
 - Playwright exercises the isolated local flow and Chromium/Firefox/WebKit synthetic demo; axe scans target WCAG 2.2 AA.
-- CI runs frozen-lockfile install, format, lint, types, tests, build, production dependency audit, license allowlist, and secret scan. CodeQL and Dependabot are enabled.
+- CI runs frozen-lockfile install, format, lint, types, tests, build, a low-threshold audit of production and development dependencies, license allowlist, and secret scan. CodeQL and Dependabot are enabled.
+- v1.0.1 pins patched transitive versions for `shell-quote` GHSA-395f-4hp3-45gv and `esbuild` GHSA-g7r4-m6w7-qqqr; `pnpm audit --audit-level low` reports no known vulnerability.
