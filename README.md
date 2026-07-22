@@ -2,9 +2,16 @@
 
 > Don't trust “done.” Verify it.
 
+[![CI](https://github.com/fushanbobfan/veridone/actions/workflows/ci.yml/badge.svg)](https://github.com/fushanbobfan/veridone/actions/workflows/ci.yml)
+[![Browser acceptance](https://github.com/fushanbobfan/veridone/actions/workflows/browser.yml/badge.svg)](https://github.com/fushanbobfan/veridone/actions/workflows/browser.yml)
+[![CodeQL](https://github.com/fushanbobfan/veridone/actions/workflows/codeql.yml/badge.svg)](https://github.com/fushanbobfan/veridone/actions/workflows/codeql.yml)
+[![Public demo](https://github.com/fushanbobfan/veridone/actions/workflows/pages.yml/badge.svg)](https://fushanbobfan.github.io/veridone/)
+
 VeriDone is a local-first acceptance desk for AI-assisted software work. It turns agent claims, the exact Git worktree, operator-approved checks, and human decisions into a reproducible acceptance record.
 
 **[Explore the synthetic public demo](https://fushanbobfan.github.io/veridone/)** — no account, backend, repository access, or command execution.
+
+![VeriDone review inbox showing claims, current evidence, stale gates, scope risk, and a locked human verdict](docs/assets/veridone-demo.png)
 
 Most agent tools help start or observe work. VeriDone starts where they stop: deciding whether the result deserves to be accepted.
 
@@ -75,6 +82,7 @@ pnpm verify:packet path/to/veridone-work-item.json
 - [Architecture](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md)
 - [Executable acceptance criteria](docs/ACCEPTANCE.md)
+- [Release evidence](docs/RELEASE_EVIDENCE.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)
 
