@@ -10,18 +10,28 @@ import { expectNoWcagViolations } from './accessibility.js';
 const execFileAsync = promisify(execFile);
 const fixtureRoot = path.resolve('output/e2e-fixture');
 const repositoryPath = path.join(fixtureRoot, 'repository');
+const decoyRepositoryPath = path.join(fixtureRoot, 'unrelated-repository');
 const receiptPath = path.join(fixtureRoot, 'receipt.json');
+let repositoryHead = '';
 
 test.beforeAll(async () => {
-  await mkdir(repositoryPath, { recursive: true });
-  await execFileAsync('git', ['init', '-b', 'main'], { cwd: repositoryPath });
-  await execFileAsync('git', ['config', 'user.email', 'e2e@veridone.local'], {
-    cwd: repositoryPath,
-  });
-  await execFileAsync('git', ['config', 'user.name', 'VeriDone E2E'], { cwd: repositoryPath });
-  await writeFile(path.join(repositoryPath, 'README.md'), '# E2E fixture\n');
-  await execFileAsync('git', ['add', 'README.md'], { cwd: repositoryPath });
-  await execFileAsync('git', ['commit', '-m', 'fixture'], { cwd: repositoryPath });
+  const createRepository = async (repository: string, heading: string) => {
+    await mkdir(repository, { recursive: true });
+    await execFileAsync('git', ['init', '-b', 'main'], { cwd: repository });
+    await execFileAsync('git', ['config', 'user.email', 'e2e@veridone.local'], {
+      cwd: repository,
+    });
+    await execFileAsync('git', ['config', 'user.name', 'VeriDone E2E'], { cwd: repository });
+    await writeFile(path.join(repository, 'README.md'), `# ${heading}\n`);
+    await execFileAsync('git', ['add', 'README.md'], { cwd: repository });
+    await execFileAsync('git', ['commit', '-m', 'fixture'], { cwd: repository });
+  };
+
+  await createRepository(repositoryPath, 'E2E fixture');
+  await createRepository(decoyRepositoryPath, 'Unrelated fixture');
+  repositoryHead = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repositoryPath })
+  ).stdout.trim();
   await writeFile(
     receiptPath,
     JSON.stringify({
@@ -47,6 +57,7 @@ async function connectSource(
   await expect(page.getByRole('radio', { name: new RegExp(kind, 'i') })).toBeChecked();
   if (kind === 'Git repository') {
     await page.getByRole('button', { name: 'Discover repositories' }).click();
+    await page.getByLabel('Discovered repository').selectOption(sourcePath);
     await expect(page.getByLabel('Absolute local path')).toHaveValue(sourcePath);
   } else {
     await page.getByLabel('Absolute local path').fill(sourcePath);
@@ -68,10 +79,18 @@ test('onboards, verifies, decides, and exports without trusting the claim', asyn
 
   await connectSource(page, 'Approved root', fixtureRoot);
   await connectSource(page, 'Git repository', repositoryPath);
+  await connectSource(page, 'Git repository', decoyRepositoryPath);
   await connectSource(page, 'Agent receipt', receiptPath);
 
   await expect(page.getByRole('heading', { name: /implementation · playwright/i })).toBeVisible();
   await page.getByRole('button', { name: 'Link to repository' }).click();
+  await expect(page.getByRole('heading', { name: 'Link to a repository' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Link current snapshot' })).toBeDisabled();
+  await page
+    .getByRole('combobox', { name: 'Repository' })
+    .selectOption({ label: `repository — main @ ${repositoryHead.slice(0, 12)}` });
+  await expect(page.getByLabel('Selected repository snapshot')).toContainText(repositoryHead);
+  await page.getByRole('button', { name: 'Link current snapshot' }).click();
   await page.getByRole('button', { name: 'Approve a check' }).click();
   await page.getByLabel('Label').fill('Deterministic browser smoke check');
   await page.getByLabel('Executable').fill(process.execPath);

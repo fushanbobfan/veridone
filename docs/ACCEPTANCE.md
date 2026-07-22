@@ -1,4 +1,4 @@
-# v1 executable acceptance criteria
+# v1.1 executable acceptance criteria
 
 These criteria are release gates, not aspirations. Each ID must map to automated tests and final manual evidence.
 
@@ -9,6 +9,7 @@ These criteria are release gates, not aspirations. Each ID must map to automated
 - **ONB-03:** An agent-receipt file or directory is fully validated and previewed before complete and degraded runs import with provenance.
 - **ONB-04:** Malformed, oversized, traversal, and symlink-escape inputs are rejected with actionable errors and no partial commit.
 - **ONB-05:** Imported command-like text remains inert and cannot reach the process runner.
+- **ONB-06:** An unbound claim in a multi-repository workspace requires an explicit repository choice and displays the selected branch, commit, path, dirty state, and fingerprint before binding.
 
 ## Triage and review
 
@@ -52,4 +53,4 @@ These criteria are release gates, not aspirations. Each ID must map to automated
 - **REL-03:** Playwright validates the full onboarding-to-export journey in Chromium; Firefox and WebKit cover the hosted demo journey.
 - **REL-04:** Dependency audit, secret scan, license policy, and CodeQL are green or have a documented, defensible exception.
 - **REL-05:** The public demo is accessible and labels every synthetic record as demo data.
-- **REL-06:** Installation, user guide, architecture, security, data format, contributing, and release documentation are complete for v1.0.
+- **REL-06:** Installation, user guide, architecture, security, data format, contributing, dogfooding, and release documentation are complete for v1.1.

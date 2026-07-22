@@ -1,6 +1,6 @@
 {
   "name": "veridone-workspace",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
   "description": "Local-first acceptance desk for AI-assisted software work",
   "license": "MIT",
@@ -26,9 +26,10 @@
     "test:e2e": "playwright test",
     "test:e2e:chromium": "playwright test --project=chromium-local --project=chromium-demo --project=mobile-chromium",
     "verify:packet": "tsx apps/server/src/verify-packet.ts",
+    "verify:published-evidence": "tsx apps/server/src/verify-evidence-directory.ts docs/evidence/dogfood",
     "licenses:check": "node scripts/check-licenses.mjs",
     "secrets:check": "node scripts/secret-scan.mjs",
-    "quality": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm smoke:built && pnpm audit --audit-level low && pnpm licenses:check && pnpm secrets:check"
+    "quality": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm verify:published-evidence && pnpm build && pnpm smoke:built && pnpm audit --audit-level low && pnpm licenses:check && pnpm secrets:check"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",

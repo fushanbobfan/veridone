@@ -1,4 +1,4 @@
-# v1.0.2 release evidence
+# v1.1.0 release evidence
 
 This file maps the v1 release claim to reproducible evidence. A green badge is not treated as proof by itself; follow the linked workflow to inspect every job and log.
 
@@ -6,14 +6,14 @@ This file maps the v1 release claim to reproducible evidence. A green badge is n
 
 - Repository: <https://github.com/fushanbobfan/veridone>
 - Synthetic demo: <https://fushanbobfan.github.io/veridone/>
-- Release: <https://github.com/fushanbobfan/veridone/releases/tag/v1.0.2>
+- Release: <https://github.com/fushanbobfan/veridone/releases/tag/v1.1.0>
 - Security reporting: <https://github.com/fushanbobfan/veridone/security/advisories/new>
 
 ## Gate map
 
 | Gate                      | Evidence                                                                                                                                                                                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core behavior             | `pnpm test` covers fingerprints, freshness, scope, path boundaries, receipt validation, atomic imports, process failure states, workspace rollback, and packet verification.                                                                                                                |
+| Core behavior             | `pnpm test` covers fingerprints, freshness, scope, path boundaries, receipt validation, atomic imports, process failure states, workspace rollback, and packet verification. `pnpm verify:published-evidence` makes every committed dogfood packet's manifest a release gate.               |
 | Local workflow            | The `chromium-local` Playwright project approves a root, discovers a repository, previews/imports a receipt, binds state, approves/runs a check, records a human verdict, and exports a packet and workspace backup.                                                                        |
 | Browser and accessibility | [Browser acceptance](https://github.com/fushanbobfan/veridone/actions/workflows/browser.yml) runs the real Chromium flow plus Chromium, Firefox, WebKit, and Pixel 7 demo states with axe WCAG 2.2 AA scans.                                                                                |
 | Platform portability      | [CI](https://github.com/fushanbobfan/veridone/actions/workflows/ci.yml) repeats frozen install, format, lint, types, unit/integration tests, build, built-server/preview-proxy smoke, all-dependency audit at low threshold, license policy, and secret scan on Ubuntu, Windows, and macOS. |
@@ -21,6 +21,7 @@ This file maps the v1 release claim to reproducible evidence. A green badge is n
 | Public deployment         | [Public demo](https://github.com/fushanbobfan/veridone/actions/workflows/pages.yml) builds with an explicit project base path and deploys only the static client. The public UI labels all records synthetic.                                                                               |
 | Supply chain              | Exact versions and a frozen pnpm lockfile are committed; all production and development dependencies pass the low-threshold audit, and an approved-license allowlist, Dependabot, secret scanning, and push protection are enabled.                                                         |
 | Security boundary         | [Security audit](SECURITY_AUDIT.md) records remediated findings and residual boundaries; private vulnerability reporting is enabled.                                                                                                                                                        |
+| Real-project dogfooding   | [Maintainer dogfooding](DOGFOODING.md) records four fresh public clones, 340 independently executed tests, exact commit/fingerprint bindings, four verifiable strict-privacy packets, zero worktree mutations, and no automated human verdict.                                              |
 
 ## Manual release checks
 

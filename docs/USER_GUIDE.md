@@ -8,7 +8,9 @@ Connect a repository to capture its current Git state. You can discover reposito
 
 ## 2. Bind a claim
 
-A new receipt is intentionally unbound. Select it and choose **Link to repository**. The binding records the current content-sensitive repository fingerprint. If the repository changes later, the claim and earlier evidence become stale until you explicitly rebind.
+A new receipt is intentionally unbound. Select it and choose **Link to repository**. VeriDone never guesses from receipt text or silently chooses the first connected repository: the binding dialog starts empty and requires you to inspect and select the intended repository. It shows the repository path, branch, full commit, clean or dirty state, and fingerprint before you confirm.
+
+The binding records the current content-sensitive repository fingerprint. It establishes which worktree the claim concerns; it does not turn the imported claim into proof. If the repository changes later, the claim and earlier evidence become stale until you explicitly rebind.
 
 ## 3. Approve checks
 
