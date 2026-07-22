@@ -4,6 +4,8 @@
 
 VeriDone is a local-first acceptance desk for AI-assisted software work. It turns agent claims, the exact Git worktree, operator-approved checks, and human decisions into a reproducible acceptance record.
 
+**[Explore the synthetic public demo](https://fushanbobfan.github.io/veridone/)** — no account, backend, repository access, or command execution.
+
 Most agent tools help start or observe work. VeriDone starts where they stop: deciding whether the result deserves to be accepted.
 
 ## Why it exists
