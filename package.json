@@ -16,6 +16,7 @@
     "dev": "concurrently -n server,web -c blue,green \"pnpm --filter @veridone/server dev\" \"pnpm --filter @veridone/web dev\"",
     "start": "concurrently -n server,web -c blue,green \"pnpm --filter @veridone/server start\" \"pnpm --filter @veridone/web preview\"",
     "build": "pnpm -r build",
+    "smoke:built": "node scripts/smoke-built.mjs",
     "typecheck": "pnpm -r typecheck && tsc -p tsconfig.e2e.json --noEmit",
     "lint": "oxlint --deny-warnings apps packages",
     "format:check": "prettier --check .",
@@ -27,7 +28,7 @@
     "verify:packet": "tsx apps/server/src/verify-packet.ts",
     "licenses:check": "node scripts/check-licenses.mjs",
     "secrets:check": "node scripts/secret-scan.mjs",
-    "quality": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm audit --prod --audit-level high && pnpm licenses:check && pnpm secrets:check"
+    "quality": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm smoke:built && pnpm audit --prod --audit-level high && pnpm licenses:check && pnpm secrets:check"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
