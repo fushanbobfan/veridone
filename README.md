@@ -85,6 +85,7 @@ pnpm verify:packet path/to/veridone-work-item.json
 - [Executable acceptance criteria](docs/ACCEPTANCE.md)
 - [Release evidence](docs/RELEASE_EVIDENCE.md)
 - [Maintainer dogfooding evidence](docs/DOGFOODING.md)
+- [External tester guide](docs/TESTER_GUIDE.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)
 

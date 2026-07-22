@@ -1,0 +1,88 @@
+name: Dogfood feedback
+description: Report a real local evaluation without sharing repository contents or raw output.
+title: '[Dogfood]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing VeriDone on real local work. Do not include credentials, source code, workspace backups, raw command output, private receipt text, or undisclosed security findings.
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: VeriDone version or commit
+      placeholder: v1.1.0 or a commit SHA
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: v22.x.x
+    validations:
+      required: true
+  - type: dropdown
+    id: completion
+    attributes:
+      label: How far did you get?
+      options:
+        - Exported and verified a packet
+        - Recorded a human verdict
+        - Ran at least one approved check
+        - Linked a claim to a repository
+        - Connected a repository or receipt
+        - Could not complete setup
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Evaluation workflow
+      description: Describe the safe check type and the steps you tried. Do not paste source code or raw output.
+      placeholder: I imported a generic receipt, linked it to one repository, and ran the project's existing unit-test command.
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: Biggest point of friction
+      description: Name the first step that was unclear, slow, or blocked.
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: Most useful behavior
+      description: What, if anything, changed how you judged the agent's completion claim?
+    validations:
+      required: true
+  - type: textarea
+    id: expected-versus-actual
+    attributes:
+      label: Expected versus actual behavior
+      description: Include a minimal, privacy-safe reproduction if something behaved incorrectly.
+  - type: input
+    id: payload-hash
+    attributes:
+      label: Packet payload hash (optional)
+      description: Share only the SHA-256 payload hash, not the packet, if you want to reference a run.
+      placeholder: 64 hexadecimal characters
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I removed credentials, source code, raw command output, workspace backups, private receipt text, and other sensitive data.
+          required: true
+        - label: This report does not disclose an unpatched security vulnerability.
+          required: true

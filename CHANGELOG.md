@@ -8,6 +8,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 - Added an explicit repository-binding dialog that requires an operator choice and shows branch, full commit, path, worktree state, and fingerprint before a claim is bound.
 - Published strict-privacy review packets and a reproducible report from maintainer dogfooding across Gravity Garden and three public micro-labs.
+- Added a privacy-preserving external tester guide and structured dogfood feedback form.
 
 ### Changed
 
