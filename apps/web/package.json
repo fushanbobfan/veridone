@@ -13,7 +13,7 @@
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@fontsource-variable/manrope": "5.3.0",
     "@veridone/core": "workspace:*",
-    "lucide-react": "1.25.0",
+    "lucide-react": "1.27.0",
     "motion": "12.42.2",
     "react": "19.2.8",
     "react-dom": "19.2.8"
