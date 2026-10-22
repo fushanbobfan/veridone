@@ -130,6 +130,17 @@ describe('workspace restore', () => {
     expect(check.definitionHash).toBe(await checkDefinitionHash(check));
   }, 30_000);
 
+  it('restores a check whose scope an earlier version stored as an empty path', async () => {
+    const { backup } = await decidedWorkspace();
+    const edited = structuredClone(backup);
+    for (const check of edited.data.checks) check.scopePaths = ['', 'src'];
+    const restored = emptyDatabase();
+
+    await importWorkspace(restored, await resealed(edited));
+
+    expect(restored.listChecks().map((check) => check.scopePaths)).toEqual([['src']]);
+  }, 30_000);
+
   it('never lets restored evidence satisfy a gate', async () => {
     const { database, workItemId } = await decidedWorkspace();
     const [passing] = database.listEvidence(workItemId);

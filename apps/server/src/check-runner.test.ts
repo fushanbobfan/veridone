@@ -62,7 +62,7 @@ describe('checks run in a clean checkout', () => {
   it('refuses to run checks while the repository has uncommitted changes', async () => {
     const fixture = await workspace();
     const checkId = await fixture.approveCheck('process.exit(0)');
-    await writeFile(path.join(fixture.repositoryPath, 'README.md'), '# Edited, not committed\n');
+    await writeFile(path.join(fixture.repositoryPath, 'README.md'), '# Edited after the commit\n');
     await fixture.post(`/api/v1/repositories/${fixture.repositoryId}/refresh`, {});
     await fixture.post(`/api/v1/work-items/${fixture.workItemId}/link`, {
       repositoryId: fixture.repositoryId,
@@ -231,6 +231,23 @@ describe('check tools are pinned', () => {
       workItemId: fixture.workItemId,
     });
     expect(run.body).toMatchObject({ evidence: { result: 'passed' }, readiness: { ready: true } });
+  }, 30_000);
+
+  it('treats a scope of ./ as no declared scope', async () => {
+    const fixture = await workspace();
+
+    const response = await fixture.post<{ check: { scopePaths: string[] } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Scoped check',
+      kind: 'test',
+      executable: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      scopePaths: ['./', 'src/', '/'],
+      cwdRelative: '.',
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.check.scopePaths).toEqual(['src']);
   }, 30_000);
 
   it('rejects a tool named by a relative path at approval', async () => {

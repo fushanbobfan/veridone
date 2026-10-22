@@ -24,7 +24,12 @@ export const checkRequestSchema = z.object({
   executable: z.string().min(1).max(4_096),
   args: z.array(z.string().max(4_096)).max(100),
   versionArgs: z.array(z.string().max(4_096)).max(10).default(['--version']),
-  scopePaths: z.array(relativeScopePathSchema).max(100).default([]),
+  // "./" names the whole repository, which is the same as declaring no scope.
+  scopePaths: z
+    .array(relativeScopePathSchema)
+    .max(100)
+    .default([])
+    .transform((paths) => paths.filter((value) => value !== '')),
   cwdRelative: z
     .string()
     .min(1)

@@ -338,7 +338,8 @@ export async function importWorkspace(
           executable: record.executable,
           args: record.args,
           versionArgs: record.versionArgs,
-          scopePaths: record.scopePaths,
+          // Earlier versions stored "./" as an empty scope path; it declares no scope.
+          scopePaths: record.scopePaths.filter((value) => value !== ''),
           cwdRelative: record.cwdRelative,
           timeoutMs: record.timeoutMs,
           maxOutputBytes: record.maxOutputBytes,
