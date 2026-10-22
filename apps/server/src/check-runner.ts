@@ -219,6 +219,7 @@ export async function runApprovedCheck(
     isolation: 'clean-checkout',
     toolPath: tool.path,
     toolSha256: tool.sha256,
+    origin: 'local',
   });
 }
 
@@ -252,7 +253,10 @@ export function acceptanceReadiness(
     repository.snapshot.statusEntries,
     checks.flatMap((check) => check.scopePaths),
   );
-  const allEvidence = database.listEvidence(workItemId);
+  // Only evidence this workspace produced counts; restored evidence stays history.
+  const allEvidence = database
+    .listEvidence(workItemId)
+    .filter((evidence) => evidence.origin === 'local');
   const latest = checks
     .map((check) => allEvidence.find((evidence) => evidence.checkId === check.id))
     .filter((evidence): evidence is EvidenceRecord => Boolean(evidence));

@@ -20,7 +20,7 @@ import { VerdictDialog } from './components/VerdictDialog.js';
 import { WorkspaceDialog } from './components/WorkspaceDialog.js';
 import { WorkspaceExplorerDialog } from './components/WorkspaceExplorerDialog.js';
 import { demoReviews, type ReviewState } from './data.js';
-import { workItemToReview } from './local-data.js';
+import { latestVerdict, workItemToReview } from './local-data.js';
 
 type Theme = 'light' | 'dark';
 type ThemePreference = Theme | 'system';
@@ -233,7 +233,7 @@ export function App() {
   }
 
   const localWorkItem = bootstrap?.workItems.find((item) => item.id === selected.id);
-  const localVerdict = bootstrap?.verdicts.find((verdict) => verdict.workItemId === selected.id);
+  const localVerdict = bootstrap ? latestVerdict(bootstrap.verdicts, selected.id) : undefined;
   const localRepository = localWorkItem?.repositoryId
     ? bootstrap?.repositories.find((repository) => repository.id === localWorkItem.repositoryId)
     : null;

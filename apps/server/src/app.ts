@@ -20,7 +20,7 @@ import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
 import type { ServerConfig } from './config.js';
 import type { RepositoryRecord, VeriDoneDatabase } from './database.js';
 import { buildAcceptancePacket } from './packet.js';
-import { exportWorkspace, importWorkspace } from './workspace.js';
+import { exportWorkspace, importWorkspace, WorkspaceConflictError } from './workspace.js';
 
 const rootRequestSchema = z.object({
   path: z.string().min(1).max(4_096),
@@ -358,6 +358,9 @@ export function createApp(options: AppOptions): Hono {
     }
     if (error instanceof CheckCapacityError) {
       return context.json({ error: 'check_capacity_reached', limit: error.limit }, 429);
+    }
+    if (error instanceof WorkspaceConflictError) {
+      return context.json({ error: 'workspace_conflict', message: error.message }, 409);
     }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return context.json({ error: 'request_failed', message }, 400);

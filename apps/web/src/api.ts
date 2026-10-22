@@ -113,6 +113,7 @@ export interface EvidenceDto {
   isolation: 'clean-checkout' | null;
   toolPath: string | null;
   toolSha256: string | null;
+  origin: 'local' | 'imported';
 }
 
 export interface VerdictDto {
@@ -123,6 +124,8 @@ export interface VerdictDto {
   decidedAt: string;
   snapshotFingerprint: string;
   overrideReason: string | null;
+  sequence: number;
+  previousVerdictId: string | null;
 }
 
 export interface BootstrapDto {
@@ -267,6 +270,6 @@ export async function createVerdict(
 export async function importWorkspaceDocument(
   document: unknown,
   csrfToken: string,
-): Promise<{ imported: Record<string, number> }> {
+): Promise<{ imported: Record<string, number>; unchanged: Record<string, number> }> {
   return mutate('/api/v1/workspace/import', csrfToken, document);
 }

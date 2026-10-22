@@ -154,6 +154,56 @@ const migrationSix = `
   ALTER TABLE evidence ADD COLUMN tool_sha256 TEXT;
 `;
 
+// Each work item's verdicts form a chain: a verdict names the one it supersedes and carries the
+// next sequence number. Existing verdicts are chained in the order they were decided. From here on
+// the database accepts a verdict only at the head of its chain and refuses to change or remove
+// verdicts and evidence.
+const migrationSeven = `
+  ALTER TABLE verdicts ADD COLUMN sequence INTEGER;
+  ALTER TABLE verdicts ADD COLUMN previous_verdict_id TEXT REFERENCES verdicts(id);
+  UPDATE verdicts SET sequence = (
+    SELECT COUNT(*) FROM verdicts AS earlier
+    WHERE earlier.work_item_id = verdicts.work_item_id
+      AND (earlier.decided_at < verdicts.decided_at
+        OR (earlier.decided_at = verdicts.decided_at AND earlier.rowid <= verdicts.rowid))
+  );
+  UPDATE verdicts SET previous_verdict_id = (
+    SELECT earlier.id FROM verdicts AS earlier
+    WHERE earlier.work_item_id = verdicts.work_item_id AND earlier.sequence = verdicts.sequence - 1
+  );
+  CREATE UNIQUE INDEX verdicts_sequence_idx ON verdicts(work_item_id, sequence);
+
+  CREATE TRIGGER verdicts_extend_head BEFORE INSERT ON verdicts
+  WHEN NEW.sequence IS NOT (
+      SELECT COALESCE(MAX(sequence), 0) + 1 FROM verdicts WHERE work_item_id = NEW.work_item_id
+    )
+    OR NEW.previous_verdict_id IS NOT (
+      SELECT id FROM verdicts WHERE work_item_id = NEW.work_item_id ORDER BY sequence DESC LIMIT 1
+    )
+  BEGIN
+    SELECT RAISE(ABORT, 'A verdict must extend the latest verdict of its work item.');
+  END;
+  CREATE TRIGGER verdicts_no_update BEFORE UPDATE ON verdicts
+  BEGIN
+    SELECT RAISE(ABORT, 'Verdict history is append-only.');
+  END;
+  CREATE TRIGGER verdicts_no_delete BEFORE DELETE ON verdicts
+  BEGIN
+    SELECT RAISE(ABORT, 'Verdict history is append-only.');
+  END;
+
+  ALTER TABLE evidence ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'
+    CHECK (origin IN ('local', 'imported'));
+  CREATE TRIGGER evidence_no_update BEFORE UPDATE ON evidence
+  BEGIN
+    SELECT RAISE(ABORT, 'Evidence is append-only.');
+  END;
+  CREATE TRIGGER evidence_no_delete BEFORE DELETE ON evidence
+  BEGIN
+    SELECT RAISE(ABORT, 'Evidence is append-only.');
+  END;
+`;
+
 export interface ApprovedRootRecord {
   id: string;
   path: string;
@@ -244,6 +294,8 @@ export interface EvidenceRecord {
   /** The pinned tool file that ran, and its SHA-256 as verified immediately before the run. */
   toolPath: string | null;
   toolSha256: string | null;
+  /** `imported` evidence came from a workspace backup; it stays history and satisfies no gate. */
+  origin: 'local' | 'imported';
 }
 
 export interface VerdictRecord {
@@ -256,6 +308,10 @@ export interface VerdictRecord {
   contractVersion: string;
   evidenceIds: string[];
   overrideReason: string | null;
+  /** Position in the work item's verdict chain, starting at 1. */
+  sequence: number;
+  /** The verdict this one supersedes; null for the first verdict on a work item. */
+  previousVerdictId: string | null;
 }
 
 export class VeriDoneDatabase {
@@ -281,6 +337,7 @@ export class VeriDoneDatabase {
       { version: 4, sql: migrationFour },
       { version: 5, sql: migrationFive },
       { version: 6, sql: migrationSix },
+      { version: 7, sql: migrationSeven },
     ];
 
     for (const migration of migrations) {
@@ -689,22 +746,39 @@ export class VeriDoneDatabase {
 
   recordEvidence(input: Omit<EvidenceRecord, 'id'>): EvidenceRecord {
     const record: EvidenceRecord = { ...input, id: randomUUID() };
+    this.insertEvidence(record);
+    return record;
+  }
+
+  /** Adds evidence from a workspace backup under its original ID, marked as imported. */
+  recordImportedEvidence(input: Omit<EvidenceRecord, 'origin'>): EvidenceRecord {
+    const record: EvidenceRecord = { ...input, origin: 'imported' };
+    this.insertEvidence(record);
+    return record;
+  }
+
+  private insertEvidence(record: EvidenceRecord): void {
     this.connection
       .prepare(
         `INSERT INTO evidence (
           id, work_item_id, check_id, kind, label, result, repository_id,
           snapshot_fingerprint, head, contract_version, check_definition_version,
           started_at, completed_at, duration_ms, tool_version, exit_code, stdout, stderr,
-          artifact_hashes_json, invalid_reason, isolation, tool_path, tool_sha256
+          artifact_hashes_json, invalid_reason, isolation, tool_path, tool_sha256, origin
         ) VALUES (
           @id, @workItemId, @checkId, @kind, @label, @result, @repositoryId,
           @snapshotFingerprint, @head, @contractVersion, @checkDefinitionVersion,
           @startedAt, @completedAt, @durationMs, @toolVersion, @exitCode, @stdout, @stderr,
-          @artifactHashesJson, @invalidReason, @isolation, @toolPath, @toolSha256
+          @artifactHashesJson, @invalidReason, @isolation, @toolPath, @toolSha256, @origin
         )`,
       )
       .run({ ...record, artifactHashesJson: JSON.stringify(record.artifactHashes) });
-    return record;
+  }
+
+  getEvidence(id: string): EvidenceRecord | null {
+    const row = this.connection.prepare('SELECT * FROM evidence WHERE id = ?').get(id) as
+      Record<string, unknown> | undefined;
+    return row ? this.evidenceFromRow(row) : null;
   }
 
   listEvidence(workItemId?: string): EvidenceRecord[] {
@@ -715,7 +789,11 @@ export class VeriDoneDatabase {
       : (this.connection
           .prepare('SELECT * FROM evidence ORDER BY completed_at DESC')
           .all() as Array<Record<string, unknown>>);
-    return rows.map((row) => ({
+    return rows.map((row) => this.evidenceFromRow(row));
+  }
+
+  private evidenceFromRow(row: Record<string, unknown>): EvidenceRecord {
+    return {
       id: String(row.id),
       workItemId: String(row.work_item_id),
       checkId: String(row.check_id),
@@ -739,43 +817,80 @@ export class VeriDoneDatabase {
       isolation: row.isolation === 'clean-checkout' ? 'clean-checkout' : null,
       toolPath: row.tool_path === null ? null : String(row.tool_path),
       toolSha256: row.tool_sha256 === null ? null : String(row.tool_sha256),
-    }));
+      origin: row.origin === 'imported' ? 'imported' : 'local',
+    };
   }
 
-  recordVerdict(input: Omit<VerdictRecord, 'id' | 'decidedAt'>): VerdictRecord {
-    const record: VerdictRecord = {
-      ...input,
-      id: randomUUID(),
-      decidedAt: new Date().toISOString(),
-    };
-    this.connection.transaction(() => {
-      this.connection
-        .prepare(
-          `INSERT INTO verdicts (
-            id, work_item_id, decision, note, decided_at, snapshot_fingerprint,
-            contract_version, evidence_ids_json, override_reason
-          ) VALUES (
-            @id, @workItemId, @decision, @note, @decidedAt, @snapshotFingerprint,
-            @contractVersion, @evidenceIdsJson, @overrideReason
-          )`,
-        )
-        .run({ ...record, evidenceIdsJson: JSON.stringify(record.evidenceIds) });
-      this.connection
-        .prepare('UPDATE work_items SET human_verdict = ?, updated_at = ? WHERE id = ?')
-        .run(record.decision, record.decidedAt, record.workItemId);
-    })();
-    return record;
+  /** Records a new verdict at the head of its work item's history. */
+  recordVerdict(
+    input: Omit<VerdictRecord, 'id' | 'decidedAt' | 'sequence' | 'previousVerdictId'>,
+  ): VerdictRecord {
+    // IMMEDIATE takes the write lock before reading the head, so no other writer can interleave.
+    return this.connection
+      .transaction(() => {
+        const head = this.latestVerdict(input.workItemId);
+        const record: VerdictRecord = {
+          ...input,
+          id: randomUUID(),
+          decidedAt: new Date().toISOString(),
+          sequence: (head?.sequence ?? 0) + 1,
+          previousVerdictId: head?.id ?? null,
+        };
+        this.appendVerdict(record);
+        return record;
+      })
+      .immediate();
+  }
+
+  /**
+   * Appends a complete verdict record. The database refuses it unless it extends the latest
+   * verdict of its work item, so callers that replay a history must replay it in order.
+   */
+  appendVerdict(record: VerdictRecord): void {
+    this.connection
+      .prepare(
+        `INSERT INTO verdicts (
+          id, work_item_id, decision, note, decided_at, snapshot_fingerprint,
+          contract_version, evidence_ids_json, override_reason, sequence, previous_verdict_id
+        ) VALUES (
+          @id, @workItemId, @decision, @note, @decidedAt, @snapshotFingerprint,
+          @contractVersion, @evidenceIdsJson, @overrideReason, @sequence, @previousVerdictId
+        )`,
+      )
+      .run({ ...record, evidenceIdsJson: JSON.stringify(record.evidenceIds) });
+    this.connection
+      .prepare('UPDATE work_items SET human_verdict = ?, updated_at = ? WHERE id = ?')
+      .run(record.decision, record.decidedAt, record.workItemId);
+  }
+
+  latestVerdict(workItemId: string): VerdictRecord | null {
+    const row = this.connection
+      .prepare('SELECT * FROM verdicts WHERE work_item_id = ? ORDER BY sequence DESC LIMIT 1')
+      .get(workItemId) as Record<string, unknown> | undefined;
+    return row ? this.verdictFromRow(row) : null;
+  }
+
+  getVerdict(id: string): VerdictRecord | null {
+    const row = this.connection.prepare('SELECT * FROM verdicts WHERE id = ?').get(id) as
+      Record<string, unknown> | undefined;
+    return row ? this.verdictFromRow(row) : null;
   }
 
   listVerdicts(workItemId?: string): VerdictRecord[] {
     const rows = workItemId
       ? (this.connection
-          .prepare('SELECT * FROM verdicts WHERE work_item_id = ? ORDER BY decided_at DESC')
+          .prepare(
+            'SELECT * FROM verdicts WHERE work_item_id = ? ORDER BY decided_at DESC, sequence DESC',
+          )
           .all(workItemId) as Array<Record<string, unknown>>)
-      : (this.connection.prepare('SELECT * FROM verdicts ORDER BY decided_at DESC').all() as Array<
-          Record<string, unknown>
-        >);
-    return rows.map((row) => ({
+      : (this.connection
+          .prepare('SELECT * FROM verdicts ORDER BY decided_at DESC, sequence DESC')
+          .all() as Array<Record<string, unknown>>);
+    return rows.map((row) => this.verdictFromRow(row));
+  }
+
+  private verdictFromRow(row: Record<string, unknown>): VerdictRecord {
+    return {
       id: String(row.id),
       workItemId: String(row.work_item_id),
       decision: String(row.decision) as VerdictRecord['decision'],
@@ -785,6 +900,8 @@ export class VeriDoneDatabase {
       contractVersion: String(row.contract_version),
       evidenceIds: JSON.parse(String(row.evidence_ids_json)) as string[],
       overrideReason: row.override_reason === null ? null : String(row.override_reason),
-    }));
+      sequence: Number(row.sequence),
+      previousVerdictId: row.previous_verdict_id === null ? null : String(row.previous_verdict_id),
+    };
   }
 }

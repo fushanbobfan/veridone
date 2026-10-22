@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BootstrapDto, VerdictDto } from './api.js';
-import { workItemToReview } from './local-data.js';
+import { latestVerdict, workItemToReview } from './local-data.js';
 
 const currentFingerprint = 'a'.repeat(64);
 const earlierFingerprint = 'b'.repeat(64);
@@ -11,6 +11,7 @@ function workspace(options: {
   evidence?: boolean;
   /** Evidence recorded before checks ran in a clean checkout carries no isolation. */
   legacyEvidence?: boolean;
+  restoredEvidence?: boolean;
 }): BootstrapDto {
   return {
     mode: 'local',
@@ -96,6 +97,7 @@ function workspace(options: {
             isolation: options.legacyEvidence ? null : 'clean-checkout',
             toolPath: '/usr/bin/node',
             toolSha256: 'f'.repeat(64),
+            origin: options.restoredEvidence ? 'imported' : 'local',
           },
         ]
       : [],
@@ -107,6 +109,8 @@ function workspace(options: {
             note: 'Reviewed.',
             decidedAt: '2026-10-22T10:06:00.000Z',
             overrideReason: null,
+            sequence: 1,
+            previousVerdictId: null,
             ...options.verdict,
           },
         ]
@@ -135,6 +139,34 @@ describe('local review state', () => {
       state: 'blocked',
       gatesReady: false,
     });
+  });
+
+  it('shows restored evidence as history that passes no gate', () => {
+    const restored = review({ evidence: true, restoredEvidence: true });
+    expect(restored).toMatchObject({ state: 'blocked', gatesReady: false });
+    expect(restored.criteria.find((criterion) => criterion.id === 'check')?.detail).toMatch(
+      /Restored from a backup/u,
+    );
+  });
+
+  it('reads the latest verdict from the chain rather than the list order', () => {
+    const bootstrap = workspace({
+      evidence: true,
+      verdict: { decision: 'accepted', snapshotFingerprint: currentFingerprint },
+    });
+    const [first] = bootstrap.verdicts;
+    if (!first) throw new Error('fixture has no verdict');
+    bootstrap.verdicts = [
+      first,
+      {
+        ...first,
+        id: 'superseded',
+        decision: 'rejected',
+        sequence: 2,
+        previousVerdictId: first.id,
+      },
+    ];
+    expect(latestVerdict(bootstrap.verdicts, 'work')?.id).toBe('superseded');
   });
 
   it('keeps a verdict on the current state decided without locking acceptance', () => {
