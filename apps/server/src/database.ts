@@ -1,10 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
-import type { RepositorySnapshot } from '@veridone/core';
+import { canonicalJson, type RepositorySnapshot } from '@veridone/core';
 import type { ReceiptPreview } from '@veridone/adapters';
 
 const migrationOne = `
@@ -204,6 +204,37 @@ const migrationSeven = `
   END;
 `;
 
+// A verdict records the hash of the claim the reviewer read; earlier verdicts keep a null hash.
+const migrationEight = `
+  ALTER TABLE verdicts ADD COLUMN claim_hash TEXT;
+`;
+
+/** SHA-256 of the title and claim a reviewer reads before deciding. */
+export function claimHash(workItem: { title: string; claim: string }): string {
+  return createHash('sha256')
+    .update(canonicalJson({ title: workItem.title, claim: workItem.claim }))
+    .digest('hex');
+}
+
+/** What a reviewer saw when opening a verdict; a verdict is recorded only while all of it holds. */
+export interface VerdictExpectation {
+  fingerprint: string | null;
+  verdictId: string | null;
+  claimHash: string;
+}
+
+export class VerdictConflictError extends Error {
+  override readonly name = 'VerdictConflictError';
+
+  constructor(
+    readonly reason: 'repository-changed' | 'verdict-changed' | 'claim-changed',
+    message: string,
+    readonly current: VerdictExpectation,
+  ) {
+    super(message);
+  }
+}
+
 export interface ApprovedRootRecord {
   id: string;
   path: string;
@@ -239,6 +270,8 @@ export interface WorkItemRecord {
   updatedAt: string;
   snapshotFingerprint: string | null;
   humanVerdict: 'accepted' | 'changes-requested' | 'rejected' | null;
+  /** SHA-256 of the title and claim, computed when the record is read. */
+  claimHash: string;
 }
 
 export interface ContractRecord {
@@ -312,6 +345,8 @@ export interface VerdictRecord {
   sequence: number;
   /** The verdict this one supersedes; null for the first verdict on a work item. */
   previousVerdictId: string | null;
+  /** Hash of the claim the reviewer read; null for verdicts recorded before it was kept. */
+  claimHash: string | null;
 }
 
 export class VeriDoneDatabase {
@@ -338,6 +373,7 @@ export class VeriDoneDatabase {
       { version: 5, sql: migrationFive },
       { version: 6, sql: migrationSix },
       { version: 7, sql: migrationSeven },
+      { version: 8, sql: migrationEight },
     ];
 
     for (const migration of migrations) {
@@ -537,9 +573,23 @@ export class VeriDoneDatabase {
       updatedAt: preview.completedAt ?? preview.startedAt,
       snapshotFingerprint: null,
       humanVerdict: null,
+      claimHash: claimHash(preview),
     };
 
     this.connection.transaction(() => {
+      // A verdict judged the claim it was recorded on; a re-import must not change that claim.
+      const existing = this.connection
+        .prepare('SELECT id, title, claim FROM work_items WHERE source_ref = ?')
+        .get(workItem.sourceRef) as { id: string; title: string; claim: string } | undefined;
+      if (
+        existing &&
+        claimHash(existing) !== workItem.claimHash &&
+        this.latestVerdict(existing.id)
+      ) {
+        throw new Error(
+          `The work item for ${workItem.sourceRef} already has a verdict, so its claim cannot change. Import the revised claim under a new run_id.`,
+        );
+      }
       this.connection
         .prepare(
           `INSERT INTO receipts (
@@ -632,6 +682,7 @@ export class VeriDoneDatabase {
         row.human_verdict === null
           ? null
           : (String(row.human_verdict) as WorkItemRecord['humanVerdict']),
+      claimHash: claimHash({ title: String(row.title), claim: String(row.claim) }),
     }));
   }
 
@@ -821,20 +872,63 @@ export class VeriDoneDatabase {
     };
   }
 
-  /** Records a new verdict at the head of its work item's history. */
+  /** Throws a VerdictConflictError unless the work item still looks as the reviewer saw it. */
+  assertVerdictExpectation(
+    workItemId: string,
+    expected: VerdictExpectation,
+  ): { workItem: WorkItemRecord; head: VerdictRecord | null } {
+    const workItem = this.getWorkItem(workItemId);
+    if (!workItem) throw new Error('The work item does not exist.');
+    const repository = workItem.repositoryId ? this.getRepository(workItem.repositoryId) : null;
+    const head = this.latestVerdict(workItemId);
+    const current: VerdictExpectation = {
+      fingerprint: repository?.snapshot.fingerprint ?? null,
+      verdictId: head?.id ?? null,
+      claimHash: workItem.claimHash,
+    };
+    if (current.fingerprint !== expected.fingerprint) {
+      throw new VerdictConflictError(
+        'repository-changed',
+        'The repository changed after this verdict was opened. Review its current state and decide again.',
+        current,
+      );
+    }
+    if (current.verdictId !== expected.verdictId) {
+      throw new VerdictConflictError(
+        'verdict-changed',
+        'Another verdict was recorded for this work item after this one was opened. Review it and decide again.',
+        current,
+      );
+    }
+    if (current.claimHash !== expected.claimHash) {
+      throw new VerdictConflictError(
+        'claim-changed',
+        'The claim changed after this verdict was opened. Review the new claim and decide again.',
+        current,
+      );
+    }
+    return { workItem, head };
+  }
+
+  /**
+   * Records a verdict as a compare-and-swap: it is appended only if the repository fingerprint,
+   * the latest verdict, and the claim still match what the reviewer saw.
+   */
   recordVerdict(
-    input: Omit<VerdictRecord, 'id' | 'decidedAt' | 'sequence' | 'previousVerdictId'>,
+    input: Omit<VerdictRecord, 'id' | 'decidedAt' | 'sequence' | 'previousVerdictId' | 'claimHash'>,
+    expected: VerdictExpectation,
   ): VerdictRecord {
-    // IMMEDIATE takes the write lock before reading the head, so no other writer can interleave.
+    // IMMEDIATE takes the write lock before reading, so no other writer can interleave.
     return this.connection
       .transaction(() => {
-        const head = this.latestVerdict(input.workItemId);
+        const { workItem, head } = this.assertVerdictExpectation(input.workItemId, expected);
         const record: VerdictRecord = {
           ...input,
           id: randomUUID(),
           decidedAt: new Date().toISOString(),
           sequence: (head?.sequence ?? 0) + 1,
           previousVerdictId: head?.id ?? null,
+          claimHash: workItem.claimHash,
         };
         this.appendVerdict(record);
         return record;
@@ -851,10 +945,12 @@ export class VeriDoneDatabase {
       .prepare(
         `INSERT INTO verdicts (
           id, work_item_id, decision, note, decided_at, snapshot_fingerprint,
-          contract_version, evidence_ids_json, override_reason, sequence, previous_verdict_id
+          contract_version, evidence_ids_json, override_reason, sequence, previous_verdict_id,
+          claim_hash
         ) VALUES (
           @id, @workItemId, @decision, @note, @decidedAt, @snapshotFingerprint,
-          @contractVersion, @evidenceIdsJson, @overrideReason, @sequence, @previousVerdictId
+          @contractVersion, @evidenceIdsJson, @overrideReason, @sequence, @previousVerdictId,
+          @claimHash
         )`,
       )
       .run({ ...record, evidenceIdsJson: JSON.stringify(record.evidenceIds) });
@@ -902,6 +998,7 @@ export class VeriDoneDatabase {
       overrideReason: row.override_reason === null ? null : String(row.override_reason),
       sequence: Number(row.sequence),
       previousVerdictId: row.previous_verdict_id === null ? null : String(row.previous_verdict_id),
+      claimHash: row.claim_hash === null ? null : String(row.claim_hash),
     };
   }
 }

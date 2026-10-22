@@ -67,6 +67,7 @@ export interface WorkItemDto {
   updatedAt: string;
   snapshotFingerprint: string | null;
   humanVerdict: 'accepted' | 'changes-requested' | 'rejected' | null;
+  claimHash: string;
 }
 
 export interface ContractDto {
@@ -126,6 +127,14 @@ export interface VerdictDto {
   overrideReason: string | null;
   sequence: number;
   previousVerdictId: string | null;
+  claimHash: string | null;
+}
+
+/** The state a reviewer saw when a verdict opened; the server records the verdict only while it holds. */
+export interface VerdictExpectation {
+  fingerprint: string | null;
+  verdictId: string | null;
+  claimHash: string;
 }
 
 export interface BootstrapDto {
@@ -258,12 +267,14 @@ export async function createVerdict(
   decision: 'accepted' | 'changes-requested' | 'rejected',
   note: string,
   csrfToken: string,
+  expected: VerdictExpectation,
   overrideReason: string | null = null,
 ): Promise<void> {
   await mutate(`/api/v1/work-items/${workItemId}/verdicts`, csrfToken, {
     decision,
     note,
     overrideReason,
+    expected,
   });
 }
 

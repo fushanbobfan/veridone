@@ -18,7 +18,7 @@ import { CheckCapacityError, CheckExecutionManager } from './check-execution.js'
 import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
 import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
 import type { ServerConfig } from './config.js';
-import type { RepositoryRecord, VeriDoneDatabase } from './database.js';
+import { VerdictConflictError, type RepositoryRecord, type VeriDoneDatabase } from './database.js';
 import { buildAcceptancePacket } from './packet.js';
 import { exportWorkspace, importWorkspace, WorkspaceConflictError } from './workspace.js';
 
@@ -38,6 +38,17 @@ const verdictRequestSchema = z.object({
   decision: z.enum(['accepted', 'changes-requested', 'rejected']),
   note: z.string().max(10_000).default(''),
   overrideReason: z.string().min(1).max(2_000).nullable().default(null),
+  // What the reviewer saw when the verdict opened; the verdict is recorded only while it holds.
+  expected: z
+    .object({
+      fingerprint: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/u)
+        .nullable(),
+      verdictId: z.string().uuid().nullable(),
+      claimHash: z.string().regex(/^[0-9a-f]{64}$/u),
+    })
+    .strict(),
 });
 
 export interface AppOptions {
@@ -67,23 +78,28 @@ export function createApp(options: AppOptions): Hono {
     }),
   );
 
-  const refreshKnownRepositories = async () => {
+  /** Captures a known repository again with its current check set and stores the snapshot. */
+  const recaptureRepository = async (repository: RepositoryRecord) => {
     const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
+    const checks = options.database
+      .listChecks()
+      .filter((check) => check.repositoryId === repository.id);
+    const captured = await captureGitSnapshot(repository.path, {
+      approvedRoots,
+      contractVersion: repository.snapshot.contractVersion,
+      checkDefinitionVersion:
+        checks.length > 0
+          ? await aggregateCheckVersion(checks)
+          : repository.snapshot.checkDefinitionVersion,
+    });
+    return options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
+  };
+
+  const refreshKnownRepositories = async () => {
     const results = await Promise.all(
       options.database.listRepositories().map(async (repository) => {
         try {
-          const checks = options.database
-            .listChecks()
-            .filter((check) => check.repositoryId === repository.id);
-          const captured = await captureGitSnapshot(repository.path, {
-            approvedRoots,
-            contractVersion: repository.snapshot.contractVersion,
-            checkDefinitionVersion:
-              checks.length > 0
-                ? await aggregateCheckVersion(checks)
-                : repository.snapshot.checkDefinitionVersion,
-          });
-          options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
+          await recaptureRepository(repository);
           return null;
         } catch (error) {
           return {
@@ -94,20 +110,6 @@ export function createApp(options: AppOptions): Hono {
       }),
     );
     return results.filter((result) => result !== null);
-  };
-
-  /** Records the repository's new aggregate check version after its check set changed. */
-  const refreshCheckDefinitionVersion = async (repository: RepositoryRecord) => {
-    const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
-    const checks = options.database
-      .listChecks()
-      .filter((candidate) => candidate.repositoryId === repository.id);
-    const captured = await captureGitSnapshot(repository.path, {
-      approvedRoots,
-      contractVersion: repository.snapshot.contractVersion,
-      checkDefinitionVersion: await aggregateCheckVersion(checks),
-    });
-    options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
   };
 
   app.use('*', async (context, next) => {
@@ -264,7 +266,7 @@ export function createApp(options: AppOptions): Hono {
       ...definition,
       definitionHash: await checkDefinitionHash(definition),
     });
-    await refreshCheckDefinitionVersion(repository);
+    await recaptureRepository(repository);
     return context.json({ check }, 201);
   });
 
@@ -283,7 +285,7 @@ export function createApp(options: AppOptions): Hono {
         executableSha256: tool.sha256,
       }),
     );
-    await refreshCheckDefinitionVersion(repository);
+    await recaptureRepository(repository);
     return context.json({ check });
   });
 
@@ -314,23 +316,30 @@ export function createApp(options: AppOptions): Hono {
     const request = verdictRequestSchema.parse(await context.req.json());
     const workItem = options.database.getWorkItem(workItemId);
     if (!workItem?.repositoryId) return context.json({ error: 'work_item_not_bound' }, 409);
-    const repository = options.database.getRepository(workItem.repositoryId);
-    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    const known = options.database.getRepository(workItem.repositoryId);
+    if (!known) return context.json({ error: 'repository_not_found' }, 404);
+    // The decision binds to the repository as it is now, not to the last stored snapshot.
+    const repository = await recaptureRepository(known);
+    // A changed state is the reason to report, ahead of any gate it may have reopened.
+    options.database.assertVerdictExpectation(workItemId, request.expected);
     const readiness = acceptanceReadiness(options.database, workItemId);
     if (request.decision === 'accepted' && !readiness.ready && !request.overrideReason) {
       return context.json({ error: 'required_gates_open', readiness }, 409);
     }
-    const verdict = options.database.recordVerdict({
-      workItemId,
-      decision: request.decision,
-      note: request.note,
-      snapshotFingerprint: repository.snapshot.fingerprint,
-      contractVersion: repository.snapshot.contractVersion,
-      evidenceIds: readiness.evidenceIds,
-      // An override explains an acceptance with open gates; with every gate passing it is a plain acceptance.
-      overrideReason:
-        request.decision === 'accepted' && !readiness.ready ? request.overrideReason : null,
-    });
+    const verdict = options.database.recordVerdict(
+      {
+        workItemId,
+        decision: request.decision,
+        note: request.note,
+        snapshotFingerprint: repository.snapshot.fingerprint,
+        contractVersion: repository.snapshot.contractVersion,
+        evidenceIds: readiness.evidenceIds,
+        // An override explains an acceptance with open gates; with every gate passing it is a plain acceptance.
+        overrideReason:
+          request.decision === 'accepted' && !readiness.ready ? request.overrideReason : null,
+      },
+      request.expected,
+    );
     return context.json({ verdict, readiness }, 201);
   });
 
@@ -361,6 +370,17 @@ export function createApp(options: AppOptions): Hono {
     }
     if (error instanceof WorkspaceConflictError) {
       return context.json({ error: 'workspace_conflict', message: error.message }, 409);
+    }
+    if (error instanceof VerdictConflictError) {
+      return context.json(
+        {
+          error: 'verdict_conflict',
+          reason: error.reason,
+          message: error.message,
+          current: error.current,
+        },
+        409,
+      );
     }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return context.json({ error: 'request_failed', message }, 400);

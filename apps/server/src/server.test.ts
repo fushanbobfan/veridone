@@ -251,12 +251,29 @@ describe('local API security and persistence', () => {
     });
     expect(checkResponse.status).toBe(201);
     const check = (await checkResponse.json()) as { check: { id: string } };
+    /** The state the review view shows, which every verdict request expects. */
+    const expected = async () => {
+      const current = (await (
+        await app.request('/api/v1/bootstrap', { headers: { Origin: 'http://127.0.0.1:4173' } })
+      ).json()) as {
+        repositories: Array<{ snapshot: { fingerprint: string } }>;
+        workItems: Array<{ id: string; claimHash: string }>;
+        verdicts: Array<{ id: string; sequence: number }>;
+      };
+      const latest = [...current.verdicts].sort((left, right) => right.sequence - left.sequence)[0];
+      return {
+        fingerprint: current.repositories[0]?.snapshot.fingerprint ?? null,
+        verdictId: latest?.id ?? null,
+        claimHash: current.workItems.find((item) => item.id === workItemId)?.claimHash ?? '',
+      };
+    };
     const lockedAcceptance = await app.request(`/api/v1/work-items/${workItemId}/verdicts`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         decision: 'accepted',
         note: 'Attempted without passing evidence.',
+        expected: await expected(),
       }),
     });
     expect(lockedAcceptance.status).toBe(409);
@@ -267,6 +284,7 @@ describe('local API security and persistence', () => {
         decision: 'accepted',
         note: 'Fixture override decision.',
         overrideReason: 'Explicitly testing the audited override path.',
+        expected: await expected(),
       }),
     });
     expect(overrideAcceptance.status).toBe(201);
@@ -274,7 +292,11 @@ describe('local API security and persistence', () => {
       const response = await app.request(`/api/v1/work-items/${workItemId}/verdicts`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ decision, note: `Fixture ${decision} decision.` }),
+        body: JSON.stringify({
+          decision,
+          note: `Fixture ${decision} decision.`,
+          expected: await expected(),
+        }),
       });
       expect(response.status).toBe(201);
     }
@@ -308,6 +330,7 @@ describe('local API security and persistence', () => {
       body: JSON.stringify({
         decision: 'accepted',
         note: `Reviewed at ${directory}; password=hunter2.`,
+        expected: await expected(),
       }),
     });
     expect(verdictResponse.status).toBe(201);
@@ -393,5 +416,5 @@ describe('local API security and persistence', () => {
       body: JSON.stringify(tampered),
     });
     expect(tamperedResponse.status).toBe(400);
-  }, 20_000);
+  }, 60_000);
 });

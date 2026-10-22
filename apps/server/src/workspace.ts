@@ -116,6 +116,7 @@ const verdictSchema = z.object({
   // Version 1 backups predate the verdict chain and carry neither field.
   sequence: z.number().int().min(1).optional(),
   previousVerdictId: z.string().uuid().nullable().optional(),
+  claimHash: sha256.nullable().default(null),
 });
 
 const contractSchema = z.object({

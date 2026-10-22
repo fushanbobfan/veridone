@@ -8,6 +8,7 @@ import {
   runCheck,
   type BootstrapDto,
   type VerdictDto,
+  type VerdictExpectation,
 } from './api.js';
 import { AddSourceDialog } from './components/AddSourceDialog.js';
 import { CheckDialog } from './components/CheckDialog.js';
@@ -78,6 +79,30 @@ function verdictSubject(bootstrap: BootstrapDto, workItemId: string) {
   };
 }
 
+/** The state a verdict is decided on: repository fingerprint, latest verdict, and claim. */
+function verdictExpectation(bootstrap: BootstrapDto, workItemId: string): VerdictExpectation {
+  const workItem = bootstrap.workItems.find((item) => item.id === workItemId);
+  const repository = bootstrap.repositories.find(
+    (candidate) => candidate.id === workItem?.repositoryId,
+  );
+  return {
+    fingerprint: repository?.snapshot.fingerprint ?? null,
+    verdictId: latestVerdict(bootstrap.verdicts, workItemId)?.id ?? null,
+    claimHash: workItem?.claimHash ?? '',
+  };
+}
+
+function describeChange(opened: VerdictExpectation, now: VerdictExpectation): string | null {
+  if (now.fingerprint !== opened.fingerprint) {
+    return 'The repository changed after this dialog opened.';
+  }
+  if (now.verdictId !== opened.verdictId) {
+    return 'Another verdict was recorded after this dialog opened.';
+  }
+  if (now.claimHash !== opened.claimHash) return 'The claim changed after this dialog opened.';
+  return null;
+}
+
 function verdictLabel(verdict: VerdictDto, currentFingerprint: string | undefined): string {
   const override = verdict.overrideReason ? ` · override: ${verdict.overrideReason}` : '';
   const superseded =
@@ -114,6 +139,8 @@ export function App() {
     decision: 'accepted' | 'changes-requested' | 'rejected';
     overrideRequired: boolean;
     workItemId: string;
+    subject: ReturnType<typeof verdictSubject>;
+    expected: VerdictExpectation;
   } | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -242,13 +269,20 @@ export function App() {
     : [];
   const isLocal = bootstrap?.mode === 'local' && Boolean(localWorkItem);
 
-  // The dialog keeps the work item it was opened for, whatever the inbox selects meanwhile.
+  // The dialog keeps the work item it was opened for, whatever the inbox selects meanwhile, and
+  // the state it showed then, which the server compares before recording the verdict.
   const openVerdict = (
     decision: 'accepted' | 'changes-requested' | 'rejected',
     overrideRequired = false,
   ) => {
-    if (localWorkItem)
-      setVerdictIntent({ decision, overrideRequired, workItemId: localWorkItem.id });
+    if (!bootstrap || !localWorkItem) return;
+    setVerdictIntent({
+      decision,
+      overrideRequired,
+      workItemId: localWorkItem.id,
+      subject: verdictSubject(bootstrap, localWorkItem.id),
+      expected: verdictExpectation(bootstrap, localWorkItem.id),
+    });
   };
 
   const performEvidenceAction = async () => {
@@ -471,7 +505,12 @@ export function App() {
         <VerdictDialog
           open
           workItemId={verdictIntent.workItemId}
-          subject={verdictSubject(bootstrap, verdictIntent.workItemId)}
+          subject={verdictIntent.subject}
+          expected={verdictIntent.expected}
+          changedSinceOpened={describeChange(
+            verdictIntent.expected,
+            verdictExpectation(bootstrap, verdictIntent.workItemId),
+          )}
           decision={verdictIntent.decision}
           overrideRequired={verdictIntent.overrideRequired}
           csrfToken={bootstrap.csrfToken}

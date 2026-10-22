@@ -8,13 +8,15 @@ import {
   X,
 } from 'lucide-react';
 
-import { createVerdict } from '../api.js';
+import { createVerdict, type VerdictExpectation } from '../api.js';
 import { useDialogFocus } from './useDialogFocus.js';
 
 export function VerdictDialog({
   open,
   workItemId,
   subject,
+  expected,
+  changedSinceOpened = null,
   decision,
   overrideRequired = false,
   csrfToken,
@@ -24,6 +26,10 @@ export function VerdictDialog({
   open: boolean;
   workItemId: string;
   subject: { title: string; repository: string; head: string; fingerprint: string };
+  /** The state shown when the dialog opened; the server records the verdict only while it holds. */
+  expected: VerdictExpectation;
+  /** Set when the workspace has moved on since the dialog opened. */
+  changedSinceOpened?: string | null;
   decision: 'accepted' | 'changes-requested' | 'rejected';
   overrideRequired?: boolean;
   csrfToken: string;
@@ -54,6 +60,7 @@ export function VerdictDialog({
         decision,
         note,
         csrfToken,
+        expected,
         overrideRequired ? overrideReason : null,
       );
       await onRecorded();
@@ -158,13 +165,26 @@ export function VerdictDialog({
             </label>
           )}
           <div className="dialog-message" aria-live="polite">
-            {error && <span className="error-message">{error}</span>}
+            {error ? (
+              <span className="error-message">{error}</span>
+            ) : (
+              changedSinceOpened && (
+                <span className="error-message">
+                  {changedSinceOpened} Close this dialog and review the current state before
+                  deciding.
+                </span>
+              )
+            )}
           </div>
           <footer>
             <button className="secondary-action" type="button" onClick={onClose}>
               Cancel
             </button>
-            <button className="primary-action" type="submit" disabled={saving}>
+            <button
+              className="primary-action"
+              type="submit"
+              disabled={saving || Boolean(changedSinceOpened)}
+            >
               {accepting ? (
                 <Check aria-hidden="true" size={15} />
               ) : (

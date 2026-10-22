@@ -45,16 +45,9 @@ async function decidedWorkspace() {
   const fixture = await boundWorkspace();
   cleanups.push(fixture.cleanup);
   const checkId = await fixture.approveCheck('process.exit(0)');
-  const decide = async (decision: string, note: string) => {
-    const response = await fixture.post(`/api/v1/work-items/${fixture.workItemId}/verdicts`, {
-      decision,
-      note,
-    });
-    expect(response.status).toBe(201);
-  };
-  await decide('changes-requested', 'Add a regression test.');
+  expect((await fixture.decide('changes-requested', 'Add a regression test.')).status).toBe(201);
   await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
-  await decide('accepted', 'Reviewed with fresh evidence.');
+  expect((await fixture.decide('accepted', 'Reviewed with fresh evidence.')).status).toBe(201);
   const backup = (await exportWorkspace(fixture.database)) as unknown as Backup;
   return { ...fixture, checkId, backup };
 }
@@ -184,16 +177,26 @@ describe('workspace restore', () => {
     const other = emptyDatabase();
     await importWorkspace(other, backup);
     const head = database.latestVerdict(workItemId);
-    if (!head) throw new Error('The fixture recorded no verdict.');
+    const workItem = database.getWorkItem(workItemId);
+    if (!head || !workItem) throw new Error('The fixture recorded no verdict.');
     const {
       id: _id,
       decidedAt: _decidedAt,
       sequence: _s,
       previousVerdictId: _p,
+      claimHash: _c,
       ...verdict
     } = head;
-    database.recordVerdict({ ...verdict, decision: 'rejected', note: 'Decided here.' });
-    other.recordVerdict({ ...verdict, decision: 'changes-requested', note: 'Decided elsewhere.' });
+    const expected = {
+      fingerprint: head.snapshotFingerprint,
+      verdictId: head.id,
+      claimHash: workItem.claimHash,
+    };
+    database.recordVerdict({ ...verdict, decision: 'rejected', note: 'Decided here.' }, expected);
+    other.recordVerdict(
+      { ...verdict, decision: 'changes-requested', note: 'Decided elsewhere.' },
+      expected,
+    );
     const before = history(database, workItemId);
 
     await expect(importWorkspace(database, await exportWorkspace(other))).rejects.toThrow(

@@ -55,6 +55,7 @@ function workspace(options: {
         updatedAt: '2026-10-22T10:00:00.000Z',
         snapshotFingerprint: currentFingerprint,
         humanVerdict: options.verdict?.decision ?? null,
+        claimHash: '9'.repeat(64),
       },
     ],
     contracts: [],
@@ -111,6 +112,7 @@ function workspace(options: {
             overrideReason: null,
             sequence: 1,
             previousVerdictId: null,
+            claimHash: '9'.repeat(64),
             ...options.verdict,
           },
         ]
