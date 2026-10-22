@@ -12,6 +12,7 @@
   --line-strong: #444a3d;
   --accent: #b9ff66;
   --accent-ink: #142005;
+  --accent-text: #b9ff66;
   --danger: #ff8d7b;
   --warning: #f5c96a;
   --info: #8ebaf2;
@@ -30,6 +31,8 @@
   --line-strong: #bcbdb2;
   --accent: #90e52e;
   --accent-ink: #162204;
+  /* Text on light surfaces; the lime accent stays for fills, borders and icons. */
+  --accent-text: #3f6f0d;
   --danger: #b43a2a;
   --warning: #916813;
   --info: #326aa8;
@@ -512,7 +515,7 @@ a:focus-visible {
 .status-passed,
 .status-ready,
 .status-decided {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .status-stale,
@@ -566,7 +569,7 @@ a:focus-visible {
 }
 
 .detail-kicker span:first-child {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .title-line {
@@ -692,7 +695,7 @@ a:focus-visible {
 }
 
 .added {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .deleted {
@@ -773,7 +776,7 @@ a:focus-visible {
 
 .criterion-passed {
   border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .criterion-stale,
