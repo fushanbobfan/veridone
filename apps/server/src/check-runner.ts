@@ -1,10 +1,12 @@
 import path from 'node:path';
 
 import {
+  absolutePathEntries,
   captureGitSnapshot,
   createCleanCheckout,
   resolveWithinApprovedRoots,
   runBoundedProcess,
+  sha256File,
 } from '@veridone/adapters';
 import {
   assessDeclaredScope,
@@ -26,7 +28,33 @@ function minimalEnvironment(): Record<string, string> {
     const value = process.env[name];
     if (value) env[name] = value;
   }
+  // Programs the tool starts by name are found on absolute PATH entries, never in the checkout.
+  env.PATH = absolutePathEntries(env.PATH).join(path.delimiter);
+  if (process.platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
   return env;
+}
+
+/** Hashes the pinned tool file and refuses to continue unless it is the file the operator approved. */
+async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha256: string }> {
+  if (!check.resolvedExecutable || !check.executableSha256) {
+    throw new Error(
+      `The check "${check.label}" was approved before VeriDone pinned tools. Pin its tool again under Checks before running it.`,
+    );
+  }
+  let sha256: string;
+  try {
+    sha256 = await sha256File(check.resolvedExecutable);
+  } catch {
+    throw new Error(
+      `The pinned tool ${check.resolvedExecutable} is missing. Pin the check's tool again under Checks.`,
+    );
+  }
+  if (sha256 !== check.executableSha256) {
+    throw new Error(
+      `The pinned tool ${check.resolvedExecutable} changed since it was approved. Review the new version, then pin the check's tool again under Checks.`,
+    );
+  }
+  return { path: check.resolvedExecutable, sha256 };
 }
 
 function redact(value: string): string {
@@ -82,6 +110,7 @@ export async function runApprovedCheck(
   if (/^0+$/u.test(before.snapshot.head)) {
     throw new Error('The repository has no commit to check out yet.');
   }
+  const tool = await verifyPinnedTool(check);
 
   // The check runs in a checkout VeriDone creates from the bound commit, so nothing in the
   // operator's work tree, index, ignored files, or Git configuration can influence the result.
@@ -105,7 +134,7 @@ export async function runApprovedCheck(
       check.versionArgs.length === 0
         ? null
         : await runBoundedProcess({
-            executable: check.executable,
+            executable: tool.path,
             args: check.versionArgs,
             cwd: workingDirectory,
             timeoutMs: 5_000,
@@ -120,7 +149,7 @@ export async function runApprovedCheck(
           ?.slice(0, 4_096) ?? null)
       : null;
     result = await runBoundedProcess({
-      executable: check.executable,
+      executable: tool.path,
       args: check.args,
       cwd: workingDirectory,
       timeoutMs: check.timeoutMs,
@@ -160,6 +189,7 @@ export async function runApprovedCheck(
       result: checkResult,
       exitCode: result.exitCode,
       toolVersion,
+      toolSha256: tool.sha256,
       stdout,
       stderr,
       snapshotFingerprint: before.snapshot.fingerprint,
@@ -187,6 +217,8 @@ export async function runApprovedCheck(
     artifactHashes: [artifactHash],
     invalidReason,
     isolation: 'clean-checkout',
+    toolPath: tool.path,
+    toolSha256: tool.sha256,
   });
 }
 

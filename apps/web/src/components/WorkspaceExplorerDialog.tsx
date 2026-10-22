@@ -1,5 +1,5 @@
-import { Archive, FileCheck2, FolderGit2, X } from 'lucide-react';
-import { useId, useRef } from 'react';
+import { Archive, FileCheck2, FolderGit2, ListChecks, X } from 'lucide-react';
+import { useId, useRef, useState } from 'react';
 
 import type { BootstrapDto } from '../api.js';
 import type { WorkspaceSection } from './Navigation.js';
@@ -11,6 +11,7 @@ const sections: Array<{
   icon: typeof FolderGit2;
 }> = [
   { id: 'repositories', label: 'Repositories', icon: FolderGit2 },
+  { id: 'checks', label: 'Checks', icon: ListChecks },
   { id: 'contracts', label: 'Contracts', icon: FileCheck2 },
   { id: 'exports', label: 'Exports', icon: Archive },
 ];
@@ -21,18 +22,35 @@ export function WorkspaceExplorerDialog({
   bootstrap,
   onSection,
   onClose,
+  onPinTool,
 }: {
   open: boolean;
   section: WorkspaceSection;
   bootstrap: BootstrapDto;
   onSection: (section: WorkspaceSection) => void;
   onClose: () => void;
+  onPinTool?: (checkId: string) => Promise<void>;
 }) {
   const titleId = useId();
   const dialog = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const [pinning, setPinning] = useState<string | null>(null);
+  const [pinError, setPinError] = useState<string | null>(null);
   useDialogFocus(open, onClose, dialog, closeButton);
   if (!open) return null;
+
+  const pinTool = async (checkId: string) => {
+    if (!onPinTool) return;
+    setPinning(checkId);
+    setPinError(null);
+    try {
+      await onPinTool(checkId);
+    } catch (caught) {
+      setPinError(caught instanceof Error ? caught.message : 'The tool could not be pinned.');
+    } finally {
+      setPinning(null);
+    }
+  };
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -100,6 +118,63 @@ export function WorkspaceExplorerDialog({
                   </article>
                 ))
               )}
+            </div>
+          )}
+
+          {section === 'checks' && (
+            <div className="explorer-list">
+              {bootstrap.checks.length === 0 ? (
+                <p>No checks are approved.</p>
+              ) : (
+                bootstrap.checks.map((check) => (
+                  <article key={check.id}>
+                    <div>
+                      <strong>{check.label}</strong>
+                      <span>{check.kind}</span>
+                    </div>
+                    <dl>
+                      <div className="wide">
+                        <dt>Pinned tool</dt>
+                        <dd className="mono tool-path">
+                          {check.resolvedExecutable ?? `${check.executable} · not pinned`}
+                        </dd>
+                      </div>
+                      <div className="wide">
+                        <dt>Arguments</dt>
+                        <dd className="mono tool-path">{JSON.stringify(check.args)}</dd>
+                      </div>
+                      <div>
+                        <dt>SHA-256</dt>
+                        <dd className="mono">
+                          {check.executableSha256 ? `${check.executableSha256.slice(0, 12)}…` : '—'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Directory</dt>
+                        <dd className="mono">{check.cwdRelative}</dd>
+                      </div>
+                      <div>
+                        <dt>Approved</dt>
+                        <dd>{check.approvedAt.slice(0, 10)}</dd>
+                      </div>
+                    </dl>
+                    {onPinTool && (
+                      <button
+                        className="secondary-action pin-action"
+                        type="button"
+                        onClick={() => void pinTool(check.id)}
+                        disabled={pinning !== null}
+                        aria-label={`Pin the tool for ${check.label} again`}
+                      >
+                        {pinning === check.id ? 'Pinning…' : 'Pin tool again'}
+                      </button>
+                    )}
+                  </article>
+                ))
+              )}
+              <div className="dialog-message" aria-live="polite">
+                {pinError && <span className="error-message">{pinError}</span>}
+              </div>
             </div>
           )}
 

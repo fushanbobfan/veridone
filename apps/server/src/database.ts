@@ -146,6 +146,14 @@ const migrationFive = `
   ALTER TABLE evidence ADD COLUMN isolation TEXT CHECK (isolation IN ('clean-checkout'));
 `;
 
+// Checks approved before this migration have no pinned tool and must be pinned before they run.
+const migrationSix = `
+  ALTER TABLE checks ADD COLUMN resolved_executable TEXT;
+  ALTER TABLE checks ADD COLUMN executable_sha256 TEXT;
+  ALTER TABLE evidence ADD COLUMN tool_path TEXT;
+  ALTER TABLE evidence ADD COLUMN tool_sha256 TEXT;
+`;
+
 export interface ApprovedRootRecord {
   id: string;
   path: string;
@@ -203,6 +211,9 @@ export interface CheckRecord {
   cwdRelative: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  /** Canonical path of the tool file the operator approved; null until the tool is pinned. */
+  resolvedExecutable: string | null;
+  executableSha256: string | null;
   definitionHash: string;
   approvedAt: string;
 }
@@ -230,6 +241,9 @@ export interface EvidenceRecord {
   invalidReason: string | null;
   /** `clean-checkout` when the check ran in a verifier-owned checkout of the bound commit. */
   isolation: 'clean-checkout' | null;
+  /** The pinned tool file that ran, and its SHA-256 as verified immediately before the run. */
+  toolPath: string | null;
+  toolSha256: string | null;
 }
 
 export interface VerdictRecord {
@@ -266,6 +280,7 @@ export class VeriDoneDatabase {
       { version: 3, sql: migrationThree },
       { version: 4, sql: migrationFour },
       { version: 5, sql: migrationFive },
+      { version: 6, sql: migrationSix },
     ];
 
     for (const migration of migrations) {
@@ -609,11 +624,11 @@ export class VeriDoneDatabase {
         `INSERT INTO checks (
           id, repository_id, label, kind, executable, args_json, cwd_relative,
           timeout_ms, max_output_bytes, definition_hash, approved_at,
-          version_args_json, scope_paths_json
+          version_args_json, scope_paths_json, resolved_executable, executable_sha256
         ) VALUES (
           @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
           @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
-          @versionArgsJson, @scopePathsJson
+          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256
         )`,
       )
       .run({
@@ -623,6 +638,25 @@ export class VeriDoneDatabase {
         scopePathsJson: JSON.stringify(record.scopePaths),
       });
     return record;
+  }
+
+  /** Records a newly approved tool file for a check; its definition hash changes with it. */
+  updateCheckPin(
+    checkId: string,
+    tool: { path: string; sha256: string },
+    definitionHash: string,
+  ): CheckRecord {
+    const result = this.connection
+      .prepare(
+        `UPDATE checks
+         SET resolved_executable = ?, executable_sha256 = ?, definition_hash = ?, approved_at = ?
+         WHERE id = ?`,
+      )
+      .run(tool.path, tool.sha256, definitionHash, new Date().toISOString(), checkId);
+    if (result.changes !== 1) throw new Error('The approved check does not exist.');
+    const check = this.getCheck(checkId);
+    if (!check) throw new Error('The pinned check could not be read.');
+    return check;
   }
 
   listChecks(): CheckRecord[] {
@@ -642,6 +676,8 @@ export class VeriDoneDatabase {
       cwdRelative: String(row.cwd_relative),
       timeoutMs: Number(row.timeout_ms),
       maxOutputBytes: Number(row.max_output_bytes),
+      resolvedExecutable: row.resolved_executable === null ? null : String(row.resolved_executable),
+      executableSha256: row.executable_sha256 === null ? null : String(row.executable_sha256),
       definitionHash: String(row.definition_hash),
       approvedAt: String(row.approved_at),
     }));
@@ -659,12 +695,12 @@ export class VeriDoneDatabase {
           id, work_item_id, check_id, kind, label, result, repository_id,
           snapshot_fingerprint, head, contract_version, check_definition_version,
           started_at, completed_at, duration_ms, tool_version, exit_code, stdout, stderr,
-          artifact_hashes_json, invalid_reason, isolation
+          artifact_hashes_json, invalid_reason, isolation, tool_path, tool_sha256
         ) VALUES (
           @id, @workItemId, @checkId, @kind, @label, @result, @repositoryId,
           @snapshotFingerprint, @head, @contractVersion, @checkDefinitionVersion,
           @startedAt, @completedAt, @durationMs, @toolVersion, @exitCode, @stdout, @stderr,
-          @artifactHashesJson, @invalidReason, @isolation
+          @artifactHashesJson, @invalidReason, @isolation, @toolPath, @toolSha256
         )`,
       )
       .run({ ...record, artifactHashesJson: JSON.stringify(record.artifactHashes) });
@@ -701,6 +737,8 @@ export class VeriDoneDatabase {
       artifactHashes: JSON.parse(String(row.artifact_hashes_json)) as string[],
       invalidReason: row.invalid_reason === null ? null : String(row.invalid_reason),
       isolation: row.isolation === 'clean-checkout' ? 'clean-checkout' : null,
+      toolPath: row.tool_path === null ? null : String(row.tool_path),
+      toolSha256: row.tool_sha256 === null ? null : String(row.tool_sha256),
     }));
   }
 

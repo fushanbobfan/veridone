@@ -4,6 +4,7 @@ import {
   cancelCheck,
   fetchBootstrap,
   linkWorkItem,
+  pinCheckTool,
   runCheck,
   type BootstrapDto,
   type VerdictDto,
@@ -493,6 +494,14 @@ export function App() {
           bootstrap={bootstrap}
           onSection={setWorkspaceSection}
           onClose={() => setWorkspaceSection(null)}
+          {...(bootstrap.mode === 'local'
+            ? {
+                onPinTool: async (checkId: string) => {
+                  await pinCheckTool(checkId, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+              }
+            : {})}
         />
       )}
       {actionError && (

@@ -10,14 +10,15 @@ import { z } from 'zod';
 import {
   captureGitSnapshot,
   discoverGitRepositories,
+  pinExecutable,
   readReceiptCollection,
 } from '@veridone/adapters';
-import { canonicalJson, evidenceKindSchema, sha256Hex } from '@veridone/core';
 
 import { CheckCapacityError, CheckExecutionManager } from './check-execution.js';
+import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
 import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
 import type { ServerConfig } from './config.js';
-import type { VeriDoneDatabase } from './database.js';
+import type { RepositoryRecord, VeriDoneDatabase } from './database.js';
 import { buildAcceptancePacket } from './packet.js';
 import { exportWorkspace, importWorkspace } from './workspace.js';
 
@@ -29,40 +30,6 @@ const rootIdSchema = z.object({ rootId: z.string().uuid() });
 const repositoryRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const receiptRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const linkRequestSchema = z.object({ repositoryId: z.string().min(1).max(128) });
-const relativeScopePathSchema = z
-  .string()
-  .min(1)
-  .max(1_024)
-  .transform((value) => value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/$/u, ''))
-  .refine(
-    (value) =>
-      !path.isAbsolute(value) &&
-      value !== '..' &&
-      !value.startsWith('../') &&
-      !value.includes('/../'),
-    'Declared scope paths must remain inside the repository.',
-  );
-const checkRequestSchema = z.object({
-  repositoryId: z.string().min(1).max(128),
-  label: z.string().min(1).max(200),
-  kind: evidenceKindSchema,
-  executable: z.string().min(1).max(4_096),
-  args: z.array(z.string().max(4_096)).max(100),
-  versionArgs: z.array(z.string().max(4_096)).max(10).default(['--version']),
-  scopePaths: z.array(relativeScopePathSchema).max(100).default([]),
-  cwdRelative: z
-    .string()
-    .min(1)
-    .max(1_024)
-    .refine((value) => !path.isAbsolute(value), 'The check working directory must be relative.'),
-  timeoutMs: z
-    .number()
-    .int()
-    .min(100)
-    .max(30 * 60_000)
-    .default(120_000),
-  maxOutputBytes: z.number().int().min(1_024).max(10_000_000).default(1_000_000),
-});
 const runCheckRequestSchema = z.object({
   workItemId: z.string().uuid(),
   runId: z.string().uuid().optional(),
@@ -127,6 +94,20 @@ export function createApp(options: AppOptions): Hono {
       }),
     );
     return results.filter((result) => result !== null);
+  };
+
+  /** Records the repository's new aggregate check version after its check set changed. */
+  const refreshCheckDefinitionVersion = async (repository: RepositoryRecord) => {
+    const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
+    const checks = options.database
+      .listChecks()
+      .filter((candidate) => candidate.repositoryId === repository.id);
+    const captured = await captureGitSnapshot(repository.path, {
+      approvedRoots,
+      contractVersion: repository.snapshot.contractVersion,
+      checkDefinitionVersion: await aggregateCheckVersion(checks),
+    });
+    options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
   };
 
   app.use('*', async (context, next) => {
@@ -274,21 +255,36 @@ export function createApp(options: AppOptions): Hono {
 
   app.post('/api/v1/checks', async (context) => {
     const request = checkRequestSchema.parse(await context.req.json());
-    const definitionHash = await sha256Hex(canonicalJson(request));
-    const check = options.database.addCheck({ ...request, definitionHash });
     const repository = options.database.getRepository(request.repositoryId);
-    if (!repository) throw new Error('The repository does not exist.');
-    const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
-    const checks = options.database
-      .listChecks()
-      .filter((candidate) => candidate.repositoryId === repository.id);
-    const captured = await captureGitSnapshot(repository.path, {
-      approvedRoots,
-      contractVersion: repository.snapshot.contractVersion,
-      checkDefinitionVersion: await aggregateCheckVersion(checks),
+    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    // Approval pins the tool file it resolves to; each run verifies that file before starting it.
+    const tool = await pinExecutable(request.executable, { repositoryPath: repository.path });
+    const definition = { ...request, resolvedExecutable: tool.path, executableSha256: tool.sha256 };
+    const check = options.database.addCheck({
+      ...definition,
+      definitionHash: await checkDefinitionHash(definition),
     });
-    options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
+    await refreshCheckDefinitionVersion(repository);
     return context.json({ check }, 201);
+  });
+
+  app.post('/api/v1/checks/:id/pin', async (context) => {
+    const existing = options.database.getCheck(context.req.param('id'));
+    if (!existing) return context.json({ error: 'check_not_found' }, 404);
+    const repository = options.database.getRepository(existing.repositoryId);
+    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    const tool = await pinExecutable(existing.executable, { repositoryPath: repository.path });
+    const check = options.database.updateCheckPin(
+      existing.id,
+      tool,
+      await checkDefinitionHash({
+        ...existing,
+        resolvedExecutable: tool.path,
+        executableSha256: tool.sha256,
+      }),
+    );
+    await refreshCheckDefinitionVersion(repository);
+    return context.json({ check });
   });
 
   app.post('/api/v1/checks/:id/run', async (context) => {

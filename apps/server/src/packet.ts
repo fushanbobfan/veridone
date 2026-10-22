@@ -33,7 +33,8 @@ function escapeMarkdown(value: string): string {
 }
 
 function publicEvidence(evidence: EvidenceRecord[]) {
-  return evidence.map(({ stdout: _stdout, stderr: _stderr, ...item }) => ({
+  // The tool's SHA-256 identifies it; its local path stays out of the packet.
+  return evidence.map(({ stdout: _stdout, stderr: _stderr, toolPath: _toolPath, ...item }) => ({
     ...item,
     label: sanitizeForPacket(item.label),
     toolVersion: item.toolVersion ? sanitizeForPacket(item.toolVersion) : null,

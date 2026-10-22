@@ -70,6 +70,8 @@ function workspace(options: {
         cwdRelative: '.',
         timeoutMs: 10_000,
         maxOutputBytes: 10_000,
+        resolvedExecutable: '/usr/bin/node',
+        executableSha256: 'f'.repeat(64),
         definitionHash: 'e'.repeat(64),
         approvedAt: '2026-10-22T10:00:00.000Z',
       },
@@ -92,6 +94,8 @@ function workspace(options: {
             exitCode: 0,
             invalidReason: null,
             isolation: options.legacyEvidence ? null : 'clean-checkout',
+            toolPath: '/usr/bin/node',
+            toolSha256: 'f'.repeat(64),
           },
         ]
       : [],

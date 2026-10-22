@@ -1588,6 +1588,18 @@ textarea.text-field.compact-code-field {
   font-size: 9px;
 }
 
+.explorer-list dl .wide {
+  grid-column: 1 / -1;
+}
+
+.explorer-list dd.tool-path {
+  overflow-wrap: anywhere;
+}
+
+.explorer-list .pin-action {
+  margin-top: 13px;
+}
+
 .explorer-list ul {
   display: grid;
   gap: 7px;

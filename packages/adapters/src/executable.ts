@@ -1,6 +1,21 @@
-import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { constants, createReadStream } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+import { isWithin } from './path-boundary.js';
+
+export class ExecutableResolutionError extends Error {
+  override readonly name = 'ExecutableResolutionError';
+}
+
+export interface PinnedExecutable {
+  /** Canonical absolute path of the file the operator approved. */
+  path: string;
+  sha256: string;
+}
+
+const directlyStartable = ['.com', '.exe'];
 
 /** Reads an environment variable the way the platform does: case-insensitively on Windows. */
 export function environmentValue(environment: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -39,9 +54,9 @@ export async function findOnPath(
   const extensions =
     process.platform !== 'win32'
       ? ['']
-      : ['.com', '.exe'].includes(path.extname(command).toLowerCase())
+      : directlyStartable.includes(path.extname(command).toLowerCase())
         ? ['']
-        : ['.com', '.exe'];
+        : directlyStartable;
   for (const directory of absolutePathEntries(environmentValue(environment, 'PATH'))) {
     for (const extension of extensions) {
       const candidate = path.join(directory, `${command}${extension}`);
@@ -49,4 +64,53 @@ export async function findOnPath(
     }
   }
   return null;
+}
+
+export async function sha256File(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(file);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+/**
+ * Resolves the tool an approved check names to one canonical file outside the repository and
+ * hashes it. A bare command name is searched on the absolute PATH entries; any other name must
+ * be an absolute path.
+ */
+export async function pinExecutable(
+  executable: string,
+  options: { repositoryPath: string; environment?: NodeJS.ProcessEnv },
+): Promise<PinnedExecutable> {
+  let resolved: string | null;
+  if (path.isAbsolute(executable)) {
+    resolved = (await isExecutableFile(executable)) ? await realpath(executable) : null;
+    if (
+      resolved &&
+      process.platform === 'win32' &&
+      !directlyStartable.includes(path.extname(resolved).toLowerCase())
+    ) {
+      throw new ExecutableResolutionError(
+        'On Windows, approve an .exe or .com file; other files need a shell to start.',
+      );
+    }
+  } else if (/[\\/]/u.test(executable)) {
+    throw new ExecutableResolutionError(
+      'Name the tool by an absolute path or by a command name on PATH; relative paths are not pinned.',
+    );
+  } else {
+    resolved = await findOnPath(executable, options.environment);
+  }
+  if (!resolved) {
+    throw new ExecutableResolutionError(`No executable file was found for ${executable}.`);
+  }
+  if (isWithin(resolved, await realpath(options.repositoryPath))) {
+    throw new ExecutableResolutionError(
+      'The tool resolves inside the repository under review. Approve a tool installed outside it.',
+    );
+  }
+  return { path: resolved, sha256: await sha256File(resolved) };
 }

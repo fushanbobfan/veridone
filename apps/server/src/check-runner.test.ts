@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { sha256File } from '@veridone/adapters';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { checkDefinitionHash } from './check-policy.js';
 import { acceptanceReadiness } from './check-runner.js';
 import { boundWorkspace } from './test-fixtures.js';
 
@@ -25,6 +27,8 @@ interface RunResponse {
     stdout: string;
     isolation: string | null;
     invalidReason: string | null;
+    toolPath: string | null;
+    toolSha256: string | null;
   };
   readiness: { ready: boolean };
 }
@@ -90,6 +94,25 @@ describe('checks run in a clean checkout', () => {
     );
   }, 30_000);
 
+  it('gives the check absolute PATH entries only', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck(
+      'process.stdout.write(JSON.stringify({ path: process.env.PATH ?? "", noCurrentDirectory: process.env.NoDefaultCurrentDirectoryInExePath ?? null }))',
+    );
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${checkId}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    const observed = JSON.parse(run.body.evidence.stdout) as {
+      path: string;
+      noCurrentDirectory: string | null;
+    };
+    const entries = observed.path.split(path.delimiter).filter(Boolean);
+    expect(entries.every((entry) => path.isAbsolute(entry))).toBe(true);
+    expect(observed.noCurrentDirectory).toBe(process.platform === 'win32' ? '1' : null);
+  }, 30_000);
+
   it('does not count passing evidence that ran outside a clean checkout', async () => {
     const fixture = await workspace();
     const checkId = await fixture.approveCheck('process.exit(0)');
@@ -106,5 +129,123 @@ describe('checks run in a clean checkout', () => {
     });
 
     expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(false);
+  }, 30_000);
+});
+
+describe('check tools are pinned', () => {
+  it('pins the tool by canonical path and SHA-256 and records it with each result', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    const tool = await realpath(process.execPath);
+    const sha256 = await sha256File(tool);
+
+    expect(fixture.database.getCheck(checkId)).toMatchObject({
+      resolvedExecutable: tool,
+      executableSha256: sha256,
+    });
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${checkId}/run`, {
+      workItemId: fixture.workItemId,
+    });
+    expect(run.body.evidence).toMatchObject({
+      result: 'passed',
+      toolPath: tool,
+      toolSha256: sha256,
+    });
+  }, 30_000);
+
+  it('includes the pinned tool in the check definition', async () => {
+    const definition = {
+      repositoryId: 'repository',
+      label: 'Tests',
+      kind: 'test',
+      executable: 'node',
+      args: ['--test'],
+      versionArgs: ['--version'],
+      scopePaths: [],
+      cwdRelative: '.',
+      timeoutMs: 1_000,
+      maxOutputBytes: 1_024,
+      resolvedExecutable: '/usr/bin/node',
+      executableSha256: 'a'.repeat(64),
+    };
+
+    expect(await checkDefinitionHash(definition)).not.toBe(
+      await checkDefinitionHash({ ...definition, executableSha256: 'b'.repeat(64) }),
+    );
+  });
+
+  it('refuses a tool whose content no longer matches its pin until it is pinned again', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    // Stands in for the tool file changing after approval: the pin and the file now differ.
+    fixture.database.connection
+      .prepare('UPDATE checks SET executable_sha256 = ? WHERE id = ?')
+      .run('0'.repeat(64), checkId);
+
+    const refused = await fixture.post<{ message: string }>(`/api/v1/checks/${checkId}/run`, {
+      workItemId: fixture.workItemId,
+    });
+    expect(refused.status).toBe(400);
+    expect(refused.body.message).toMatch(/changed since it was approved/u);
+    expect(fixture.database.listEvidence(fixture.workItemId)).toEqual([]);
+
+    const pinned = await fixture.post<{ check: { executableSha256: string } }>(
+      `/api/v1/checks/${checkId}/pin`,
+      {},
+    );
+    expect(pinned.status).toBe(200);
+    expect(pinned.body.check.executableSha256).toBe(await sha256File(process.execPath));
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${checkId}/run`, {
+      workItemId: fixture.workItemId,
+    });
+    expect(run.body.evidence.result).toBe('passed');
+  }, 30_000);
+
+  it('requires a check approved before tools were pinned to be pinned before it runs', async () => {
+    const fixture = await workspace();
+    const legacy = fixture.database.addCheck({
+      repositoryId: fixture.repositoryId,
+      label: 'Legacy check',
+      kind: 'test',
+      executable: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      versionArgs: ['--version'],
+      scopePaths: [],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+      resolvedExecutable: null,
+      executableSha256: null,
+      definitionHash: 'a'.repeat(64),
+    });
+    await fixture.get('/api/v1/bootstrap');
+
+    const refused = await fixture.post<{ message: string }>(`/api/v1/checks/${legacy.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+    expect(refused.status).toBe(400);
+    expect(refused.body.message).toMatch(/approved before VeriDone pinned tools/u);
+
+    await fixture.post(`/api/v1/checks/${legacy.id}/pin`, {});
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${legacy.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+    expect(run.body).toMatchObject({ evidence: { result: 'passed' }, readiness: { ready: true } });
+  }, 30_000);
+
+  it('rejects a tool named by a relative path at approval', async () => {
+    const fixture = await workspace();
+
+    const response = await fixture.post<{ message: string }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Repository script',
+      kind: 'test',
+      executable: './scripts/test.mjs',
+      args: [],
+      cwdRelative: '.',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toMatch(/relative paths are not pinned/u);
   }, 30_000);
 });

@@ -89,6 +89,8 @@ export interface CheckDto {
   cwdRelative: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  resolvedExecutable: string | null;
+  executableSha256: string | null;
   definitionHash: string;
   approvedAt: string;
 }
@@ -109,6 +111,8 @@ export interface EvidenceDto {
   exitCode: number | null;
   invalidReason: string | null;
   isolation: 'clean-checkout' | null;
+  toolPath: string | null;
+  toolSha256: string | null;
 }
 
 export interface VerdictDto {
@@ -226,6 +230,11 @@ export interface NewCheckInput {
 
 export async function createCheck(input: NewCheckInput, csrfToken: string): Promise<void> {
   await mutate('/api/v1/checks', csrfToken, input);
+}
+
+/** Pins the tool file the check's executable resolves to now, after the operator reviewed it. */
+export async function pinCheckTool(checkId: string, csrfToken: string): Promise<void> {
+  await mutate(`/api/v1/checks/${checkId}/pin`, csrfToken, {});
 }
 
 export async function runCheck(

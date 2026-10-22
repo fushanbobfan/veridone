@@ -1,6 +1,15 @@
-import { Archive, FileCheck2, FolderGit2, Inbox, Moon, Settings2, Sun } from 'lucide-react';
+import {
+  Archive,
+  FileCheck2,
+  FolderGit2,
+  Inbox,
+  ListChecks,
+  Moon,
+  Settings2,
+  Sun,
+} from 'lucide-react';
 
-export type WorkspaceSection = 'repositories' | 'contracts' | 'exports';
+export type WorkspaceSection = 'repositories' | 'checks' | 'contracts' | 'exports';
 
 export function Navigation({
   theme,
@@ -42,6 +51,15 @@ export function Navigation({
         >
           <FolderGit2 aria-hidden="true" size={17} />
           Repositories
+        </button>
+        <button
+          className="nav-item"
+          type="button"
+          onClick={() => onOpenSection?.('checks')}
+          disabled={!onOpenSection}
+        >
+          <ListChecks aria-hidden="true" size={17} />
+          Checks
         </button>
         <button
           className="nav-item"

@@ -11,6 +11,8 @@ import {
   captureGitSnapshot,
   environmentValue,
   findOnPath,
+  pinExecutable,
+  sha256File,
   gitEnvironment,
   gitRuntime,
   openGitSession,
@@ -146,6 +148,46 @@ async function touchLater(file: string): Promise<void> {
   const later = new Date(Date.now() + 60_000);
   await utimes(file, later, later);
 }
+
+describe('tool pinning', () => {
+  it('pins a tool to its canonical path and content hash', async () => {
+    const repository = await temporaryDirectory();
+    const tool = await realpath(process.execPath);
+
+    await expect(pinExecutable(process.execPath, { repositoryPath: repository })).resolves.toEqual({
+      path: tool,
+      sha256: await sha256File(tool),
+    });
+  });
+
+  it('refuses relative tool paths and tools inside the repository', async () => {
+    const repository = await temporaryDirectory();
+    const fileName = process.platform === 'win32' ? 'tool.exe' : 'tool';
+    await writeFile(path.join(repository, fileName), '');
+    await chmod(path.join(repository, fileName), 0o755);
+
+    for (const relative of ['./tool', 'bin/tool', '..\\tool']) {
+      await expect(pinExecutable(relative, { repositoryPath: repository })).rejects.toThrow(
+        /relative paths are not pinned/u,
+      );
+    }
+    await expect(
+      pinExecutable(path.join(repository, fileName), { repositoryPath: repository }),
+    ).rejects.toThrow(/inside the repository/u);
+    await expect(
+      pinExecutable('tool', { repositoryPath: repository, environment: { PATH: repository } }),
+    ).rejects.toThrow(/inside the repository/u);
+  });
+
+  it.runIf(process.platform === 'win32')('refuses files that need a shell on Windows', async () => {
+    const tools = await temporaryDirectory();
+    await writeFile(path.join(tools, 'test.cmd'), '@echo off\r\n');
+
+    await expect(
+      pinExecutable(path.join(tools, 'test.cmd'), { repositoryPath: await temporaryDirectory() }),
+    ).rejects.toThrow(/\.exe or \.com/u);
+  });
+});
 
 describe('Git invocation', () => {
   it('resolves Git to an absolute executable and records its version', async () => {

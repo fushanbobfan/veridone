@@ -150,9 +150,11 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
         : checkAssessments.map(({ check, evidence, fresh }) => ({
             id: check.id,
             title: check.label,
-            detail: evidence
-              ? `${evidence.result} · ${evidence.durationMs} ms · ${evidence.head.slice(0, 8)}`
-              : 'Approved, but not run for this work item',
+            detail: !check.executableSha256
+              ? 'Approved before tools were pinned; pin its tool again under Checks'
+              : evidence
+                ? `${evidence.result} · ${evidence.durationMs} ms · ${evidence.head.slice(0, 8)}${evidence.toolSha256 ? ` · tool ${evidence.toolSha256.slice(0, 8)}` : ''}`
+                : 'Approved, but not run for this work item',
             state: fresh
               ? ('passed' as const)
               : evidence?.result === 'failed' || evidence?.result === 'mutated'

@@ -66,6 +66,12 @@ const checkSchema = z.object({
     .min(100)
     .max(30 * 60_000),
   maxOutputBytes: z.number().int().min(1_024).max(10_000_000),
+  resolvedExecutable: z.string().min(1).max(4_096).nullable().default(null),
+  executableSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/iu)
+    .nullable()
+    .default(null),
   definitionHash: z.string().regex(/^[0-9a-f]{64}$/iu),
   approvedAt: isoDate,
 });
@@ -92,6 +98,12 @@ const evidenceSchema = z.object({
   artifactHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/iu)).max(10_000),
   invalidReason: z.string().max(2_000).nullable(),
   isolation: z.enum(['clean-checkout']).nullable().default(null),
+  toolPath: z.string().min(1).max(4_096).nullable().default(null),
+  toolSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/iu)
+    .nullable()
+    .default(null),
 });
 
 const verdictSchema = z.object({
@@ -287,11 +299,11 @@ export async function importWorkspace(
       INSERT INTO checks (
         id, repository_id, label, kind, executable, args_json, cwd_relative,
         timeout_ms, max_output_bytes, definition_hash, approved_at,
-        version_args_json, scope_paths_json
+        version_args_json, scope_paths_json, resolved_executable, executable_sha256
       ) VALUES (
         @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
         @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
-        @versionArgsJson, @scopePathsJson
+        @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256
       ) ON CONFLICT(id) DO UPDATE SET
         repository_id = excluded.repository_id,
         label = excluded.label,
@@ -304,7 +316,9 @@ export async function importWorkspace(
         definition_hash = excluded.definition_hash,
         approved_at = excluded.approved_at,
         version_args_json = excluded.version_args_json,
-        scope_paths_json = excluded.scope_paths_json
+        scope_paths_json = excluded.scope_paths_json,
+        resolved_executable = excluded.resolved_executable,
+        executable_sha256 = excluded.executable_sha256
     `);
     for (const record of data.checks) {
       insertCheck.run({
@@ -320,12 +334,12 @@ export async function importWorkspace(
         id, work_item_id, check_id, kind, label, result, repository_id,
         snapshot_fingerprint, head, contract_version, check_definition_version,
         started_at, completed_at, duration_ms, tool_version, exit_code, stdout, stderr,
-        artifact_hashes_json, invalid_reason, isolation
+        artifact_hashes_json, invalid_reason, isolation, tool_path, tool_sha256
       ) VALUES (
         @id, @workItemId, @checkId, @kind, @label, @result, @repositoryId,
         @snapshotFingerprint, @head, @contractVersion, @checkDefinitionVersion,
         @startedAt, @completedAt, @durationMs, @toolVersion, @exitCode, @stdout, @stderr,
-        @artifactHashesJson, @invalidReason, @isolation
+        @artifactHashesJson, @invalidReason, @isolation, @toolPath, @toolSha256
       ) ON CONFLICT(id) DO UPDATE SET
         work_item_id = excluded.work_item_id,
         check_id = excluded.check_id,
@@ -346,7 +360,9 @@ export async function importWorkspace(
         stderr = excluded.stderr,
         artifact_hashes_json = excluded.artifact_hashes_json,
         invalid_reason = excluded.invalid_reason,
-        isolation = excluded.isolation
+        isolation = excluded.isolation,
+        tool_path = excluded.tool_path,
+        tool_sha256 = excluded.tool_sha256
     `);
     for (const record of data.evidence) {
       insertEvidence.run({
