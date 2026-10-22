@@ -46,11 +46,14 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
       (candidate) => candidate.workItemId === item.id && candidate.checkId === check.id,
     );
     const evidence = runs.find((candidate) => candidate.origin === 'local') ?? runs[0];
+    // The same conditions the server's acceptance readiness applies.
     const fresh =
       evidence?.origin === 'local' &&
       evidence.result === 'passed' &&
       evidence.isolation === 'clean-checkout' &&
       evidence.snapshotFingerprint === repository?.snapshot.fingerprint &&
+      evidence.contractVersion === repository.snapshot.contractVersion &&
+      evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
       evidence.invalidReason === null;
     return { check, evidence, fresh };
   });

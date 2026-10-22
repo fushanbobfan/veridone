@@ -23,6 +23,8 @@ export interface RepositoryDto {
       untrackedFiles: number;
     };
     fingerprint: string;
+    contractVersion: string;
+    checkDefinitionVersion: string;
     capturedAt: string;
   };
   updatedAt: string;
@@ -106,6 +108,8 @@ export interface EvidenceDto {
   repositoryId: string;
   snapshotFingerprint: string;
   head: string;
+  contractVersion: string;
+  checkDefinitionVersion: string;
   completedAt: string;
   durationMs: number;
   toolVersion: string | null;

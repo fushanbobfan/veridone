@@ -12,6 +12,8 @@ function workspace(options: {
   /** Evidence recorded before checks ran in a clean checkout carries no isolation. */
   legacyEvidence?: boolean;
   restoredEvidence?: boolean;
+  /** Evidence produced for an earlier check set, such as before a tool was pinned again. */
+  earlierChecks?: boolean;
 }): BootstrapDto {
   return {
     mode: 'local',
@@ -37,6 +39,8 @@ function workspace(options: {
             untrackedFiles: 0,
           },
           fingerprint: currentFingerprint,
+          contractVersion: 'default-v1',
+          checkDefinitionVersion: 'checks-v2',
           capturedAt: '2026-10-22T10:00:00.000Z',
         },
         updatedAt: '2026-10-22T10:00:00.000Z',
@@ -90,6 +94,8 @@ function workspace(options: {
             repositoryId: 'repo',
             snapshotFingerprint: currentFingerprint,
             head: 'c'.repeat(40),
+            contractVersion: 'default-v1',
+            checkDefinitionVersion: options.earlierChecks ? 'checks-v1' : 'checks-v2',
             completedAt: '2026-10-22T10:05:00.000Z',
             durationMs: 500,
             toolVersion: 'v24.19.0',
@@ -143,6 +149,13 @@ describe('local review state', () => {
     });
   });
 
+  it('does not count evidence produced for an earlier check definition', () => {
+    expect(review({ evidence: true, earlierChecks: true })).toMatchObject({
+      state: 'blocked',
+      gatesReady: false,
+    });
+  });
+
   it('shows restored evidence as history that passes no gate', () => {
     const restored = review({ evidence: true, restoredEvidence: true });
     expect(restored).toMatchObject({ state: 'blocked', gatesReady: false });
@@ -151,7 +164,7 @@ describe('local review state', () => {
     );
   });
 
-  it('reads the latest verdict from the chain rather than the list order', () => {
+  it('reads the latest verdict from its position in the chain', () => {
     const bootstrap = workspace({
       evidence: true,
       verdict: { decision: 'accepted', snapshotFingerprint: currentFingerprint },
