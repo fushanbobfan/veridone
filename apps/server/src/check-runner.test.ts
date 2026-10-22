@@ -94,6 +94,49 @@ describe('checks run in a clean checkout', () => {
     );
   }, 30_000);
 
+  it('catches a check that commits its own edit inside the checkout', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck(
+      "require('node:fs').writeFileSync('README.md', 'changed\\n'); require('node:child_process').execFileSync('git', ['-c', 'user.name=Check', '-c', 'user.email=check@veridone.local', 'commit', '-qam', 'edit']);",
+    );
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${checkId}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('mutated');
+    expect(run.body.evidence.invalidReason).toMatch(/moved its checkout/u);
+  }, 30_000);
+
+  it('catches an edit that the check hides from the checkout index', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck(
+      "require('node:fs').writeFileSync('README.md', 'changed\\n'); require('node:child_process').execFileSync('git', ['update-index', '--skip-worktree', 'README.md']);",
+    );
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${checkId}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('mutated');
+    expect(run.body.evidence.invalidReason).toContain('README.md');
+  }, 30_000);
+
+  it('records a check that leaves its checkout unreadable as mutated', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck(
+      "require('node:fs').writeFileSync('.git/config', '[broken');",
+    );
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${checkId}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.status).toBe(200);
+    expect(run.body.evidence.result).toBe('mutated');
+    expect(run.body.evidence.invalidReason).toMatch(/could not be compared/u);
+  }, 30_000);
+
   it('gives the check absolute PATH entries only', async () => {
     const fixture = await workspace();
     const checkId = await fixture.approveCheck(

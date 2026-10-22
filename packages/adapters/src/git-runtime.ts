@@ -29,6 +29,8 @@ export interface GitRunOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
+  /** Variables added to the fixed environment, such as GIT_INDEX_FILE. */
+  environment?: Record<string, string>;
 }
 
 export type GitSetting = [key: string, value: string];
@@ -267,7 +269,7 @@ export function runGitProcess(
     executable: runtime.executable,
     args,
     cwd: runtime.workingDirectory,
-    env: gitEnvironment(runtime, settings),
+    env: { ...gitEnvironment(runtime, settings), ...options.environment },
     timeoutMs: options.timeoutMs ?? 15_000,
     maxOutputBytes: options.maxOutputBytes ?? 2_000_000,
     ...(options.signal ? { signal: options.signal } : {}),

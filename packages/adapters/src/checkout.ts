@@ -2,6 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { pathFromStatusEntry } from '@veridone/core';
+
 import {
   GitAdapterError,
   gitRuntime,
@@ -10,11 +12,18 @@ import {
   type GitSetting,
 } from './git-runtime.js';
 
+export interface CheckoutComparison {
+  /** True when the checkout's HEAD is no longer the bound commit. */
+  headMoved: boolean;
+  /** Files that differ from the bound commit, and new files its .gitignore files do not cover. */
+  changedPaths: string[];
+}
+
 export interface CleanCheckout {
   directory: string;
   commit: string;
-  /** Porcelain status entries of the checkout; empty unless something changed its files. */
-  changes(): Promise<string[]>;
+  /** Compares the checkout with the bound commit; throws when the comparison cannot run. */
+  compare(): Promise<CheckoutComparison>;
   remove(): Promise<void>;
 }
 
@@ -36,11 +45,13 @@ export async function createCleanCheckout(
     throw new GitAdapterError('The bound commit is not a full object ID.');
   }
   const runtime = await gitRuntime();
-  const directory = await mkdtemp(path.join(tmpdir(), 'veridone-checkout-'));
+  // The checkout sits in `work`; the comparison index sits beside it, outside the work tree.
+  const root = await mkdtemp(path.join(tmpdir(), 'veridone-checkout-'));
+  const directory = path.join(root, 'work');
   const remove = async () => {
     // A process the check left behind can hold files open on Windows; the operating system's
     // temporary-file cleanup removes whatever remains.
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(
       () => undefined,
     );
   };
@@ -99,17 +110,44 @@ export async function createCleanCheckout(
   return {
     directory,
     commit: expectedCommit,
-    changes: async () => {
-      // A new session rereads the configuration, which the check itself may have edited.
+    compare: async () => {
+      // The check ran code from the commit, which can rewrite the checkout's HEAD, index, and
+      // configuration. A new session rereads that configuration and blanks its filters; the
+      // repository and work tree are named explicitly; the work tree is compared with a fresh
+      // index read from the bound commit; new files count unless the work tree's own .gitignore
+      // files cover them.
       const session = await openGitSession(directory, { operatorSettings: false });
-      const result = await session.run(
-        ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=dirty'],
-        { timeoutMs: 60_000 },
+      const pinned = ['--git-dir', path.join(directory, '.git'), '--work-tree', directory];
+      const run = async (args: string[], environment?: Record<string, string>) => {
+        const result = await session.run([...pinned, ...args], {
+          timeoutMs: 120_000,
+          ...(environment ? { environment } : {}),
+        });
+        if (result.state !== 'completed' || result.exitCode !== 0) {
+          throw new GitAdapterError(
+            result.stderr.trim() || `Git ${args[0] ?? 'command'} failed with ${result.state}.`,
+          );
+        }
+        return result.stdout;
+      };
+      const head = (
+        await run(['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'])
+      ).trim();
+      const index = { GIT_INDEX_FILE: path.join(root, 'compare.index') };
+      await run(['read-tree', expectedCommit], index);
+      const tracked = await run(
+        ['status', '--porcelain=v1', '-z', '--untracked-files=no', '--ignore-submodules=dirty'],
+        index,
       );
-      if (result.state !== 'completed' || result.exitCode !== 0) {
-        throw new GitAdapterError(result.stderr.trim() || 'The checkout status could not be read.');
-      }
-      return result.stdout.split('\0').filter(Boolean);
+      const untracked = await run(
+        ['ls-files', '--others', '-z', '--exclude-per-directory=.gitignore'],
+        index,
+      );
+      const changedPaths = [
+        ...tracked.split('\0').filter(Boolean).map(pathFromStatusEntry),
+        ...untracked.split('\0').filter(Boolean),
+      ];
+      return { headMoved: head !== expectedCommit, changedPaths: [...new Set(changedPaths)] };
     },
     remove,
   };
