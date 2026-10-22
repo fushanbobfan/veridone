@@ -226,6 +226,7 @@ describe('workspace restore', () => {
     for (const verdict of legacy.data.verdicts) {
       delete verdict.sequence;
       delete verdict.previousVerdictId;
+      delete verdict.claimHash;
     }
     for (const evidence of legacy.data.evidence) {
       for (const field of ['isolation', 'toolPath', 'toolSha256', 'origin']) delete evidence[field];
@@ -240,6 +241,33 @@ describe('workspace restore', () => {
 
     expect(result.imported.verdicts).toBe(2);
     expect(history(restored, workItemId)).toEqual(history(database, workItemId));
+    // The workspace that wrote those verdicts recognises them in the 1.1-shaped backup.
+    const again = await importWorkspace(database, await resealed(legacy));
+    expect(Object.values(again.imported).every((count) => count === 0)).toBe(true);
+    expect(again.unchanged.verdicts).toBe(2);
+  }, 30_000);
+
+  it('refuses a restored verdict that judged a different claim than the local work item shows', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const beforeRevision = await exportWorkspace(fixture.database);
+    await fixture.writeReceipt('The importer is fixed and also faster.');
+    expect((await fixture.importReceipt()).status).toBe(201);
+    expect(
+      (
+        await fixture.decide('accepted', 'Judged the revised claim.', {
+          overrideReason: 'Reviewed by hand.',
+        })
+      ).status,
+    ).toBe(201);
+    const afterRevision = await exportWorkspace(fixture.database);
+    const restored = emptyDatabase();
+    await importWorkspace(restored, beforeRevision);
+
+    await expect(importWorkspace(restored, afterRevision)).rejects.toThrow(
+      /judged a different claim/u,
+    );
+    expect(restored.listVerdicts()).toEqual([]);
   }, 30_000);
 });
 

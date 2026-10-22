@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { VerdictConflictError } from './database.js';
 import { boundWorkspace } from './test-fixtures.js';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -133,6 +134,27 @@ describe('verdicts are compare-and-swap writes', () => {
     ]);
 
     expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+    expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
+  }, 30_000);
+
+  it('refuses the second of two verdicts expecting the same state inside one store transaction', async () => {
+    const fixture = await workspace();
+    const expected = await fixture.expectedState();
+    const verdict = {
+      workItemId: fixture.workItemId,
+      decision: 'rejected' as const,
+      note: 'Reviewer A.',
+      snapshotFingerprint: expected.fingerprint ?? '',
+      contractVersion: 'default-v1',
+      evidenceIds: [],
+      overrideReason: null,
+    };
+
+    fixture.database.recordVerdict(verdict, expected);
+
+    expect(() =>
+      fixture.database.recordVerdict({ ...verdict, note: 'Reviewer B.' }, expected),
+    ).toThrow(VerdictConflictError);
     expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
   }, 30_000);
 

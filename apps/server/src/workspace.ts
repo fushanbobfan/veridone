@@ -3,7 +3,13 @@ import { canonicalJson, repositorySnapshotSchema, sha256Hex } from '@veridone/co
 import { z } from 'zod';
 
 import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
-import type { EvidenceRecord, ReceiptRecord, VerdictRecord, VeriDoneDatabase } from './database.js';
+import {
+  claimHash,
+  type EvidenceRecord,
+  type ReceiptRecord,
+  type VerdictRecord,
+  type VeriDoneDatabase,
+} from './database.js';
 
 /** A backup disagrees with recorded history. The restore writes nothing. */
 export class WorkspaceConflictError extends Error {
@@ -268,9 +274,21 @@ function verdictHistory(document: WorkspaceDocument): VerdictRecord[] {
   return history;
 }
 
-function sameEvidence(local: EvidenceRecord, incoming: Omit<EvidenceRecord, 'origin'>): boolean {
+function sameEvidence(
+  local: EvidenceRecord,
+  incoming: Omit<EvidenceRecord, 'origin'>,
+  compareAll: boolean,
+): boolean {
+  // Version 1 backups carry no isolation or tool identity.
+  const comparable = ({
+    isolation,
+    toolPath,
+    toolSha256,
+    ...evidence
+  }: Omit<EvidenceRecord, 'origin'>) =>
+    compareAll ? { ...evidence, isolation, toolPath, toolSha256 } : evidence;
   const { origin: _origin, ...recorded } = local;
-  return canonicalJson(recorded) === canonicalJson(incoming);
+  return canonicalJson(comparable(recorded)) === canonicalJson(comparable(incoming));
 }
 
 function sameVerdict(
@@ -278,8 +296,14 @@ function sameVerdict(
   incoming: VerdictRecord,
   compareChain: boolean,
 ): boolean {
-  const comparable = ({ sequence, previousVerdictId, ...verdict }: VerdictRecord) =>
-    compareChain ? { ...verdict, sequence, previousVerdictId } : verdict;
+  // Version 1 backups carry neither the chain fields nor a claim hash.
+  const comparable = ({
+    sequence,
+    previousVerdictId,
+    claimHash: judged,
+    ...verdict
+  }: VerdictRecord) =>
+    compareChain ? { ...verdict, sequence, previousVerdictId, claimHash: judged } : verdict;
   return canonicalJson(comparable(local)) === canonicalJson(comparable(incoming));
 }
 
@@ -287,8 +311,8 @@ function sameVerdict(
  * Restores a workspace backup by adding what the workspace lacks. Records that already exist are
  * kept as they are; evidence and verdicts that already exist must match the backup exactly. Each
  * work item's verdicts replay in chain order through the same append-only path as new verdicts,
- * so the backup can extend a history but never rewrite it. Restored evidence is marked imported
- * and satisfies no gate, and restored checks must have their tools pinned before they run.
+ * so a backup can only extend a history. Restored evidence is marked imported and satisfies no
+ * gate, and restored checks must have their tools pinned before they run.
  */
 export async function importWorkspace(
   database: VeriDoneDatabase,
@@ -302,6 +326,8 @@ export async function importWorkspace(
   const document = workspaceDocumentSchema.parse(input);
   const data = document.data;
   const verdicts = verdictHistory(document);
+  // Verdicts recorded before claim hashes were kept judged the claim their backup carries.
+  const backupClaims = new Map(data.workItems.map((item) => [item.id, claimHash(item)]));
   const checks = await Promise.all(
     data.checks.map(async (record) => {
       const definition = {
@@ -446,7 +472,7 @@ export async function importWorkspace(
       for (const { origin: _origin, ...record } of data.evidence) {
         const local = database.getEvidence(record.id);
         if (local) {
-          if (!sameEvidence(local, record)) {
+          if (!sameEvidence(local, record, document.schemaVersion !== 1)) {
             throw new WorkspaceConflictError(
               `The backup's evidence ${record.id} differs from the local record with the same ID. Recorded evidence is never replaced.`,
             );
@@ -476,6 +502,14 @@ export async function importWorkspace(
         ) {
           throw new WorkspaceConflictError(
             `The backup's verdict history for work item ${verdict.workItemId} diverges from the local history. A restore can only extend it.`,
+          );
+        }
+        // A verdict belongs to the claim it judged; the local work item may show another one.
+        const workItem = database.getWorkItem(verdict.workItemId);
+        const judged = verdict.claimHash ?? backupClaims.get(verdict.workItemId) ?? null;
+        if (workItem && judged !== null && judged !== workItem.claimHash) {
+          throw new WorkspaceConflictError(
+            `The backup's verdict ${verdict.id} judged a different claim than the local work item "${workItem.title}" shows. A verdict stays with the claim it judged.`,
           );
         }
         database.appendVerdict(verdict);
