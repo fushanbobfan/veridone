@@ -972,12 +972,11 @@ export class VeriDoneDatabase {
     return row ? this.verdictFromRow(row) : null;
   }
 
+  /** One work item's verdicts newest first by chain position; all verdicts newest first by time. */
   listVerdicts(workItemId?: string): VerdictRecord[] {
     const rows = workItemId
       ? (this.connection
-          .prepare(
-            'SELECT * FROM verdicts WHERE work_item_id = ? ORDER BY decided_at DESC, sequence DESC',
-          )
+          .prepare('SELECT * FROM verdicts WHERE work_item_id = ? ORDER BY sequence DESC')
           .all(workItemId) as Array<Record<string, unknown>>)
       : (this.connection
           .prepare('SELECT * FROM verdicts ORDER BY decided_at DESC, sequence DESC')

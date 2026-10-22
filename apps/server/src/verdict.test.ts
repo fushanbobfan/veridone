@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { VerdictConflictError } from './database.js';
+import { buildAcceptancePacket } from './packet.js';
 import { boundWorkspace } from './test-fixtures.js';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -73,6 +75,28 @@ describe('verdict recording', () => {
       previousVerdictId: first.body.verdict.id,
       claimHash: (await expectedState()).claimHash,
     });
+  }, 30_000);
+  it('heads the packet with the latest verdict of the chain, whatever the clocks recorded', async () => {
+    const fixture = await workspace();
+    await fixture.decide('changes-requested', 'Add a regression test.');
+    const first = fixture.database.latestVerdict(fixture.workItemId);
+    if (!first) throw new Error('The verdict was not recorded.');
+    fixture.database.appendVerdict({
+      ...first,
+      id: randomUUID(),
+      decision: 'rejected',
+      note: 'Recorded on a machine whose clock ran behind.',
+      decidedAt: '2020-01-01T00:00:00.000Z',
+      sequence: 2,
+      previousVerdictId: first.id,
+    });
+
+    const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+
+    expect(packet.verdicts.map((verdict) => verdict.decision)).toEqual([
+      'rejected',
+      'changes-requested',
+    ]);
   }, 30_000);
 });
 
