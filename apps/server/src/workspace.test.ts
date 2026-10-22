@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 import { canonicalJson, sha256Hex } from '@veridone/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -239,4 +241,63 @@ describe('workspace restore', () => {
     expect(result.imported.verdicts).toBe(2);
     expect(history(restored, workItemId)).toEqual(history(database, workItemId));
   }, 30_000);
+});
+
+describe('receipt times in backups', () => {
+  it('exports a workspace after importing a receipt written with a local time', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const receiptPath = path.join(fixture.directory, 'local-time.json');
+    await writeFile(
+      receiptPath,
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'local-time',
+        title: 'Local time',
+        claim: 'The receipt uses a local time.',
+        status: 'complete',
+        started_at: '2026-07-21 13:00:00',
+      }),
+    );
+
+    expect((await fixture.post('/api/v1/receipts/import', { path: receiptPath })).status).toBe(201);
+    const exported = await fixture.get<{
+      data: { receipts: Array<{ runId: string; startedAt: string }> };
+    }>('/api/v1/workspace/export');
+
+    expect(exported.status).toBe(200);
+    expect(
+      exported.body.data.receipts.find((receipt) => receipt.runId === 'local-time'),
+    ).toMatchObject({
+      startedAt: new Date(2026, 6, 21, 13, 0, 0).toISOString(),
+    });
+  }, 30_000);
+
+  it('exports receipts an earlier version stored with a local time', async () => {
+    const database = emptyDatabase();
+    const insert = database.connection.prepare(
+      `INSERT INTO receipts (id, run_id, source_path, task_type, status, started_at, completed_at,
+         stage_count, degraded, imported_at)
+       VALUES (?, ?, ?, 'review', 'complete', ?, NULL, 0, 0, '2026-07-21T20:00:00.000Z')`,
+    );
+    insert.run(
+      randomUUID(),
+      'legacy-local',
+      'D:/receipts/legacy-local.json',
+      '2026-07-21 13:00:00',
+    );
+
+    const document = await exportWorkspace(database);
+    expect(document.data.receipts[0]?.startedAt).toBe(
+      new Date(2026, 6, 21, 13, 0, 0).toISOString(),
+    );
+
+    insert.run(
+      randomUUID(),
+      'legacy-unreadable',
+      'D:/receipts/legacy-unreadable.json',
+      'yesterday',
+    );
+    await expect(exportWorkspace(database)).rejects.toThrow(/legacy-unreadable/u);
+  });
 });

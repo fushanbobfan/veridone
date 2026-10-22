@@ -15,6 +15,7 @@ import {
   sha256File,
   gitEnvironment,
   gitRuntime,
+  normalizeReceiptTimestamp,
   openGitSession,
   parseConfigList,
   readHarnessReceipt,
@@ -450,6 +451,37 @@ describe('real adapters', () => {
       claim: 'Implemented the explorer and verified its keyboard flow.',
       degraded: false,
     });
+  });
+
+  it('stores receipt times as ISO 8601 timestamps and refuses values that are not times', async () => {
+    const root = await temporaryDirectory();
+    const receipt = (fields: Record<string, unknown>) =>
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'times',
+        title: 'Times',
+        claim: 'Timestamps are recorded.',
+        status: 'complete',
+        started_at: '2026-07-21T20:00:00Z',
+        ...fields,
+      });
+    const read = async (fields: Record<string, unknown>) => {
+      const receiptPath = path.join(root, 'receipt.json');
+      await writeFile(receiptPath, receipt(fields));
+      return (await readHarnessReceipt(receiptPath, [root])).preview;
+    };
+
+    await expect(read({ started_at: '2026-07-21T13:00:00.1234567-07:00' })).resolves.toMatchObject({
+      startedAt: '2026-07-21T13:00:00.1234567-07:00',
+    });
+    await expect(read({ started_at: '2026-07-21 13:00:00' })).resolves.toMatchObject({
+      startedAt: new Date(2026, 6, 21, 13, 0, 0).toISOString(),
+    });
+    for (const startedAt of ['yesterday', '2026-02-30 10:00:00', '1']) {
+      await expect(read({ started_at: startedAt })).rejects.toThrow(/started_at: Use an ISO 8601/u);
+    }
+    await expect(read({ run_id: 'r'.repeat(513) })).rejects.toThrow(/run_id/u);
+    expect(normalizeReceiptTimestamp('2026-07-21T20:00:00Z')).toBe('2026-07-21T20:00:00Z');
   });
 
   it('rejects receipt collections that exceed their byte budget before parsing', async () => {

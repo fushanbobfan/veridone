@@ -1,8 +1,9 @@
+import { normalizeReceiptTimestamp, receiptFieldSchemas } from '@veridone/adapters';
 import { canonicalJson, repositorySnapshotSchema, sha256Hex } from '@veridone/core';
 import { z } from 'zod';
 
 import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
-import type { EvidenceRecord, VerdictRecord, VeriDoneDatabase } from './database.js';
+import type { EvidenceRecord, ReceiptRecord, VerdictRecord, VeriDoneDatabase } from './database.js';
 
 /** A backup disagrees with recorded history. The restore writes nothing. */
 export class WorkspaceConflictError extends Error {
@@ -10,7 +11,6 @@ export class WorkspaceConflictError extends Error {
 }
 
 const isoDate = z.string().datetime({ offset: true });
-const nullableIsoDate = isoDate.nullable();
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/iu);
 
 const approvedRootSchema = z.object({
@@ -28,14 +28,15 @@ const repositorySchema = z.object({
   updatedAt: isoDate,
 });
 
+// Receipt and work-item fields use the receipt import's own rules, so whatever imports also exports.
 const receiptSchema = z.object({
   id: z.string().uuid(),
-  runId: z.string().min(1).max(512),
+  runId: receiptFieldSchemas.runId,
   sourcePath: z.string().min(1).max(4_096),
-  taskType: z.string().min(1).max(200),
-  status: z.string().min(1).max(200),
-  startedAt: isoDate,
-  completedAt: nullableIsoDate,
+  taskType: receiptFieldSchemas.taskType,
+  status: receiptFieldSchemas.status,
+  startedAt: receiptFieldSchemas.timestamp,
+  completedAt: receiptFieldSchemas.timestamp.nullable(),
   stageCount: z.number().int().nonnegative().max(100_000),
   degraded: z.boolean(),
   importedAt: isoDate,
@@ -46,8 +47,8 @@ const workItemSchema = z.object({
   repositoryId: z.string().min(1).max(128).nullable(),
   sourceType: z.string().min(1).max(100),
   sourceRef: z.string().min(1).max(4_096),
-  title: z.string().min(1).max(300),
-  claim: z.string().min(1).max(20_000),
+  title: receiptFieldSchemas.title,
+  claim: receiptFieldSchemas.claim,
   sourceLabel: z.string().min(1).max(200),
   updatedAt: isoDate,
   snapshotFingerprint: sha256.nullable(),
@@ -160,6 +161,27 @@ export type WorkspaceDocument = z.infer<typeof workspaceDocumentSchema>;
 type WorkspaceData = WorkspaceDocument['data'];
 export type WorkspaceCounts = Record<keyof WorkspaceData, number>;
 
+/**
+ * Receipts imported before import normalized their times may hold a local time without an offset;
+ * the backup carries it as an ISO 8601 timestamp.
+ */
+function exportableReceipt(receipt: ReceiptRecord): ReceiptRecord {
+  const timestamp = (value: string) => {
+    const normalized = normalizeReceiptTimestamp(value);
+    if (normalized === null) {
+      throw new Error(
+        `Receipt ${receipt.runId} records the time "${value}", which is not a timestamp. Import the receipt again with an ISO 8601 time.`,
+      );
+    }
+    return normalized;
+  };
+  return {
+    ...receipt,
+    startedAt: timestamp(receipt.startedAt),
+    completedAt: receipt.completedAt === null ? null : timestamp(receipt.completedAt),
+  };
+}
+
 export async function exportWorkspace(database: VeriDoneDatabase): Promise<WorkspaceDocument> {
   const payload = workspacePayloadSchema.parse({
     schemaVersion: 2,
@@ -168,7 +190,7 @@ export async function exportWorkspace(database: VeriDoneDatabase): Promise<Works
     data: {
       approvedRoots: database.listApprovedRoots(),
       repositories: database.listRepositories(),
-      receipts: database.listReceipts(),
+      receipts: database.listReceipts().map(exportableReceipt),
       workItems: database.listWorkItems(),
       contracts: database.listContracts(),
       checks: database.listChecks(),
