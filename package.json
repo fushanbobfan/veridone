@@ -24,7 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:chromium": "playwright test --project=chromium-local --project=chromium-demo --project=mobile-chromium",
+    "test:e2e:chromium": "playwright test --project=chromium-local --project=chromium-verdicts --project=chromium-demo --project=mobile-chromium",
     "verify:packet": "tsx apps/server/src/verify-packet.ts",
     "verify:published-evidence": "tsx apps/server/src/verify-evidence-directory.ts docs/evidence/dogfood",
     "licenses:check": "node scripts/check-licenses.mjs",

@@ -1164,6 +1164,10 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.verdict-dialog .repository-link-summary {
+  margin: 0 0 18px;
+}
+
 .source-kind-group {
   display: grid;
   gap: 0;

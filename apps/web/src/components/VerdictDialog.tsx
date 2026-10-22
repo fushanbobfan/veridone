@@ -1,5 +1,12 @@
 import { useId, useRef, useState } from 'react';
-import { Check, MessageSquareWarning, X } from 'lucide-react';
+import {
+  Check,
+  GitBranch,
+  GitCommitHorizontal,
+  MessageSquareWarning,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 
 import { createVerdict } from '../api.js';
 import { useDialogFocus } from './useDialogFocus.js';
@@ -7,6 +14,7 @@ import { useDialogFocus } from './useDialogFocus.js';
 export function VerdictDialog({
   open,
   workItemId,
+  subject,
   decision,
   overrideRequired = false,
   csrfToken,
@@ -15,6 +23,7 @@ export function VerdictDialog({
 }: {
   open: boolean;
   workItemId: string;
+  subject: { title: string; repository: string; head: string; fingerprint: string };
   decision: 'accepted' | 'changes-requested' | 'rejected';
   overrideRequired?: boolean;
   csrfToken: string;
@@ -95,6 +104,30 @@ export function VerdictDialog({
                 ? 'A rejection remains append-only and bound to the current repository state.'
                 : 'Record what must change so the decision remains auditable.'}
         </p>
+        <section className="repository-link-summary" aria-label="Verdict subject">
+          <div>
+            <GitBranch aria-hidden="true" size={15} />
+            <span>
+              <strong>{subject.title}</strong>
+              <small>{subject.repository}</small>
+            </span>
+          </div>
+          <div>
+            <GitCommitHorizontal aria-hidden="true" size={15} />
+            <span>
+              <strong className="mono">{subject.head || 'Unbound'}</strong>
+            </span>
+          </div>
+          <div>
+            <ShieldCheck aria-hidden="true" size={15} />
+            <span>
+              <strong>Fingerprint</strong>
+              <small className="mono">
+                {subject.fingerprint ? `${subject.fingerprint.slice(0, 16)}…` : 'Unbound'}
+              </small>
+            </span>
+          </div>
+        </section>
         <form onSubmit={submit}>
           <label>
             <span className="field-label">Decision note</span>

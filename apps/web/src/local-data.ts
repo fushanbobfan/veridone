@@ -1,7 +1,13 @@
 import { assessDeclaredScope, pathFromStatusEntry } from '@veridone/core';
 
-import type { BootstrapDto, WorkItemDto } from './api.js';
+import type { BootstrapDto, VerdictDto, WorkItemDto } from './api.js';
 import type { ReviewItem } from './data.js';
+
+const verdictNames: Record<VerdictDto['decision'], string> = {
+  accepted: 'acceptance',
+  'changes-requested': 'change request',
+  rejected: 'rejection',
+};
 
 function relativeTime(iso: string): string {
   const difference = Date.now() - new Date(iso).getTime();
@@ -40,7 +46,17 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
     checks.flatMap((check) => check.scopePaths),
   );
   const checksReady = checks.length > 0 && passingChecks === checks.length && scope.satisfied;
+  const gatesReady = !isDegraded && bindingFresh && checksReady;
+  // Verdicts arrive newest first. A verdict decides the repository state it was recorded on;
+  // once that state changes, the verdict stays in the history and the item opens again.
   const verdict = bootstrap.verdicts.find((candidate) => candidate.workItemId === item.id);
+  const verdictCurrent = Boolean(
+    verdict && repository && verdict.snapshotFingerprint === repository.snapshot.fingerprint,
+  );
+  const supersededNote =
+    verdict && !verdictCurrent
+      ? `An earlier ${verdictNames[verdict.decision]} was recorded on a previous repository state and is superseded. `
+      : '';
   const requiredTotal = 2 + Math.max(checks.length, 1) + (scope.declared ? 1 : 0);
   const requiredSatisfied =
     1 + (bindingFresh ? 1 : 0) + passingChecks + (scope.declared && scope.satisfied ? 1 : 0);
@@ -60,31 +76,33 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
     branch: repository?.snapshot.branch ?? 'not bound',
     head: repository?.snapshot.head.slice(0, 8) ?? 'unbound',
     source: item.sourceLabel,
-    state:
-      item.humanVerdict || verdict
-        ? 'decided'
-        : isDegraded
-          ? 'blocked'
-          : bindingFresh && checksReady
-            ? 'ready'
-            : isBound && !bindingFresh
-              ? 'stale'
-              : 'blocked',
+    state: verdictCurrent
+      ? 'decided'
+      : isDegraded
+        ? 'blocked'
+        : gatesReady
+          ? 'ready'
+          : isBound && !bindingFresh
+            ? 'stale'
+            : 'blocked',
+    gatesReady,
     updatedLabel: relativeTime(item.updatedAt),
     updatedAt: item.updatedAt,
-    reason: isDegraded
-      ? 'The imported run contains a degraded or failing stage.'
-      : bindingFresh && checksReady
-        ? 'Every approved check and declared scope gate has fresh evidence. Human review remains.'
-        : scope.declared && !scope.satisfied
-          ? `${scope.outsidePaths.length} changed file(s) fall outside the declared scope.`
-          : isBound && !bindingFresh
-            ? 'The repository changed after this claim was bound. Rebind before running checks.'
-            : bindingFresh
-              ? checks.length === 0
-                ? 'The claim is bound, but no acceptance checks have been approved.'
-                : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
-              : 'The receipt is valid, but its claim is not bound to a repository snapshot.',
+    reason:
+      supersededNote +
+      (isDegraded
+        ? 'The imported run contains a degraded or failing stage.'
+        : gatesReady
+          ? 'Every approved check and declared scope gate has fresh evidence. Human review remains.'
+          : scope.declared && !scope.satisfied
+            ? `${scope.outsidePaths.length} changed file(s) fall outside the declared scope.`
+            : isBound && !bindingFresh
+              ? 'The repository changed after this claim was bound. Rebind before running checks.'
+              : bindingFresh
+                ? checks.length === 0
+                  ? 'The claim is bound, but no acceptance checks have been approved.'
+                  : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
+                : 'The receipt is valid, but its claim is not bound to a repository snapshot.'),
     requiredSatisfied,
     requiredTotal,
     changedFiles: repository?.snapshot.diffStats.changedFiles ?? 0,

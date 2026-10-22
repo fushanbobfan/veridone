@@ -42,7 +42,7 @@ export function ReviewDetail({
   onExport?: () => void;
   onViewContract?: () => void;
 }) {
-  const ready = item.state === 'ready';
+  const ready = item.gatesReady;
   const percentage = Math.round((item.requiredSatisfied / item.requiredTotal) * 100);
 
   return (

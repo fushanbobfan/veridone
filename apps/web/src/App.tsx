@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { cancelCheck, fetchBootstrap, linkWorkItem, runCheck, type BootstrapDto } from './api.js';
+import {
+  cancelCheck,
+  fetchBootstrap,
+  linkWorkItem,
+  runCheck,
+  type BootstrapDto,
+  type VerdictDto,
+} from './api.js';
 import { AddSourceDialog } from './components/AddSourceDialog.js';
 import { CheckDialog } from './components/CheckDialog.js';
 import { Navigation } from './components/Navigation.js';
@@ -50,6 +57,35 @@ function initialTheme(): ThemePreference {
   return 'system';
 }
 
+/** Keeps the reviewer's selection (or deep link) across refreshes while that work item exists. */
+function selectionAfterRefresh(current: string, next: BootstrapDto): string {
+  return next.workItems.some((item) => item.id === current)
+    ? current
+    : (next.workItems[0]?.id ?? '');
+}
+
+function verdictSubject(bootstrap: BootstrapDto, workItemId: string) {
+  const workItem = bootstrap.workItems.find((item) => item.id === workItemId);
+  const repository = bootstrap.repositories.find(
+    (candidate) => candidate.id === workItem?.repositoryId,
+  );
+  return {
+    title: workItem?.title ?? 'Unknown work item',
+    repository: repository?.name ?? 'Unlinked',
+    head: repository?.snapshot.head ?? '',
+    fingerprint: repository?.snapshot.fingerprint ?? '',
+  };
+}
+
+function verdictLabel(verdict: VerdictDto, currentFingerprint: string | undefined): string {
+  const override = verdict.overrideReason ? ` · override: ${verdict.overrideReason}` : '';
+  const superseded =
+    verdict.snapshotFingerprint === currentFingerprint
+      ? ''
+      : ' · superseded by a later repository state';
+  return `${verdict.decision}${override}${superseded}`;
+}
+
 export function App() {
   const [initial] = useState(initialView);
   const [selectedId, setSelectedId] = useState(initial.reviewId);
@@ -76,6 +112,7 @@ export function App() {
   const [verdictIntent, setVerdictIntent] = useState<{
     decision: 'accepted' | 'changes-requested' | 'rejected';
     overrideRequired: boolean;
+    workItemId: string;
   } | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -96,9 +133,7 @@ export function App() {
     const next = await fetchBootstrap();
     setBootstrap(next);
     setConnectionState(next.mode === 'local' ? 'ready' : 'demo');
-    setSelectedId((current) =>
-      next.workItems.some((item) => item.id === current) ? current : (next.workItems[0]?.id ?? ''),
-    );
+    setSelectedId((current) => selectionAfterRefresh(current, next));
   };
 
   useEffect(() => {
@@ -110,7 +145,9 @@ export function App() {
           setBootstrap(next);
           setConnectionState(next.mode === 'local' ? 'ready' : 'demo');
           setServiceUnavailable(false);
-          if (next.mode === 'local' && next.workItems[0]) setSelectedId(next.workItems[0].id);
+          if (next.mode === 'local') {
+            setSelectedId((current) => selectionAfterRefresh(current, next));
+          }
         })
         .catch(() => {
           // Static/public deployments intentionally fall back to the labeled synthetic demo.
@@ -203,6 +240,15 @@ export function App() {
     ? (bootstrap?.checks.filter((check) => check.repositoryId === localRepository.id) ?? [])
     : [];
   const isLocal = bootstrap?.mode === 'local' && Boolean(localWorkItem);
+
+  // The dialog keeps the work item it was opened for, whatever the inbox selects meanwhile.
+  const openVerdict = (
+    decision: 'accepted' | 'changes-requested' | 'rejected',
+    overrideRequired = false,
+  ) => {
+    if (localWorkItem)
+      setVerdictIntent({ decision, overrideRequired, workItemId: localWorkItem.id });
+  };
 
   const performEvidenceAction = async () => {
     if (!bootstrap || !localWorkItem) return;
@@ -354,7 +400,7 @@ export function App() {
         item={selected}
         decision={
           localVerdict
-            ? `${localVerdict.decision}${localVerdict.overrideReason ? ` · override: ${localVerdict.overrideReason}` : ''}`
+            ? verdictLabel(localVerdict, localRepository?.snapshot.fingerprint)
             : (decisions[selected.id] ?? null)
         }
         {...(evidenceActionLabel ? { evidenceActionLabel } : {})}
@@ -365,7 +411,7 @@ export function App() {
         onViewContract={() => setWorkspaceSection('contracts')}
         onAccept={() => {
           if (isLocal) {
-            setVerdictIntent({ decision: 'accepted', overrideRequired: false });
+            openVerdict('accepted');
           } else {
             setDecisions((current) => ({
               ...current,
@@ -375,7 +421,7 @@ export function App() {
         }}
         onRequestChanges={() => {
           if (isLocal) {
-            setVerdictIntent({ decision: 'changes-requested', overrideRequired: false });
+            openVerdict('changes-requested');
           } else {
             setDecisions((current) => ({
               ...current,
@@ -385,7 +431,7 @@ export function App() {
         }}
         onReject={() => {
           if (isLocal) {
-            setVerdictIntent({ decision: 'rejected', overrideRequired: false });
+            openVerdict('rejected');
           } else {
             setDecisions((current) => ({
               ...current,
@@ -395,7 +441,7 @@ export function App() {
         }}
         {...(isLocal
           ? {
-              onOverride: () => setVerdictIntent({ decision: 'accepted', overrideRequired: true }),
+              onOverride: () => openVerdict('accepted', true),
             }
           : {})}
       />
@@ -420,10 +466,11 @@ export function App() {
           }}
         />
       )}
-      {bootstrap && localWorkItem && verdictIntent && (
+      {bootstrap && verdictIntent && (
         <VerdictDialog
           open
-          workItemId={localWorkItem.id}
+          workItemId={verdictIntent.workItemId}
+          subject={verdictSubject(bootstrap, verdictIntent.workItemId)}
           decision={verdictIntent.decision}
           overrideRequired={verdictIntent.overrideRequired}
           csrfToken={bootstrap.csrfToken}
