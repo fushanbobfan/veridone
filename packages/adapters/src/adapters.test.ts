@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -7,9 +7,17 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  absolutePathEntries,
   captureGitSnapshot,
+  environmentValue,
+  findOnPath,
+  gitEnvironment,
+  gitRuntime,
+  openGitSession,
+  parseConfigList,
   readHarnessReceipt,
   readReceiptCollection,
+  repositorySettings,
   resolveWithinApprovedRoots,
   runBoundedProcess,
 } from './index.js';
@@ -114,6 +122,138 @@ describe('bounded process execution', () => {
     });
     expect(spawnFailure).toMatchObject({ state: 'spawn-error', exitCode: null });
   });
+});
+
+async function committedRepository(
+  files: Record<string, string>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const repository = await temporaryDirectory();
+  const run = (args: string[]) => execFileAsync('git', args, { cwd: repository, env });
+  await run(['init', '-b', 'main']);
+  await run(['config', 'user.email', 'test@veridone.local']);
+  await run(['config', 'user.name', 'VeriDone Test']);
+  for (const [name, content] of Object.entries(files)) {
+    await writeFile(path.join(repository, name), content);
+  }
+  await run(['add', '-A']);
+  await run(['commit', '-m', 'fixture']);
+  return repository;
+}
+
+/** Moves a file's timestamps forward so Git has to compare its content with the index. */
+async function touchLater(file: string): Promise<void> {
+  const later = new Date(Date.now() + 60_000);
+  await utimes(file, later, later);
+}
+
+describe('Git invocation', () => {
+  it('resolves Git to an absolute executable and records its version', async () => {
+    const runtime = await gitRuntime();
+    expect(path.isAbsolute(runtime.executable)).toBe(true);
+    expect(runtime.version).toMatch(/^git version \d+\.\d+/u);
+  });
+
+  it('searches only absolute PATH entries for a command', async () => {
+    const first = await temporaryDirectory();
+    const second = await temporaryDirectory();
+    const fileName = process.platform === 'win32' ? 'veridone-tool.exe' : 'veridone-tool';
+    await writeFile(path.join(second, fileName), '');
+    await chmod(path.join(second, fileName), 0o755);
+    const searchPath = ['relative-bin', first, '', second].join(path.delimiter);
+
+    expect(absolutePathEntries(searchPath)).toEqual([first, second]);
+    await expect(findOnPath('veridone-tool', { PATH: searchPath })).resolves.toBe(
+      await realpath(path.join(second, fileName)),
+    );
+    // Windows reads environment names case-insensitively, as `Path` and `SystemRoot` show.
+    expect(environmentValue({ systemroot: 'C:\\Windows' }, 'SystemRoot')).toBe(
+      process.platform === 'win32' ? 'C:\\Windows' : undefined,
+    );
+  });
+
+  it('imposes a fixed configuration that outranks the repository files', async () => {
+    const runtime = await gitRuntime();
+    const listing = [
+      'filter.lfs.clean\ngit-lfs clean -- %f',
+      'core.autocrlf\ntrue',
+      'core.fsmonitor\n/usr/local/bin/hook',
+      'safe.directory\n*',
+      '',
+    ].join('\0');
+    const environment = gitEnvironment(runtime, repositorySettings(parseConfigList(listing), true));
+    const settings = Array.from({ length: Number(environment.GIT_CONFIG_COUNT) }, (_, index) => [
+      environment[`GIT_CONFIG_KEY_${index}`],
+      environment[`GIT_CONFIG_VALUE_${index}`],
+    ]);
+    const lastValue = (key: string) => settings.findLast(([name]) => name === key)?.[1];
+
+    expect(environment).toMatchObject({
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: runtime.emptyConfigFile,
+      GIT_OPTIONAL_LOCKS: '0',
+      GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_ALLOW_PROTOCOL: 'file',
+    });
+    expect(lastValue('core.fsmonitor')).toBe('false');
+    expect(lastValue('core.hooksPath')).toBe(runtime.hooksDirectory);
+    expect(lastValue('filter.lfs.clean')).toBe('');
+    expect(lastValue('filter.lfs.process')).toBe('');
+    expect(lastValue('filter.lfs.required')).toBe('false');
+    expect(lastValue('core.autocrlf')).toBe('true');
+    expect(lastValue('safe.directory')).toBe('*');
+  });
+
+  it('does not run a filter command that the repository configures', async () => {
+    const repository = await committedRepository({
+      '.gitattributes': '*.dat filter=example\n',
+      'data.dat': 'payload',
+    });
+    const configure = (args: string[]) => execFileAsync('git', args, { cwd: repository });
+    await configure(['config', 'filter.example.clean', 'veridone-missing-filter-command']);
+    await configure(['config', 'filter.example.required', 'true']);
+    await touchLater(path.join(repository, 'data.dat'));
+
+    // The operator's own Git tries to run the configured command and fails because it is missing.
+    await expect(configure(['status', '--porcelain'])).rejects.toThrow(/filter/u);
+    const result = await captureGitSnapshot(repository, {
+      approvedRoots: [repository],
+      contractVersion: '1',
+      checkDefinitionVersion: '1',
+    });
+    expect(result.snapshot.statusEntries).toEqual([]);
+  }, 20_000);
+
+  it('compares working files with the operator line-ending settings', async () => {
+    const operatorConfig = path.join(await temporaryDirectory(), 'operator.gitconfig');
+    await writeFile(operatorConfig, '[core]\n\tautocrlf = true\n');
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = operatorConfig;
+    try {
+      const repository = await committedRepository(
+        { 'notes.txt': 'first\r\nsecond\r\n' },
+        {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: operatorConfig,
+        },
+      );
+      await touchLater(path.join(repository, 'notes.txt'));
+
+      const captured = await captureGitSnapshot(repository, {
+        approvedRoots: [repository],
+        contractVersion: '1',
+        checkDefinitionVersion: '1',
+      });
+      expect(captured.snapshot.statusEntries).toEqual([]);
+      // Without the operator's settings the CRLF working file differs from its LF blob.
+      const fixedOnly = await openGitSession(repository, { operatorSettings: false });
+      const status = await fixedOnly.run(['status', '--porcelain=v1']);
+      expect(status.stdout.trim()).toBe('M notes.txt');
+    } finally {
+      if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previous;
+    }
+  }, 20_000);
 });
 
 describe('real adapters', () => {
