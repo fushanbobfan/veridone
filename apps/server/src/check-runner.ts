@@ -2,10 +2,17 @@ import path from 'node:path';
 
 import {
   captureGitSnapshot,
+  createCleanCheckout,
   resolveWithinApprovedRoots,
   runBoundedProcess,
 } from '@veridone/adapters';
-import { assessDeclaredScope, canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
+import {
+  assessDeclaredScope,
+  canonicalJson,
+  pathFromStatusEntry,
+  sha256Hex,
+  type CheckResult,
+} from '@veridone/core';
 
 import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
 
@@ -55,10 +62,6 @@ export async function runApprovedCheck(
     .filter((candidate) => candidate.repositoryId === repository.id);
   const checkDefinitionVersion = await aggregateCheckVersion(checks);
   const approvedRoots = database.listApprovedRoots().map((root) => root.path);
-  const workingDirectory = await resolveWithinApprovedRoots(
-    path.resolve(repository.path, check.cwdRelative),
-    [repository.path],
-  );
 
   const before = await captureGitSnapshot(repository.path, {
     approvedRoots,
@@ -71,36 +74,65 @@ export async function runApprovedCheck(
       'The work item binding is stale. Explicitly rebind it to the current repository state before running checks.',
     );
   }
+  if (before.snapshot.statusEntries.length > 0) {
+    throw new Error(
+      'The repository has uncommitted changes. Checks run on a clean checkout of the bound commit, so commit the work and rebind the claim before running checks.',
+    );
+  }
+  if (/^0+$/u.test(before.snapshot.head)) {
+    throw new Error('The repository has no commit to check out yet.');
+  }
 
-  const startedAt = new Date().toISOString();
-  const versionResult =
-    check.versionArgs.length === 0
-      ? null
-      : await runBoundedProcess({
-          executable: check.executable,
-          args: check.versionArgs,
-          cwd: workingDirectory,
-          timeoutMs: 5_000,
-          maxOutputBytes: 4_096,
-          env: minimalEnvironment(),
-          ...(signal ? { signal } : {}),
-        });
-  const toolVersion = versionResult
-    ? (redact(`${versionResult.stdout}\n${versionResult.stderr}`)
-        .trim()
-        .split(/\r?\n/u)[0]
-        ?.slice(0, 4_096) ?? null)
-    : null;
-  const result = await runBoundedProcess({
-    executable: check.executable,
-    args: check.args,
-    cwd: workingDirectory,
-    timeoutMs: check.timeoutMs,
-    maxOutputBytes: check.maxOutputBytes,
-    env: minimalEnvironment(),
-    ...(signal ? { signal } : {}),
-  });
-  const completedAt = new Date().toISOString();
+  // The check runs in a checkout VeriDone creates from the bound commit, so nothing in the
+  // operator's work tree, index, ignored files, or Git configuration can influence the result.
+  const checkout = await createCleanCheckout(
+    before.repositoryPath,
+    before.snapshot.head,
+    signal ? { signal } : {},
+  );
+  let startedAt: string;
+  let completedAt: string;
+  let toolVersion: string | null;
+  let result: Awaited<ReturnType<typeof runBoundedProcess>>;
+  let checkoutChanges: string[];
+  try {
+    const workingDirectory = await resolveWithinApprovedRoots(
+      path.resolve(checkout.directory, check.cwdRelative),
+      [checkout.directory],
+    );
+    startedAt = new Date().toISOString();
+    const versionResult =
+      check.versionArgs.length === 0
+        ? null
+        : await runBoundedProcess({
+            executable: check.executable,
+            args: check.versionArgs,
+            cwd: workingDirectory,
+            timeoutMs: 5_000,
+            maxOutputBytes: 4_096,
+            env: minimalEnvironment(),
+            ...(signal ? { signal } : {}),
+          });
+    toolVersion = versionResult
+      ? (redact(`${versionResult.stdout}\n${versionResult.stderr}`)
+          .trim()
+          .split(/\r?\n/u)[0]
+          ?.slice(0, 4_096) ?? null)
+      : null;
+    result = await runBoundedProcess({
+      executable: check.executable,
+      args: check.args,
+      cwd: workingDirectory,
+      timeoutMs: check.timeoutMs,
+      maxOutputBytes: check.maxOutputBytes,
+      env: minimalEnvironment(),
+      ...(signal ? { signal } : {}),
+    });
+    completedAt = new Date().toISOString();
+    checkoutChanges = await checkout.changes();
+  } finally {
+    await checkout.remove();
+  }
   const after = await captureGitSnapshot(repository.path, {
     approvedRoots,
     contractVersion: 'default-v1',
@@ -111,9 +143,14 @@ export async function runApprovedCheck(
   let checkResult: CheckResult =
     result.state === 'completed' ? (result.exitCode === 0 ? 'passed' : 'failed') : result.state;
   let invalidReason: string | null = null;
-  if (before.snapshot.fingerprint !== after.snapshot.fingerprint) {
+  if (checkoutChanges.length > 0) {
+    const changedPaths = [...new Set(checkoutChanges.map(pathFromStatusEntry))];
     checkResult = 'mutated';
-    invalidReason = 'The repository state changed while the check was running.';
+    invalidReason =
+      `The check changed files in its checkout: ${changedPaths.slice(0, 5).join(', ')}${changedPaths.length > 5 ? ', …' : ''}.`.slice(
+        0,
+        2_000,
+      );
   }
   const stdout = redact(result.stdout);
   const stderr = redact(result.stderr);
@@ -149,6 +186,7 @@ export async function runApprovedCheck(
     stderr,
     artifactHashes: [artifactHash],
     invalidReason,
+    isolation: 'clean-checkout',
   });
 }
 
@@ -189,6 +227,7 @@ export function acceptanceReadiness(
   const passing = latest.filter(
     (evidence) =>
       evidence.result === 'passed' &&
+      evidence.isolation === 'clean-checkout' &&
       evidence.snapshotFingerprint === repository.snapshot.fingerprint &&
       evidence.contractVersion === repository.snapshot.contractVersion &&
       evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&

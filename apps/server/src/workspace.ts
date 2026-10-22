@@ -91,6 +91,7 @@ const evidenceSchema = z.object({
   stderr: z.string().max(10_000_000),
   artifactHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/iu)).max(10_000),
   invalidReason: z.string().max(2_000).nullable(),
+  isolation: z.enum(['clean-checkout']).nullable().default(null),
 });
 
 const verdictSchema = z.object({
@@ -319,12 +320,12 @@ export async function importWorkspace(
         id, work_item_id, check_id, kind, label, result, repository_id,
         snapshot_fingerprint, head, contract_version, check_definition_version,
         started_at, completed_at, duration_ms, tool_version, exit_code, stdout, stderr,
-        artifact_hashes_json, invalid_reason
+        artifact_hashes_json, invalid_reason, isolation
       ) VALUES (
         @id, @workItemId, @checkId, @kind, @label, @result, @repositoryId,
         @snapshotFingerprint, @head, @contractVersion, @checkDefinitionVersion,
         @startedAt, @completedAt, @durationMs, @toolVersion, @exitCode, @stdout, @stderr,
-        @artifactHashesJson, @invalidReason
+        @artifactHashesJson, @invalidReason, @isolation
       ) ON CONFLICT(id) DO UPDATE SET
         work_item_id = excluded.work_item_id,
         check_id = excluded.check_id,
@@ -344,7 +345,8 @@ export async function importWorkspace(
         stdout = excluded.stdout,
         stderr = excluded.stderr,
         artifact_hashes_json = excluded.artifact_hashes_json,
-        invalid_reason = excluded.invalid_reason
+        invalid_reason = excluded.invalid_reason,
+        isolation = excluded.isolation
     `);
     for (const record of data.evidence) {
       insertEvidence.run({

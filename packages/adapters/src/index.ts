@@ -1,3 +1,4 @@
+export * from './checkout.js';
 export * from './executable.js';
 export * from './git.js';
 export * from './git-runtime.js';

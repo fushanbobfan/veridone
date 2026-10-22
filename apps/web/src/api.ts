@@ -108,6 +108,7 @@ export interface EvidenceDto {
   toolVersion: string | null;
   exitCode: number | null;
   invalidReason: string | null;
+  isolation: 'clean-checkout' | null;
 }
 
 export interface VerdictDto {

@@ -141,6 +141,11 @@ const migrationFour = `
   ALTER TABLE evidence ADD COLUMN exit_code INTEGER;
 `;
 
+// Evidence recorded before this migration ran in the operator's work tree and keeps a null isolation.
+const migrationFive = `
+  ALTER TABLE evidence ADD COLUMN isolation TEXT CHECK (isolation IN ('clean-checkout'));
+`;
+
 export interface ApprovedRootRecord {
   id: string;
   path: string;
@@ -223,6 +228,8 @@ export interface EvidenceRecord {
   stderr: string;
   artifactHashes: string[];
   invalidReason: string | null;
+  /** `clean-checkout` when the check ran in a verifier-owned checkout of the bound commit. */
+  isolation: 'clean-checkout' | null;
 }
 
 export interface VerdictRecord {
@@ -258,6 +265,7 @@ export class VeriDoneDatabase {
       { version: 2, sql: migrationTwo },
       { version: 3, sql: migrationThree },
       { version: 4, sql: migrationFour },
+      { version: 5, sql: migrationFive },
     ];
 
     for (const migration of migrations) {
@@ -651,12 +659,12 @@ export class VeriDoneDatabase {
           id, work_item_id, check_id, kind, label, result, repository_id,
           snapshot_fingerprint, head, contract_version, check_definition_version,
           started_at, completed_at, duration_ms, tool_version, exit_code, stdout, stderr,
-          artifact_hashes_json, invalid_reason
+          artifact_hashes_json, invalid_reason, isolation
         ) VALUES (
           @id, @workItemId, @checkId, @kind, @label, @result, @repositoryId,
           @snapshotFingerprint, @head, @contractVersion, @checkDefinitionVersion,
           @startedAt, @completedAt, @durationMs, @toolVersion, @exitCode, @stdout, @stderr,
-          @artifactHashesJson, @invalidReason
+          @artifactHashesJson, @invalidReason, @isolation
         )`,
       )
       .run({ ...record, artifactHashesJson: JSON.stringify(record.artifactHashes) });
@@ -692,6 +700,7 @@ export class VeriDoneDatabase {
       stderr: String(row.stderr),
       artifactHashes: JSON.parse(String(row.artifact_hashes_json)) as string[],
       invalidReason: row.invalid_reason === null ? null : String(row.invalid_reason),
+      isolation: row.isolation === 'clean-checkout' ? 'clean-checkout' : null,
     }));
   }
 

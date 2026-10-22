@@ -36,6 +36,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
     );
     const fresh =
       evidence?.result === 'passed' &&
+      evidence.isolation === 'clean-checkout' &&
       evidence.snapshotFingerprint === repository?.snapshot.fingerprint &&
       evidence.invalidReason === null;
     return { check, evidence, fresh };
@@ -101,7 +102,9 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
               : bindingFresh
                 ? checks.length === 0
                   ? 'The claim is bound, but no acceptance checks have been approved.'
-                  : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
+                  : (repository?.snapshot.statusEntries.length ?? 0) > 0
+                    ? 'The repository has uncommitted changes. Checks run on a clean checkout of the bound commit; commit the work and rebind.'
+                    : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
                 : 'The receipt is valid, but its claim is not bound to a repository snapshot.'),
     requiredSatisfied,
     requiredTotal,

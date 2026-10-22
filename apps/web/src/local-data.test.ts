@@ -9,6 +9,8 @@ const earlierFingerprint = 'b'.repeat(64);
 function workspace(options: {
   verdict?: Pick<VerdictDto, 'decision' | 'snapshotFingerprint'>;
   evidence?: boolean;
+  /** Evidence recorded before checks ran in a clean checkout carries no isolation. */
+  legacyEvidence?: boolean;
 }): BootstrapDto {
   return {
     mode: 'local',
@@ -89,6 +91,7 @@ function workspace(options: {
             toolVersion: 'v24.19.0',
             exitCode: 0,
             invalidReason: null,
+            isolation: options.legacyEvidence ? null : 'clean-checkout',
           },
         ]
       : [],
@@ -121,6 +124,13 @@ describe('local review state', () => {
 
   it('opens acceptance once every gate has fresh passing evidence', () => {
     expect(review({ evidence: true })).toMatchObject({ state: 'ready', gatesReady: true });
+  });
+
+  it('does not count evidence that did not run in a clean checkout', () => {
+    expect(review({ evidence: true, legacyEvidence: true })).toMatchObject({
+      state: 'blocked',
+      gatesReady: false,
+    });
   });
 
   it('keeps a verdict on the current state decided without locking acceptance', () => {
