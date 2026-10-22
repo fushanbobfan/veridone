@@ -56,6 +56,6 @@ JSON packet payloads include application/schema identity, strict privacy mode, d
 }
 ```
 
-The verifier recomputes canonical payload SHA-256 and checks that artifact hashes in evidence match the manifest. Raw stdout/stderr are excluded. Credential-shaped values and common absolute local paths are redacted from human text.
+The verifier recomputes canonical payload SHA-256 and checks that artifact hashes in evidence match the manifest. The checksum detects accidental changes; it is unsigned, so an edited packet with a recomputed checksum also verifies. Raw stdout/stderr are excluded. Credential-shaped values and common absolute local paths are redacted from human text.
 
 Markdown and standalone HTML carry the same claim, repository binding, contract, evidence results, tool versions, exit codes, verdict history, privacy declaration, and payload hash. Standalone HTML escapes all imported text and uses a default-deny CSP.

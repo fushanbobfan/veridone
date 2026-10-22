@@ -110,7 +110,9 @@ export function WorkspaceDialog({
             <Upload aria-hidden="true" size={18} />
             <span>
               <strong>{busy ? 'Verifying backup…' : 'Import and merge'}</strong>
-              <small>Invalid or tampered files roll back without a partial import.</small>
+              <small>
+                Invalid files and checksum mismatches roll back without a partial import.
+              </small>
             </span>
           </button>
           <input

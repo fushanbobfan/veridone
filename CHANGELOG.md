@@ -2,6 +2,23 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- A verdict is recorded on the work item the reviewer opened. The background refresh used to reset the selection to the first work item every 15 seconds, so a verdict written for one item could be recorded on another, and a local `?review=` deep link was lost on load.
+- The verdict dialog names the work item, repository, commit, and fingerprint it records against.
+- After the repository changes, an earlier verdict is marked superseded and the work item opens for a new decision. Accepting with every gate passing records a plain acceptance; the server stores an override reason only while required gates are open.
+- Light-theme status, kicker, and diff text use a darker accent that meets WCAG AA contrast.
+
+### Security
+
+- Updated `hono` to 4.13.13, `vite` to 8.1.6, `vitest` to 4.1.12, and `concurrently` to 10.0.6, and pinned patched transitive `undici`, `postcss`, `nanoid`, and `source-map-js`; `pnpm audit --audit-level low` reports no known vulnerabilities.
+
+### Documentation
+
+- Packet and workspace checksums are described as unsigned integrity checks; verdict history, fingerprint coverage, and the default contract are described as implemented; `docs/ACCEPTANCE.md` maps each criterion to its test or manual evidence.
+
 ## [1.1.0] - 2026-07-22
 
 ### Added

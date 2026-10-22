@@ -21,7 +21,7 @@ The public deployment runs the same client and domain behavior against a clearly
 
 - `apps/web` — responsive React UI, URL-backed review state, accessibility, and browser tests.
 - `apps/server` — loopback HTTP API, filesystem boundary, check process lifecycle, and persistence composition root.
-- `packages/core` — framework-independent domain types, fingerprints, freshness, priority, gates, verdicts, and export manifests.
+- `packages/core` — framework-independent domain types, repository fingerprints, and declared-scope checks. It also exports criterion, freshness, and triage evaluators that only its unit tests call so far.
 - `packages/adapters` — Git, portable/harness receipt, path-boundary, and bounded-process implementations.
 - `e2e` — isolated repository/receipt fixtures created at runtime plus browser acceptance tests.
 
@@ -41,11 +41,11 @@ An untrusted statement attributed to a source: tests passed, files changed, depl
 
 ### Repository snapshot
 
-A normalized, hashed record of repository identity, HEAD, branch, index/worktree status, relevant diff metadata, and configuration. It is the binding key for executable evidence.
+A normalized, hashed record of repository identity, HEAD, branch, index and worktree status, submodule status lines, and the content of changed and untracked files. Diff statistics are recorded beside it. It is the binding key for executable evidence.
 
 ### Acceptance contract
 
-Versioned criteria plus declared checks. Criteria can require one or more evidence kinds and can never be satisfied by claim text alone.
+v1 ships one default contract: every approved check for the repository needs fresh passing evidence, and claim text never satisfies it. Versioned criteria that accept specific evidence kinds exist in `packages/core` and are not wired into the product yet.
 
 ### Evidence
 
@@ -53,7 +53,7 @@ An immutable record with source, timestamps, snapshot binding, procedure, result
 
 ### Verdict
 
-An append-only human decision bound to a work item, contract version, snapshot, and selected evidence. Later state does not rewrite history.
+A human decision bound to a work item, contract version, snapshot, and selected evidence. The verdict API only appends. When the repository state changes, the review view marks the earlier verdict superseded and opens the item for a new decision. Workspace restore merges verdict rows by stable ID.
 
 ## Persistence
 
@@ -69,7 +69,7 @@ A repository content fingerprint includes:
 - HEAD commit;
 - index and worktree status entries;
 - submodule state when present;
-- raw staged diff and byte hashes for modified/untracked working files.
+- raw staged diff and byte hashes for modified and untracked working files; files matched by `.gitignore` are outside the fingerprint.
 
 Acceptance-policy versions are checked separately from repository content. Evidence is `fresh` only when repository identity, HEAD, content fingerprint, contract version, and aggregate check-definition version match and the check observed no mutation. It becomes `stale`, `mismatched`, `invalid`, or `unbound` for explainable reasons.
 

@@ -1,6 +1,6 @@
 # v1.1 executable acceptance criteria
 
-These criteria are release gates, not aspirations. Each ID must map to automated tests and final manual evidence.
+These criteria are release gates. The coverage map at the end lists the automated test or manual evidence for each ID and marks the gaps.
 
 ## Onboarding and import
 
@@ -24,17 +24,17 @@ These criteria are release gates, not aspirations. Each ID must map to automated
 - **VER-01:** A declared passing check captures command identity, tool version, timestamps, exit status, capped output, and artifact hashes.
 - **VER-02:** Failing, timed-out, cancelled, spawn-error, output-capped, and mutating checks produce distinct states.
 - **VER-03:** No check is spawned through a shell, and hostile arguments remain literal arguments.
-- **VER-04:** A repository change makes prior bound evidence stale immediately.
+- **VER-04:** A repository change makes prior bound evidence stale at the next snapshot refresh: every page load, the 15-second background refresh, and each check run.
 - **VER-05:** Evidence from a different commit, repo, contract, or check definition cannot satisfy a required gate.
 - **VER-06:** Parallel requests obey concurrency limits and cannot run an undeclared check ID.
 
 ## Verdict and export
 
-- **DEC-01:** Accept, Request changes, and Reject create append-only human decisions with notes and snapshot binding.
+- **DEC-01:** Accept, Request changes, and Reject each append a human decision with a note and snapshot binding; the verdict API never updates or deletes a verdict.
 - **DEC-02:** Acceptance is blocked when required gates are missing, failing, invalid, or stale; override requires an explicit recorded reason and is visually persistent.
-- **DEC-03:** Later repository state marks an old verdict superseded without altering its historical record.
+- **DEC-03:** Later repository state marks an old verdict superseded and reopens the work item for a new decision without altering the historical record.
 - **EXP-01:** JSON, Markdown, and sanitized standalone HTML packets contain the same verdict, criteria, evidence summary, provenance, and integrity manifest.
-- **EXP-02:** A verifier detects any changed artifact or manifest entry.
+- **EXP-02:** The verifier rejects a packet whose payload or artifact list differs from its stored SHA-256 checksum. The checksum is unsigned, so an editor who recomputes it also passes verification.
 - **EXP-03:** Export excludes secrets, absolute paths under privacy mode, database internals, and unselected raw artifacts.
 - **EXP-04:** Workspace export/import round-trips all supported domain data transactionally.
 
@@ -54,3 +54,45 @@ These criteria are release gates, not aspirations. Each ID must map to automated
 - **REL-04:** Dependency audit, secret scan, license policy, and CodeQL are green or have a documented, defensible exception.
 - **REL-05:** The public demo is accessible and labels every synthetic record as demo data.
 - **REL-06:** Installation, user guide, architecture, security, data format, contributing, dogfooding, and release documentation are complete for v1.1.
+
+## Coverage map
+
+Status as of 2026-10-22. **Automated** means a test drives the product path; **Partial** names what the tests leave out; **Manual** means release-checklist evidence only.
+
+| ID     | Status    | Evidence                                                                                                                                                                  |
+| ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ONB-01 | Automated | `e2e/local-flow.spec.ts` opens an empty workspace on loopback.                                                                                                            |
+| ONB-02 | Automated | `e2e/local-flow.spec.ts` approves a root, discovers and adds repositories.                                                                                                |
+| ONB-03 | Automated | `apps/server/src/server.test.ts` (atomic directory import), `packages/adapters/src/adapters.test.ts` (harness and portable receipts), `e2e/local-flow.spec.ts` (preview). |
+| ONB-04 | Partial   | Path, size, malformed-batch and body-limit tests run everywhere; the symlink-escape test runs on Linux and macOS only.                                                    |
+| ONB-05 | Partial   | `adapters.test.ts` imports a receipt carrying a command string; no test asserts that the process runner cannot receive it.                                                |
+| ONB-06 | Automated | `apps/web/src/components/RepositoryLinkDialog.test.tsx`, `e2e/local-flow.spec.ts` (decoy repository).                                                                     |
+| REV-01 | Partial   | `apps/web/src/local-data.test.ts` and `App.test.tsx` cover blocked, stale, ready, decided and superseded reasons; risk flags are untested.                                |
+| REV-02 | Automated | `App.test.tsx` (URL state), `e2e/verdict-binding.spec.ts` (a local deep link survives the background refresh).                                                            |
+| REV-03 | Manual    | Visual review.                                                                                                                                                            |
+| REV-04 | Automated | `adapters.test.ts` compares status entries and diff statistics with Git.                                                                                                  |
+| REV-05 | Partial   | `packages/core/src/core.test.ts` covers declared scope; the sensitive-path patterns are untested.                                                                         |
+| VER-01 | Automated | `server.test.ts` checks tool version, exit code and captured output.                                                                                                      |
+| VER-02 | Partial   | `adapters.test.ts` covers timeout, cancellation, spawn error and output cap; failing and mutating checks have no test.                                                    |
+| VER-03 | Automated | `adapters.test.ts` passes shell syntax as a literal argument.                                                                                                             |
+| VER-04 | Partial   | `e2e/verdict-binding.spec.ts` shows a binding going stale after a repository change; `core.test.ts` covers the core freshness evaluator, which the server does not call.  |
+| VER-05 | Partial   | Only the core evaluator in `core.test.ts`.                                                                                                                                |
+| VER-06 | Automated | `apps/server/src/check-execution.test.ts`.                                                                                                                                |
+| DEC-01 | Automated | `server.test.ts`, `apps/server/src/verdict.test.ts`.                                                                                                                      |
+| DEC-02 | Partial   | `server.test.ts` and `verdict.test.ts` cover the locked and override paths in the API; the persistent override display is untested.                                       |
+| DEC-03 | Automated | `local-data.test.ts`, `e2e/verdict-binding.spec.ts`.                                                                                                                      |
+| EXP-01 | Partial   | `server.test.ts` checks shared fields; the HTML packet omits the source and fingerprint lines that the Markdown packet carries.                                           |
+| EXP-02 | Partial   | `server.test.ts` rejects an edit made without recomputing the checksum; checksums are unsigned.                                                                           |
+| EXP-03 | Partial   | `server.test.ts` checks that an absolute path and a `password=` value are excluded; see [data formats](DATA_FORMAT.md) for the redaction rules.                           |
+| EXP-04 | Partial   | `server.test.ts` round-trips a workspace. Open: a receipt whose timestamp is not ISO 8601 imports and then makes workspace export fail.                                   |
+| UX-01  | Partial   | Desktop and Pixel 7 projects; 768 px is untested.                                                                                                                         |
+| UX-02  | Partial   | `App.test.tsx` covers dialog focus; full keyboard reachability is untested.                                                                                               |
+| UX-03  | Automated | axe scans in `local-flow`, `verdict-binding`, `demo` and `mobile` specs.                                                                                                  |
+| UX-04  | Partial   | `App.test.tsx` covers theme persistence; reduced motion is untested.                                                                                                      |
+| UX-05  | Partial   | `demo.spec.ts` and `mobile.spec.ts` cover the service-unavailable fallback.                                                                                               |
+| REL-01 | Partial   | CI frozen install and `scripts/smoke-built.mjs`; the first-workspace smoke is manual.                                                                                     |
+| REL-02 | Automated | `.github/workflows/ci.yml` on Ubuntu, Windows and macOS.                                                                                                                  |
+| REL-03 | Automated | Playwright projects in `playwright.config.ts`.                                                                                                                            |
+| REL-04 | Automated | `pnpm audit --audit-level low`, license and secret scripts, `.github/workflows/codeql.yml`.                                                                               |
+| REL-05 | Automated | `e2e/demo.spec.ts`.                                                                                                                                                       |
+| REL-06 | Manual    | Documentation review.                                                                                                                                                     |
