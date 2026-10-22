@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   absolutePathEntries,
   captureGitSnapshot,
+  createCleanCheckout,
   environmentValue,
   findOnPath,
   pinExecutable,
@@ -330,6 +331,26 @@ describe('real adapters', () => {
     expect(result.snapshot.submoduleEntries).toEqual([
       expect.stringMatching(new RegExp(`^${libraryHead} vendor/library`, 'u')),
     ]);
+  }, 30_000);
+
+  it('checks out a commit of a SHA-256 repository', async () => {
+    const repository = await temporaryDirectory();
+    const run = (args: string[]) => execFileAsync('git', args, { cwd: repository });
+    await run(['init', '-b', 'main', '--object-format=sha256']);
+    await run(['config', 'user.email', 'test@veridone.local']);
+    await run(['config', 'user.name', 'VeriDone Test']);
+    await writeFile(path.join(repository, 'README.md'), '# SHA-256\n');
+    await run(['add', 'README.md']);
+    await run(['commit', '-m', 'fixture']);
+    const head = (await run(['rev-parse', 'HEAD'])).stdout.trim();
+    expect(head).toHaveLength(64);
+
+    const checkout = await createCleanCheckout(repository, head);
+    try {
+      await expect(checkout.compare()).resolves.toEqual({ headMoved: false, changedPaths: [] });
+    } finally {
+      await checkout.remove();
+    }
   }, 30_000);
 
   it('captures an unborn Git repository without inventing a commit', async () => {

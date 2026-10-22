@@ -69,7 +69,12 @@ export async function createCleanCheckout(
   };
 
   try {
-    await git(['init', '--quiet', '--template=', directory], [['init.defaultBranch', 'review']]);
+    // A 64-digit object ID comes from a SHA-256 repository, which only fetches into another one.
+    const objectFormat = expectedCommit.length === 64 ? ['--object-format=sha256'] : [];
+    await git(
+      ['init', '--quiet', '--template=', ...objectFormat, directory],
+      [['init.defaultBranch', 'review']],
+    );
     if (process.platform === 'win32') {
       await git(['-C', directory, 'config', 'core.longpaths', 'true']);
     }
