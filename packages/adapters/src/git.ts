@@ -129,6 +129,12 @@ export async function captureGitSnapshot(
   // Submodule work trees are compared by commit only, so no command runs inside a submodule,
   // whose configuration VeriDone has not read.
   const diff = ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'];
+  // `git submodule` is a shell script that takes over a second to start on Windows; without a
+  // .gitmodules file it has nothing to report.
+  const declaresSubmodules = await lstat(path.join(repositoryPath, '.gitmodules')).then(
+    () => true,
+    () => false,
+  );
   const [head, branch, status, submodules, unstagedPaths, stagedPaths, untrackedPaths, cachedDiff] =
     await Promise.all([
       optionalGit(session, ['rev-parse', '--verify', 'HEAD']),
@@ -140,7 +146,7 @@ export async function captureGitSnapshot(
         '--untracked-files=all',
         '--ignore-submodules=dirty',
       ]),
-      git(session, ['submodule', 'status', '--recursive']),
+      declaresSubmodules ? git(session, ['submodule', 'status', '--recursive']) : '',
       git(session, [...diff, '--name-only', '-z', '--']),
       git(session, [...diff, '--cached', '--name-only', '-z', '--']),
       git(session, ['ls-files', '--others', '--exclude-standard', '-z']),

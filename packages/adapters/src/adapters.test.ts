@@ -299,6 +299,29 @@ describe('Git invocation', () => {
 });
 
 describe('real adapters', () => {
+  it('records submodule commits under the fixed Git configuration', async () => {
+    const library = await committedRepository({ 'library.txt': 'shared code\n' });
+    const repository = await committedRepository({ 'README.md': '# Parent\n' });
+    const run = (args: string[]) => execFileAsync('git', args, { cwd: repository });
+    // Git refuses local submodule URLs unless the file transport is allowed for the command.
+    await run(['-c', 'protocol.file.allow=always', 'submodule', 'add', library, 'vendor/library']);
+    await run(['commit', '-m', 'Add the library']);
+    const libraryHead = (
+      await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: library })
+    ).stdout.trim();
+
+    const result = await captureGitSnapshot(repository, {
+      approvedRoots: [repository],
+      contractVersion: '1',
+      checkDefinitionVersion: '1',
+    });
+
+    expect(result.snapshot.statusEntries).toEqual([]);
+    expect(result.snapshot.submoduleEntries).toEqual([
+      expect.stringMatching(new RegExp(`^${libraryHead} vendor/library`, 'u')),
+    ]);
+  }, 30_000);
+
   it('captures an unborn Git repository without inventing a commit', async () => {
     const repository = await temporaryDirectory();
     await execFileAsync('git', ['init', '-b', 'main'], { cwd: repository });
