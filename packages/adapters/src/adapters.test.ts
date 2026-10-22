@@ -218,9 +218,15 @@ describe('Git invocation', () => {
   it('imposes a fixed configuration that outranks the repository files', async () => {
     const runtime = await gitRuntime();
     const listing = [
+      'system',
       'filter.lfs.clean\ngit-lfs clean -- %f',
+      'system',
       'core.autocrlf\ntrue',
+      'local',
       'core.fsmonitor\n/usr/local/bin/hook',
+      'global',
+      'safe.directory\nD:/work/shared',
+      'local',
       'safe.directory\n*',
       '',
     ].join('\0');
@@ -244,7 +250,10 @@ describe('Git invocation', () => {
     expect(lastValue('filter.lfs.process')).toBe('');
     expect(lastValue('filter.lfs.required')).toBe('false');
     expect(lastValue('core.autocrlf')).toBe('true');
-    expect(lastValue('safe.directory')).toBe('*');
+    // Git ignores safe.directory in a repository's own file, so VeriDone carries only the operator's.
+    expect(settings.filter(([name]) => name === 'safe.directory')).toEqual([
+      ['safe.directory', 'D:/work/shared'],
+    ]);
   });
 
   it('does not run a filter command that the repository configures', async () => {

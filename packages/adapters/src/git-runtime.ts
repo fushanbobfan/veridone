@@ -125,31 +125,53 @@ function operatorEnvironment(): Record<string, string> {
   return environment;
 }
 
-export function parseConfigList(output: string): GitSetting[] {
-  return output
-    .split('\0')
-    .filter(Boolean)
-    .map((entry) => {
-      const newline = entry.indexOf('\n');
-      return newline === -1 ? [entry, 'true'] : [entry.slice(0, newline), entry.slice(newline + 1)];
-    });
+export interface ConfigEntry {
+  scope: string;
+  key: string;
+  value: string;
 }
+
+/** Parses `git config --list -z --show-scope`, which writes each scope and entry NUL-terminated. */
+export function parseConfigList(output: string): ConfigEntry[] {
+  const fields = output.split('\0');
+  const entries: ConfigEntry[] = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const scope = fields[index] ?? '';
+    const entry = fields[index + 1] ?? '';
+    const newline = entry.indexOf('\n');
+    entries.push(
+      newline === -1
+        ? { scope, key: entry, value: 'true' }
+        : { scope, key: entry.slice(0, newline), value: entry.slice(newline + 1) },
+    );
+  }
+  return entries;
+}
+
+// Git honours safe.directory only from these scopes; a repository cannot vouch for itself.
+const protectedScopes = new Set(['system', 'global', 'command']);
 
 /**
  * Turns a repository's configuration listing into command-scope settings: every filter driver it
- * defines is blanked, and with `operatorSettings` the comparison settings and safe directories
- * are carried over.
+ * defines is blanked, and with `operatorSettings` the effective comparison settings and the
+ * operator's own safe directories are carried over.
  */
-export function repositorySettings(entries: GitSetting[], operatorSettings: boolean): GitSetting[] {
+export function repositorySettings(
+  entries: ConfigEntry[],
+  operatorSettings: boolean,
+): GitSetting[] {
   const carried = new Map<string, string>();
   const safeDirectories: GitSetting[] = [];
   const drivers = new Set<string>();
-  for (const [key, value] of entries) {
+  for (const { scope, key, value } of entries) {
     const driver = /^filter\.(.+)\.(?:clean|smudge|process|required)$/su.exec(key)?.[1];
     if (driver) drivers.add(driver);
     if (!operatorSettings) continue;
-    if (key === 'safe.directory') safeDirectories.push([key, value]);
-    else if (comparisonSettings.has(key)) carried.set(key, value);
+    if (key === 'safe.directory') {
+      if (protectedScopes.has(scope)) safeDirectories.push([key, value]);
+    } else if (comparisonSettings.has(key)) {
+      carried.set(key, value);
+    }
   }
   if (drivers.size > maxFilterDrivers) {
     throw new GitAdapterError(
@@ -265,7 +287,7 @@ export async function openGitSession(
   const runtime = await gitRuntime();
   const listed = await runBoundedProcess({
     executable: runtime.executable,
-    args: ['-C', repositoryPath, 'config', '--list', '-z'],
+    args: ['-C', repositoryPath, 'config', '--list', '-z', '--show-scope'],
     cwd: runtime.workingDirectory,
     env: options.operatorSettings ? operatorEnvironment() : gitEnvironment(runtime, []),
     timeoutMs: 15_000,
