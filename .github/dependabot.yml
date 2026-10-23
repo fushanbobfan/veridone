@@ -4,7 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Dependabot leaves pnpm-lock.yaml untouched, so npm version updates stay paused. Alerts and
+    # security updates continue; regenerate the lockfile on a security update's branch before merging.
+    open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: /
     schedule:
