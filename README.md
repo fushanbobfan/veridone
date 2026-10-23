@@ -17,7 +17,7 @@ Most agent tools help start or observe work. VeriDone starts where they stop: de
 
 ## Why it exists
 
-An agent saying “tests pass” is a claim. VeriDone independently binds that claim to the current commit and byte-sensitive worktree fingerprint, runs only checks you explicitly approve, and locks acceptance when evidence is missing, failed, stale, mutated, or outside declared scope.
+An agent saying “tests pass” is a claim. VeriDone binds that claim to the current commit and a content fingerprint of the tracked and untracked files (files matched by `.gitignore` are outside it), runs only checks you explicitly approve, and locks acceptance when evidence is missing, failed, stale, mutated, or outside declared scope.
 
 The product keeps three ideas separate:
 
@@ -35,8 +35,8 @@ The product keeps three ideas separate:
 - Explainable review inbox with search, filters, sort, deep-link state, risk paths, and scope drift.
 - Allowlisted process execution with literal arguments, no shell, minimal environment, redaction, timeout, cancellation, output cap, concurrency limit, mutation detection, tool version, and exit code.
 - Explicit normal and override verdict paths with persistent reasons.
-- Deterministic JSON, Markdown, and standalone HTML acceptance packets with SHA-256 verification.
-- Transactional, integrity-checked workspace backup and restore.
+- Deterministic JSON, Markdown, and standalone HTML acceptance packets with a SHA-256 integrity checksum.
+- Transactional workspace backup and restore with a SHA-256 integrity checksum.
 - Responsive 360 px–desktop UX, light/dark/system themes, reduced motion, keyboard focus management, and automated WCAG 2.2 AA scans.
 - A clearly labeled, filesystem-free synthetic public demo.
 
@@ -67,13 +67,15 @@ pnpm start
 3. Link the claim to the current repository fingerprint.
 4. Approve one or more checks. Imported text is never executable policy.
 5. Run the checks, inspect risk/scope signals, and record a human verdict.
-6. Export an HTML packet for review or JSON for verification.
+6. Export an HTML packet for review or JSON for checksum verification.
 
-Verify a JSON packet without opening the UI:
+Check a JSON packet's checksum without opening the UI:
 
 ```bash
 pnpm verify:packet path/to/veridone-work-item.json
 ```
+
+The checksum detects accidental changes to a packet. It carries no signature: anyone who edits a packet can recompute it, so a packet vouches for its contents only when it reaches you through a channel you trust.
 
 ## Documentation
 

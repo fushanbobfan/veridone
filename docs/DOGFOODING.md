@@ -1,6 +1,6 @@
 # Maintainer dogfooding evidence
 
-On 2026-07-22, VeriDone was used against four separate public repositories in one local workspace. This was maintainer-run internal dogfooding, not external adoption. The purpose was to test the real multi-repository workflow, publish independently verifiable evidence, and let the product reveal its own next improvement.
+On 2026-07-22, VeriDone was used against four separate public repositories in one local workspace. This was internal dogfooding run by the maintainer; no external user took part. The purpose was to test the real multi-repository workflow, publish evidence whose checksums anyone can recompute, and let the product reveal its own next improvement.
 
 ## Method
 
@@ -25,7 +25,7 @@ No human verdict was recorded. Each packet deliberately contains `humanVerdict: 
 | [Useful Automation Lab](https://github.com/fushanbobfan/useful-automation-lab)       | `2549721dfd5fc1e4b31089fd0c2abcf4f51c2a29` |    77 | Python `3.14.5` | Passed; clean after run | [`fcbdcf…a7e3`](evidence/dogfood/useful-automation-lab-review-packet.json)    |
 | [Quant Research Micro Lab](https://github.com/fushanbobfan/quant-research-micro-lab) | `c9a9fca214cf45a10de4eb98574c92dd757f901e` |    62 | Python `3.14.5` | Passed; clean after run | [`d91cbb…97d2`](evidence/dogfood/quant-research-micro-lab-review-packet.json) |
 
-The run produced four fresh passing evidence records across 340 tests, four distinct commit-bound fingerprints, four verified packet manifests, zero repository mutations, and zero automated human verdicts.
+The run produced four fresh passing evidence records across 340 tests, four distinct commit-bound fingerprints, four packet checksums that pass the verifier, zero repository mutations, and zero automated human verdicts.
 
 ## Product finding
 

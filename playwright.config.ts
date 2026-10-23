@@ -55,6 +55,13 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
     {
+      // Shares the local service with chromium-local, so it starts after that empty-workspace flow.
+      name: 'chromium-verdicts',
+      testMatch: /verdict-binding\.spec\.ts/u,
+      dependencies: ['chromium-local'],
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
       name: 'chromium-demo',
       testMatch: /demo\.spec\.ts/u,
       use: { ...devices['Desktop Chrome'] },

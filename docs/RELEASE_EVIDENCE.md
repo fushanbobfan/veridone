@@ -21,7 +21,7 @@ This file maps the v1 release claim to reproducible evidence. A green badge is n
 | Public deployment         | [Public demo](https://github.com/fushanbobfan/veridone/actions/workflows/pages.yml) builds with an explicit project base path and deploys only the static client. The public UI labels all records synthetic.                                                                               |
 | Supply chain              | Exact versions and a frozen pnpm lockfile are committed; all production and development dependencies pass the low-threshold audit, and an approved-license allowlist, Dependabot, secret scanning, and push protection are enabled.                                                         |
 | Security boundary         | [Security audit](SECURITY_AUDIT.md) records remediated findings and residual boundaries; private vulnerability reporting is enabled.                                                                                                                                                        |
-| Real-project dogfooding   | [Maintainer dogfooding](DOGFOODING.md) records four fresh public clones, 340 independently executed tests, exact commit/fingerprint bindings, four verifiable strict-privacy packets, zero worktree mutations, and no automated human verdict.                                              |
+| Real-project dogfooding   | [Maintainer dogfooding](DOGFOODING.md) records four fresh public clones, 340 independently executed tests, exact commit/fingerprint bindings, four strict-privacy packets whose checksums pass the verifier, zero worktree mutations, and no automated human verdict.                       |
 
 ## Manual release checks
 

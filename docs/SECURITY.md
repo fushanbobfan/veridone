@@ -42,7 +42,7 @@ The local operator is trusted to approve roots, define checks, and issue verdict
 
 **Threat:** old results or edited artifacts are presented as current.
 
-**Control:** bind evidence to repository and check fingerprints, hash every artifact, verify on read/export/import, classify source provenance, and never upgrade unbound imported claims into executable evidence.
+**Control:** bind evidence to repository and check-definition fingerprints, hash each check result, recompute packet and workspace checksums when they are verified or imported, classify source provenance, and never upgrade unbound imported claims into executable evidence. The checksums detect accidental changes. They are unsigned, so a party who can edit a packet or backup can also recompute its checksum; trust exported files only through a channel you control.
 
 ### Check mutates the repository
 

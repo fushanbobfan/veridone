@@ -41,7 +41,7 @@ Acceptance is locked until required checks are fresh and passing and any declare
 
 ## 5. Decide
 
-**Accept**, **Request changes**, and **Reject** append a verdict bound to the current fingerprint and contract. Prior verdicts are never overwritten. A later repository change leaves history intact while making the old decision superseded for the new state.
+**Accept**, **Request changes**, and **Reject** append a verdict bound to the current fingerprint and contract. The verdict dialog names the work item, commit, and fingerprint it records against. Recording a decision never edits an earlier verdict. After the repository changes, the review view marks the earlier verdict superseded and the item can be decided again; the history keeps both.
 
 VeriDone never records an automated verdict. Even a fully green work item waits for a person.
 
@@ -49,7 +49,7 @@ VeriDone never records an automated verdict. Even a fully green work item waits 
 
 Use **Export packet** for a strict-privacy standalone HTML record. The workspace explorer offers HTML, Markdown, and JSON formats for decided items. JSON packets can be verified with `pnpm verify:packet`.
 
-The settings button opens workspace backup and restore. Backups include approved roots, local paths, checks, evidence, and verdicts. Imports validate schema and SHA-256 integrity first, then merge transactionally by stable ID without deleting existing data.
+The settings button opens workspace backup and restore. Backups include approved roots, local paths, checks, evidence, and verdicts. Imports validate schema and SHA-256 integrity first, then merge transactionally by stable ID without deleting existing data. A record in the backup replaces a local record with the same ID. The checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
 
 ## Keyboard and mobile use
 

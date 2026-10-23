@@ -331,7 +331,9 @@ export function createApp(options: AppOptions): Hono {
       snapshotFingerprint: repository.snapshot.fingerprint,
       contractVersion: repository.snapshot.contractVersion,
       evidenceIds: readiness.evidenceIds,
-      overrideReason: request.overrideReason,
+      // An override explains an acceptance with open gates; with every gate passing it is a plain acceptance.
+      overrideReason:
+        request.decision === 'accepted' && !readiness.ready ? request.overrideReason : null,
     });
     return context.json({ verdict, readiness }, 201);
   });

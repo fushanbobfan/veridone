@@ -17,6 +17,8 @@ export interface ReviewItem {
   head: string;
   source: string;
   state: ReviewState;
+  /** Every required gate has fresh passing evidence, whether or not a verdict exists. */
+  gatesReady: boolean;
   updatedLabel: string;
   updatedAt: string;
   reason: string;
@@ -44,6 +46,7 @@ export const demoReviews: ReviewItem[] = [
     head: '8b19f21a',
     source: 'Codex',
     state: 'stale',
+    gatesReady: false,
     updatedLabel: '8 min ago',
     updatedAt: '2026-07-21T20:52:00.000Z',
     reason: 'Two checks belong to the previous worktree fingerprint.',
@@ -105,6 +108,7 @@ export const demoReviews: ReviewItem[] = [
     head: 'f3c9e74b',
     source: 'Codex',
     state: 'ready',
+    gatesReady: true,
     updatedLabel: '21 min ago',
     updatedAt: '2026-07-21T20:39:00.000Z',
     reason: 'All required gates have fresh evidence. Human review remains.',
@@ -159,6 +163,7 @@ export const demoReviews: ReviewItem[] = [
     head: '2a74d88c',
     source: 'Claude Code',
     state: 'blocked',
+    gatesReady: false,
     updatedLabel: '47 min ago',
     updatedAt: '2026-07-21T20:13:00.000Z',
     reason: 'Focus does not return to the trigger after closing the evidence dialog.',
