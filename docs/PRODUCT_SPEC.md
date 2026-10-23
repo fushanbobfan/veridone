@@ -53,11 +53,11 @@ The review page shows:
 
 ### 4. Verify
 
-The maintainer selects declared checks and runs them. VeriDone uses argument arrays rather than shell strings, enforces time and output limits, captures tool versions and exit status, and binds results to a before/after repository fingerprint. A worktree mutation during a check invalidates the result.
+The maintainer selects declared checks and runs them. VeriDone runs each check in its own checkout of the bound commit, starts the tool file pinned at approval after verifying its SHA-256, passes literal argument arrays without a shell, enforces time and output limits, captures tool versions and exit status, and binds results to the repository fingerprint. A check that changes files in its checkout invalidates the result.
 
 ### 5. Decide
 
-The maintainer chooses Accept, Request changes, or Reject. VeriDone records the decision, note, timestamp, current repository fingerprint, and evidence set. If state changes later, the historical verdict remains visible but is marked superseded for the new state.
+The maintainer chooses Accept, Request changes, or Reject. VeriDone records the decision, note, timestamp, current repository fingerprint, claim hash, and evidence set, provided the state still matches what the maintainer saw when the verdict opened. If state changes later, the historical verdict remains visible but is marked superseded for the new state.
 
 ### 6. Export
 

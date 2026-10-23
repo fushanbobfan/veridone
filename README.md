@@ -17,7 +17,7 @@ Most agent tools help start or observe work. VeriDone starts where they stop: de
 
 ## Why it exists
 
-An agent saying “tests pass” is a claim. VeriDone binds that claim to the current commit and a content fingerprint of the tracked and untracked files (files matched by `.gitignore` are outside it), runs only checks you explicitly approve, and locks acceptance when evidence is missing, failed, stale, mutated, or outside declared scope.
+An agent saying “tests pass” is a claim. VeriDone binds that claim to the current commit and a content fingerprint of the tracked and untracked files (files matched by `.gitignore` are outside it), runs only checks you explicitly approve, each in its own checkout of the bound commit with a tool pinned by SHA-256, and locks acceptance when evidence is missing, failed, stale, mutated, or outside declared scope.
 
 The product keeps three ideas separate:
 
@@ -33,16 +33,17 @@ The product keeps three ideas separate:
 - Harness receipts plus a documented portable receipt for Codex, Claude Code, CI, and generic tools.
 - Explicit multi-repository claim binding with commit, path, dirty-state, and fingerprint confirmation.
 - Explainable review inbox with search, filters, sort, deep-link state, risk paths, and scope drift.
-- Allowlisted process execution with literal arguments, no shell, minimal environment, redaction, timeout, cancellation, output cap, concurrency limit, mutation detection, tool version, and exit code.
-- Explicit normal and override verdict paths with persistent reasons.
+- Approved checks run in a fresh checkout of the bound commit that VeriDone creates itself, never in the agent's work tree, with literal arguments, no shell, minimal environment, redaction, timeout, cancellation, output cap, concurrency limit, mutation detection, tool version, and exit code.
+- Check tools pinned at approval by path and SHA-256, verified before every run, and recorded with each result; Git started by absolute path with a fixed configuration.
+- Explicit normal and override verdict paths with persistent reasons. A verdict is recorded only if the repository, claim, and latest verdict still match what the reviewer saw, and the database keeps verdicts and evidence append-only.
 - Deterministic JSON, Markdown, and standalone HTML acceptance packets with a SHA-256 integrity checksum.
-- Transactional workspace backup and restore with a SHA-256 integrity checksum.
+- Transactional workspace backup with a SHA-256 integrity checksum, and a restore that adds missing records and leaves recorded verdicts and evidence as they are.
 - Responsive 360 px–desktop UX, light/dark/system themes, reduced motion, keyboard focus management, and automated WCAG 2.2 AA scans.
 - A clearly labeled, filesystem-free synthetic public demo.
 
 ## Quick start
 
-Prerequisites: Git, Node.js 22+, and pnpm 11.9.0.
+Prerequisites: Git 2.32+, Node.js 22+, and pnpm 11.9.0.
 
 ```bash
 git clone https://github.com/fushanbobfan/veridone.git
@@ -104,7 +105,7 @@ CI repeats the core suite on Windows, macOS, and Linux. CodeQL, dependency updat
 
 VeriDone has no telemetry and does not upload repositories. Workspace backups intentionally contain approved local paths and check definitions; the UI says so before export. Acceptance packets use strict privacy mode: raw process output, detected credentials, and common absolute local paths are excluded or redacted.
 
-VeriDone is not a sandbox for hostile executables. A check is a command the local operator explicitly authorizes. Run untrusted build tools in an OS/container sandbox appropriate to the repository.
+VeriDone is not a sandbox for hostile executables. A check is a command the local operator explicitly authorizes, and it runs code from the commit under review with the operator's permissions. The clean checkout keeps uncommitted and ignored files out of the result. Run untrusted build tools in an OS/container sandbox appropriate to the repository.
 
 ## License
 

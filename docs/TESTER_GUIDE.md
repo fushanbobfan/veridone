@@ -47,8 +47,8 @@ Open `http://127.0.0.1:4173`.
 
 4. Import the receipt. Confirm that the claim appears as reported context, not passing evidence.
 5. Select **Link to repository**. Inspect the branch, full commit, path, worktree state, and fingerprint, then choose the intended repository.
-6. Select **Approve a check**. Enter only a test command you already trust. VeriDone uses an executable plus a literal JSON argument array and never turns receipt text into a command.
-7. Run the approved check. Inspect the captured result, tool version, exit status, freshness, and scope signals.
+6. Select **Approve a check**. Enter only a test command you already trust. VeriDone uses an executable plus a literal JSON argument array, pins the executable file by its SHA-256, and never turns receipt text into a command.
+7. Run the approved check. It runs in a fresh checkout of the bound commit, so commit the work first. Inspect the captured result, tool version, exit status, freshness, and scope signals.
 8. Record a verdict only if the evidence supports your own decision. A green check must never decide for you.
 9. Export a JSON packet and run `pnpm verify:packet path/to/packet.json`.
 

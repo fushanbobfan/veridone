@@ -4,7 +4,7 @@
 
 - Windows 10/11, current macOS, or a maintained Linux distribution.
 - Node.js 22 or newer.
-- Git available on `PATH`.
+- Git 2.32 or newer, on an absolute `PATH` entry or named by `VERIDONE_GIT`.
 - pnpm 11.9.0. Corepack can activate it with `corepack prepare pnpm@11.9.0 --activate`.
 
 `better-sqlite3` ships prebuilt binaries for common platforms. A platform without a matching binary also needs the native build toolchain required by Node-API packages.
@@ -49,6 +49,7 @@ The database uses versioned migrations, foreign keys, WAL journaling, and normal
 | `VERIDONE_DEMO`            | unset                    | `1` reports demo service mode; hosted static demo normally needs no service. |
 | `VERIDONE_WEB_PORT`        | `4173`                   | Vite/preview port.                                                           |
 | `VERIDONE_API_PORT`        | `4317`                   | Vite proxy target.                                                           |
+| `VERIDONE_GIT`             | first `git` on `PATH`    | Absolute path of the Git executable VeriDone starts.                         |
 
 Remote binding, TLS termination, and multi-user authentication are deliberately unsupported in v1. The service refuses non-loopback hosts.
 
@@ -56,5 +57,5 @@ Remote binding, TLS termination, and multi-user authentication are deliberately 
 
 - **Local service unavailable:** confirm both ports are free and `pnpm dev` still runs. The UI deliberately falls back to visibly synthetic data instead of pretending it read local evidence.
 - **Repository rejected:** add its canonical parent as an approved root first. Symlinks resolving outside that root are rejected.
-- **Check cannot run:** rebind the work item after any worktree change, then verify that the executable is available in the minimal environment.
+- **Check cannot run:** commit the work, then rebind the work item; checks run on a clean checkout of the bound commit and refuse a work tree with uncommitted changes. If the message says the pinned tool changed or is missing, review the tool and choose **Pin tool again** under **Checks**. A check starts from the committed files alone, so it must install any dependencies it needs.
 - **Native SQLite install fails:** install the platform compiler toolchain or use a supported Node 22 build with a prebuilt binary.

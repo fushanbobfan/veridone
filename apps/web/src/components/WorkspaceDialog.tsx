@@ -132,8 +132,8 @@ export function WorkspaceDialog({
         <div className="safety-callout">
           <ShieldCheck aria-hidden="true" size={16} />
           <span>
-            Restore only adds records. Existing records stay as they are, and recorded evidence and
-            verdicts can be extended but never rewritten.
+            Restore adds the records this workspace lacks. Existing records, recorded evidence, and
+            verdicts keep their content.
           </span>
         </div>
         <div className="dialog-message" aria-live="polite">
