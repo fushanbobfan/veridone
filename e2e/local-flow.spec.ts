@@ -98,6 +98,16 @@ test('onboards, verifies, decides, and exports without trusting the claim', asyn
     .getByLabel('Literal argument array')
     .fill('["-e", "process.stdout.write(\\"verified\\")"]');
   await page.getByRole('button', { name: 'Approve definition' }).click();
+
+  // Approval pins the tool file; the workspace explorer shows which one.
+  await page.getByRole('button', { name: 'Checks', exact: true }).click();
+  const explorer = page.getByRole('dialog', { name: 'Inspect local review policy' });
+  await expect(explorer.getByText('Deterministic browser smoke check')).toBeVisible();
+  await expect(explorer.getByText('Pinned tool')).toBeVisible();
+  await expect(explorer.getByText(/not pinned/u)).toHaveCount(0);
+  await expectNoWcagViolations(page);
+  await explorer.getByRole('button', { name: 'Close workspace explorer' }).click();
+
   await page.getByRole('button', { name: 'Run approved checks' }).click();
 
   await expect(page.getByText('All required evidence is current')).toBeVisible();

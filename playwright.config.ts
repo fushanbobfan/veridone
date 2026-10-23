@@ -50,8 +50,10 @@ export default defineConfig({
   ],
   projects: [
     {
+      // The local projects write to one service's workspace, which a retry inherits, so a retry cannot pass.
       name: 'chromium-local',
       testMatch: /local-flow\.spec\.ts/u,
+      retries: 0,
       use: { ...devices['Desktop Chrome'] },
     },
     {
@@ -59,6 +61,7 @@ export default defineConfig({
       name: 'chromium-verdicts',
       testMatch: /verdict-binding\.spec\.ts/u,
       dependencies: ['chromium-local'],
+      retries: 0,
       use: { ...devices['Desktop Chrome'] },
     },
     {

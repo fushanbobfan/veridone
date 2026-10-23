@@ -5,7 +5,7 @@ export class PathBoundaryError extends Error {
   override readonly name = 'PathBoundaryError';
 }
 
-function isWithin(candidate: string, root: string): boolean {
+export function isWithin(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
   return (
     relative === '' ||

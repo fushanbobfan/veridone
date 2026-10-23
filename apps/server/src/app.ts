@@ -10,16 +10,17 @@ import { z } from 'zod';
 import {
   captureGitSnapshot,
   discoverGitRepositories,
+  pinExecutable,
   readReceiptCollection,
 } from '@veridone/adapters';
-import { canonicalJson, evidenceKindSchema, sha256Hex } from '@veridone/core';
 
 import { CheckCapacityError, CheckExecutionManager } from './check-execution.js';
+import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
 import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
 import type { ServerConfig } from './config.js';
-import type { VeriDoneDatabase } from './database.js';
+import { VerdictConflictError, type RepositoryRecord, type VeriDoneDatabase } from './database.js';
 import { buildAcceptancePacket } from './packet.js';
-import { exportWorkspace, importWorkspace } from './workspace.js';
+import { exportWorkspace, importWorkspace, WorkspaceConflictError } from './workspace.js';
 
 const rootRequestSchema = z.object({
   path: z.string().min(1).max(4_096),
@@ -29,39 +30,14 @@ const rootIdSchema = z.object({ rootId: z.string().uuid() });
 const repositoryRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const receiptRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const linkRequestSchema = z.object({ repositoryId: z.string().min(1).max(128) });
-const relativeScopePathSchema = z
-  .string()
-  .min(1)
-  .max(1_024)
-  .transform((value) => value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/$/u, ''))
-  .refine(
-    (value) =>
-      !path.isAbsolute(value) &&
-      value !== '..' &&
-      !value.startsWith('../') &&
-      !value.includes('/../'),
-    'Declared scope paths must remain inside the repository.',
-  );
-const checkRequestSchema = z.object({
-  repositoryId: z.string().min(1).max(128),
-  label: z.string().min(1).max(200),
-  kind: evidenceKindSchema,
-  executable: z.string().min(1).max(4_096),
-  args: z.array(z.string().max(4_096)).max(100),
-  versionArgs: z.array(z.string().max(4_096)).max(10).default(['--version']),
-  scopePaths: z.array(relativeScopePathSchema).max(100).default([]),
-  cwdRelative: z
-    .string()
-    .min(1)
-    .max(1_024)
-    .refine((value) => !path.isAbsolute(value), 'The check working directory must be relative.'),
-  timeoutMs: z
-    .number()
-    .int()
-    .min(100)
-    .max(30 * 60_000)
-    .default(120_000),
-  maxOutputBytes: z.number().int().min(1_024).max(10_000_000).default(1_000_000),
+// The tool file the operator reviewed; pinning records it only if it is still what resolves.
+const pinRequestSchema = z.object({
+  expected: z
+    .object({
+      path: z.string().min(1).max(4_096),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+    })
+    .strict(),
 });
 const runCheckRequestSchema = z.object({
   workItemId: z.string().uuid(),
@@ -71,6 +47,17 @@ const verdictRequestSchema = z.object({
   decision: z.enum(['accepted', 'changes-requested', 'rejected']),
   note: z.string().max(10_000).default(''),
   overrideReason: z.string().min(1).max(2_000).nullable().default(null),
+  // What the reviewer saw when the verdict opened; the verdict is recorded only while it holds.
+  expected: z
+    .object({
+      fingerprint: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/u)
+        .nullable(),
+      verdictId: z.string().uuid().nullable(),
+      claimHash: z.string().regex(/^[0-9a-f]{64}$/u),
+    })
+    .strict(),
 });
 
 export interface AppOptions {
@@ -100,23 +87,28 @@ export function createApp(options: AppOptions): Hono {
     }),
   );
 
-  const refreshKnownRepositories = async () => {
+  /** Captures a known repository again with its current check set and stores the snapshot. */
+  const recaptureRepository = async (repository: RepositoryRecord) => {
     const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
+    const checks = options.database
+      .listChecks()
+      .filter((check) => check.repositoryId === repository.id);
+    const captured = await captureGitSnapshot(repository.path, {
+      approvedRoots,
+      contractVersion: repository.snapshot.contractVersion,
+      checkDefinitionVersion:
+        checks.length > 0
+          ? await aggregateCheckVersion(checks)
+          : repository.snapshot.checkDefinitionVersion,
+    });
+    return options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
+  };
+
+  const refreshKnownRepositories = async () => {
     const results = await Promise.all(
       options.database.listRepositories().map(async (repository) => {
         try {
-          const checks = options.database
-            .listChecks()
-            .filter((check) => check.repositoryId === repository.id);
-          const captured = await captureGitSnapshot(repository.path, {
-            approvedRoots,
-            contractVersion: repository.snapshot.contractVersion,
-            checkDefinitionVersion:
-              checks.length > 0
-                ? await aggregateCheckVersion(checks)
-                : repository.snapshot.checkDefinitionVersion,
-          });
-          options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
+          await recaptureRepository(repository);
           return null;
         } catch (error) {
           return {
@@ -274,21 +266,59 @@ export function createApp(options: AppOptions): Hono {
 
   app.post('/api/v1/checks', async (context) => {
     const request = checkRequestSchema.parse(await context.req.json());
-    const definitionHash = await sha256Hex(canonicalJson(request));
-    const check = options.database.addCheck({ ...request, definitionHash });
     const repository = options.database.getRepository(request.repositoryId);
-    if (!repository) throw new Error('The repository does not exist.');
-    const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
-    const checks = options.database
-      .listChecks()
-      .filter((candidate) => candidate.repositoryId === repository.id);
-    const captured = await captureGitSnapshot(repository.path, {
-      approvedRoots,
-      contractVersion: repository.snapshot.contractVersion,
-      checkDefinitionVersion: await aggregateCheckVersion(checks),
+    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    // Approval pins the tool file it resolves to; each run verifies that file before starting it.
+    const tool = await pinExecutable(request.executable, { repositoryPath: repository.path });
+    const definition = { ...request, resolvedExecutable: tool.path, executableSha256: tool.sha256 };
+    const check = options.database.addCheck({
+      ...definition,
+      definitionHash: await checkDefinitionHash(definition),
     });
-    options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
+    await recaptureRepository(repository);
     return context.json({ check }, 201);
+  });
+
+  // The file that pinning would record now, so the operator can review it first.
+  app.get('/api/v1/checks/:id/tool', async (context) => {
+    const existing = options.database.getCheck(context.req.param('id'));
+    if (!existing) return context.json({ error: 'check_not_found' }, 404);
+    const repository = options.database.getRepository(existing.repositoryId);
+    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    return context.json({
+      tool: await pinExecutable(existing.executable, { repositoryPath: repository.path }),
+    });
+  });
+
+  app.post('/api/v1/checks/:id/pin', async (context) => {
+    const request = pinRequestSchema.parse(await context.req.json());
+    const existing = options.database.getCheck(context.req.param('id'));
+    if (!existing) return context.json({ error: 'check_not_found' }, 404);
+    const repository = options.database.getRepository(existing.repositoryId);
+    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    const tool = await pinExecutable(existing.executable, { repositoryPath: repository.path });
+    if (tool.path !== request.expected.path || tool.sha256 !== request.expected.sha256) {
+      return context.json(
+        {
+          error: 'tool_changed',
+          message:
+            'The tool file changed after it was reviewed. Review it again before pinning it.',
+          tool,
+        },
+        409,
+      );
+    }
+    const check = options.database.updateCheckPin(
+      existing.id,
+      tool,
+      await checkDefinitionHash({
+        ...existing,
+        resolvedExecutable: tool.path,
+        executableSha256: tool.sha256,
+      }),
+    );
+    await recaptureRepository(repository);
+    return context.json({ check });
   });
 
   app.post('/api/v1/checks/:id/run', async (context) => {
@@ -318,23 +348,30 @@ export function createApp(options: AppOptions): Hono {
     const request = verdictRequestSchema.parse(await context.req.json());
     const workItem = options.database.getWorkItem(workItemId);
     if (!workItem?.repositoryId) return context.json({ error: 'work_item_not_bound' }, 409);
-    const repository = options.database.getRepository(workItem.repositoryId);
-    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    const known = options.database.getRepository(workItem.repositoryId);
+    if (!known) return context.json({ error: 'repository_not_found' }, 404);
+    // The decision binds to the repository state captured at decision time.
+    const repository = await recaptureRepository(known);
+    // A changed state is the reason to report, ahead of any gate it may have reopened.
+    options.database.assertVerdictExpectation(workItemId, request.expected);
     const readiness = acceptanceReadiness(options.database, workItemId);
     if (request.decision === 'accepted' && !readiness.ready && !request.overrideReason) {
       return context.json({ error: 'required_gates_open', readiness }, 409);
     }
-    const verdict = options.database.recordVerdict({
-      workItemId,
-      decision: request.decision,
-      note: request.note,
-      snapshotFingerprint: repository.snapshot.fingerprint,
-      contractVersion: repository.snapshot.contractVersion,
-      evidenceIds: readiness.evidenceIds,
-      // An override explains an acceptance with open gates; with every gate passing it is a plain acceptance.
-      overrideReason:
-        request.decision === 'accepted' && !readiness.ready ? request.overrideReason : null,
-    });
+    const verdict = options.database.recordVerdict(
+      {
+        workItemId,
+        decision: request.decision,
+        note: request.note,
+        snapshotFingerprint: repository.snapshot.fingerprint,
+        contractVersion: repository.snapshot.contractVersion,
+        evidenceIds: readiness.evidenceIds,
+        // An override explains an acceptance with open gates; with every gate passing it is a plain acceptance.
+        overrideReason:
+          request.decision === 'accepted' && !readiness.ready ? request.overrideReason : null,
+      },
+      request.expected,
+    );
     return context.json({ verdict, readiness }, 201);
   });
 
@@ -362,6 +399,20 @@ export function createApp(options: AppOptions): Hono {
     }
     if (error instanceof CheckCapacityError) {
       return context.json({ error: 'check_capacity_reached', limit: error.limit }, 429);
+    }
+    if (error instanceof WorkspaceConflictError) {
+      return context.json({ error: 'workspace_conflict', message: error.message }, 409);
+    }
+    if (error instanceof VerdictConflictError) {
+      return context.json(
+        {
+          error: 'verdict_conflict',
+          reason: error.reason,
+          message: error.message,
+          current: error.current,
+        },
+        409,
+      );
     }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return context.json({ error: 'request_failed', message }, 400);

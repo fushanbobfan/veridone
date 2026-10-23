@@ -5,6 +5,56 @@ import { z } from 'zod';
 
 import { resolveWithinApprovedRoots } from './path-boundary.js';
 
+const isoTimestamp = z.string().datetime({ offset: true });
+// A date and time without a UTC offset, as some tools write them.
+const localTimestamp = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/u;
+
+/**
+ * Returns a receipt time as an ISO 8601 timestamp: unchanged when it already has a UTC offset,
+ * read as this machine's local time when it has none, and null when it is not a real time.
+ */
+export function normalizeReceiptTimestamp(value: string): string | null {
+  if (isoTimestamp.safeParse(value).success) return value;
+  const parts = localTimestamp.exec(value);
+  if (!parts) return null;
+  const [year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0] = parts
+    .slice(1, 7)
+    .map((part) => Number(part ?? 0));
+  const milliseconds = Math.floor(Number(`0.${parts[7] ?? '0'}`) * 1_000);
+  const date = new Date(year, month - 1, day, hour, minute, second, milliseconds);
+  // Date rolls an impossible day or a skipped hour into a neighbouring one; refuse those.
+  const matches =
+    date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day &&
+    date.getHours() === hour &&
+    date.getMinutes() === minute &&
+    date.getSeconds() === second;
+  return matches ? date.toISOString() : null;
+}
+
+/** Field rules a receipt shares with the workspace backup, so a receipt that imports also exports. */
+export const receiptFieldSchemas = {
+  runId: z.string().min(1).max(512),
+  status: z.string().min(1).max(200),
+  taskType: z.string().min(1).max(200),
+  title: z.string().min(1).max(300),
+  claim: z.string().min(1).max(20_000),
+  timestamp: isoTimestamp,
+};
+
+const receiptTimestamp = z.string().transform((value, context) => {
+  const normalized = normalizeReceiptTimestamp(value);
+  if (normalized === null) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Use an ISO 8601 timestamp such as 2026-07-21T20:00:00Z.',
+    });
+    return z.NEVER;
+  }
+  return normalized;
+});
+
 const stageSchema = z
   .object({
     name: z.string().optional(),
@@ -18,14 +68,14 @@ const stageSchema = z
 const harnessReceiptSchema = z
   .object({
     schema_version: z.union([z.string(), z.number()]),
-    run_id: z.string().min(1),
-    started_at: z.string(),
-    completed_at: z.string().optional(),
+    run_id: receiptFieldSchemas.runId,
+    started_at: receiptTimestamp,
+    completed_at: receiptTimestamp.optional(),
     duration_ms: z.number().nonnegative().optional(),
-    status: z.string().min(1),
+    status: receiptFieldSchemas.status,
     task: z
       .object({
-        type: z.string().min(1),
+        type: receiptFieldSchemas.taskType,
         mode: z.string().optional(),
         project_path: z.string().nullable().optional(),
       })
@@ -38,13 +88,13 @@ const harnessReceiptSchema = z
 const portableReceiptSchema = z
   .object({
     schema_version: z.union([z.string(), z.number()]),
-    run_id: z.string().min(1),
+    run_id: receiptFieldSchemas.runId,
     source: z.enum(['codex', 'claude-code', 'ci', 'generic', 'manual']).default('generic'),
-    title: z.string().min(1).max(300),
-    claim: z.string().min(1).max(20_000),
-    status: z.string().min(1),
-    started_at: z.string(),
-    completed_at: z.string().optional(),
+    title: receiptFieldSchemas.title,
+    claim: receiptFieldSchemas.claim,
+    status: receiptFieldSchemas.status,
+    started_at: receiptTimestamp,
+    completed_at: receiptTimestamp.optional(),
     stages: z.array(stageSchema).max(100).default([]),
   })
   .passthrough();
@@ -123,8 +173,12 @@ export async function readHarnessReceipt(
 
   const portableResult = portableReceiptSchema.safeParse(parsed);
   if (!portableResult.success) {
+    // Name the first problem in the format the file most resembles.
+    const resemblesPortable =
+      typeof parsed === 'object' && parsed !== null && ('title' in parsed || 'claim' in parsed);
+    const issue = (resemblesPortable ? portableResult.error : harnessResult.error)?.issues[0];
     throw new Error(
-      'The receipt matches neither the harness schema nor the VeriDone portable receipt schema.',
+      `The receipt matches neither the harness schema nor the VeriDone portable receipt schema.${issue ? ` ${issue.path.join('.') || 'receipt'}: ${issue.message}` : ''}`,
     );
   }
   const receipt = portableResult.data;

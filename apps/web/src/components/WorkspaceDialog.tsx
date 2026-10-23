@@ -38,8 +38,11 @@ export function WorkspaceDialog({
       const document = JSON.parse(await file.text()) as unknown;
       const result = await importWorkspaceDocument(document, bootstrap.csrfToken);
       await onImported();
-      const count = Object.values(result.imported).reduce((sum, value) => sum + value, 0);
-      setMessage(`Verified and merged ${count} records transactionally.`);
+      const total = (counts: Record<string, number>) =>
+        Object.values(counts).reduce((sum, value) => sum + value, 0);
+      setMessage(
+        `Added ${total(result.imported)} records; ${total(result.unchanged)} were already here. Restored evidence is history and passes no gate; pin restored checks before they run.`,
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The workspace could not be imported.');
     } finally {
@@ -109,9 +112,10 @@ export function WorkspaceDialog({
           >
             <Upload aria-hidden="true" size={18} />
             <span>
-              <strong>{busy ? 'Verifying backup…' : 'Import and merge'}</strong>
+              <strong>{busy ? 'Verifying backup…' : 'Restore missing records'}</strong>
               <small>
-                Invalid files and checksum mismatches roll back without a partial import.
+                Invalid files, checksum mismatches, and conflicting history roll back without a
+                partial import.
               </small>
             </span>
           </button>
@@ -127,7 +131,10 @@ export function WorkspaceDialog({
 
         <div className="safety-callout">
           <ShieldCheck aria-hidden="true" size={16} />
-          <span>Import merges by stable IDs. It never deletes existing workspace data.</span>
+          <span>
+            Restore adds the records this workspace lacks. Existing records, recorded evidence, and
+            verdicts keep their content.
+          </span>
         </div>
         <div className="dialog-message" aria-live="polite">
           {error && <span className="error-message">{error}</span>}

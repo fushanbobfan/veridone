@@ -9,6 +9,16 @@ const verdictNames: Record<VerdictDto['decision'], string> = {
   rejected: 'rejection',
 };
 
+/** The verdict at the head of a work item's chain. */
+export function latestVerdict(verdicts: VerdictDto[], workItemId: string): VerdictDto | undefined {
+  return verdicts
+    .filter((verdict) => verdict.workItemId === workItemId)
+    .reduce<VerdictDto | undefined>(
+      (latest, verdict) => (!latest || verdict.sequence > latest.sequence ? verdict : latest),
+      undefined,
+    );
+}
+
 function relativeTime(iso: string): string {
   const difference = Date.now() - new Date(iso).getTime();
   const minutes = Math.max(0, Math.round(difference / 60_000));
@@ -31,12 +41,19 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
   const isDegraded = receipt?.degraded ?? false;
   const checks = bootstrap.checks.filter((check) => check.repositoryId === item.repositoryId);
   const checkAssessments = checks.map((check) => {
-    const evidence = bootstrap.evidence.find(
+    // Restored evidence stays visible as history, but only this workspace's runs can pass a gate.
+    const runs = bootstrap.evidence.filter(
       (candidate) => candidate.workItemId === item.id && candidate.checkId === check.id,
     );
+    const evidence = runs.find((candidate) => candidate.origin === 'local') ?? runs[0];
+    // The same conditions the server's acceptance readiness applies.
     const fresh =
-      evidence?.result === 'passed' &&
+      evidence?.origin === 'local' &&
+      evidence.result === 'passed' &&
+      evidence.isolation === 'clean-checkout' &&
       evidence.snapshotFingerprint === repository?.snapshot.fingerprint &&
+      evidence.contractVersion === repository.snapshot.contractVersion &&
+      evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
       evidence.invalidReason === null;
     return { check, evidence, fresh };
   });
@@ -47,9 +64,9 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
   );
   const checksReady = checks.length > 0 && passingChecks === checks.length && scope.satisfied;
   const gatesReady = !isDegraded && bindingFresh && checksReady;
-  // Verdicts arrive newest first. A verdict decides the repository state it was recorded on;
-  // once that state changes, the verdict stays in the history and the item opens again.
-  const verdict = bootstrap.verdicts.find((candidate) => candidate.workItemId === item.id);
+  // A verdict decides the repository state it was recorded on; once that state changes, the
+  // verdict stays in the history and the item opens again.
+  const verdict = latestVerdict(bootstrap.verdicts, item.id);
   const verdictCurrent = Boolean(
     verdict && repository && verdict.snapshotFingerprint === repository.snapshot.fingerprint,
   );
@@ -101,7 +118,9 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
               : bindingFresh
                 ? checks.length === 0
                   ? 'The claim is bound, but no acceptance checks have been approved.'
-                  : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
+                  : (repository?.snapshot.statusEntries.length ?? 0) > 0
+                    ? 'The repository has uncommitted changes. Checks run on a clean checkout of the bound commit; commit the work and rebind.'
+                    : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
                 : 'The receipt is valid, but its claim is not bound to a repository snapshot.'),
     requiredSatisfied,
     requiredTotal,
@@ -147,9 +166,13 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
         : checkAssessments.map(({ check, evidence, fresh }) => ({
             id: check.id,
             title: check.label,
-            detail: evidence
-              ? `${evidence.result} · ${evidence.durationMs} ms · ${evidence.head.slice(0, 8)}`
-              : 'Approved, but not run for this work item',
+            detail: !check.executableSha256
+              ? 'Approved before tools were pinned; pin its tool again under Checks'
+              : evidence?.origin === 'imported'
+                ? `Restored from a backup (${evidence.result}); run the check here to count it`
+                : evidence
+                  ? `${evidence.result} · ${evidence.durationMs} ms · ${evidence.head.slice(0, 8)}${evidence.toolSha256 ? ` · tool ${evidence.toolSha256.slice(0, 8)}` : ''}`
+                  : 'Approved; run it for this work item to record evidence',
             state: fresh
               ? ('passed' as const)
               : evidence?.result === 'failed' || evidence?.result === 'mutated'

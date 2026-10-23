@@ -12,6 +12,8 @@ A new receipt is intentionally unbound. Select it and choose **Link to repositor
 
 The binding records the current content-sensitive repository fingerprint. It establishes which worktree the claim concerns; it does not turn the imported claim into proof. If the repository changes later, the claim and earlier evidence become stale until you explicitly rebind.
 
+Checks run on the bound commit, so commit the work before you bind it for checking. While the work tree has uncommitted changes, the review says so and checks refuse to start.
+
 ## 3. Approve checks
 
 Choose **Approve a check** and enter:
@@ -24,7 +26,11 @@ Choose **Approve a check** and enter:
 
 The entire definition is versioned. Editing policy means approving a new definition and invalidates evidence produced for the old check set.
 
-Checks run without a shell, receive a minimal environment, and are bounded by a two-minute default timeout and 1 MB output cap. Two checks may run concurrently per service process. A running check exposes a cancel action. Cancellation, timeout, spawn error, output cap, ordinary failure, and repository mutation remain distinct evidence states.
+Name the executable by an absolute path or by a command name on `PATH`. Approval pins it: VeriDone resolves it once to a file outside the repository and records that file's SHA-256 in the definition. On Windows the file must be an `.exe` or `.com`; run scripts through an interpreter, such as `node scripts/test.mjs`. **Checks** in the navigation lists every check with its pinned tool, arguments, and hash. When a tool is updated, the next run refuses to start. Choose **Pin tool again** to see the file and SHA-256 that would be pinned, check them, and choose **Pin this file**; if a different file resolves by then, VeriDone refuses and you review again. Pinning a different file is a new definition, so evidence from the old tool stops counting.
+
+Each run happens in a fresh checkout of the bound commit that VeriDone creates in a temporary directory and removes afterwards. The checkout holds the committed files only: no uncommitted changes, ignored files, build output, installed dependencies, or submodules. A check that needs dependencies installs them itself, for example with a package manager command that installs from the lockfile and then runs the tests.
+
+Checks run without a shell, receive a minimal environment, and are bounded by a two-minute default timeout and 1 MB output cap. Two checks may run concurrently per service process. A running check exposes a cancel action. Cancellation, timeout, spawn error, output cap, ordinary failure, and a check that changes files in its checkout remain distinct evidence states.
 
 ## 4. Read readiness
 
@@ -43,13 +49,15 @@ Acceptance is locked until required checks are fresh and passing and any declare
 
 **Accept**, **Request changes**, and **Reject** append a verdict bound to the current fingerprint and contract. The verdict dialog names the work item, commit, and fingerprint it records against. Recording a decision never edits an earlier verdict. After the repository changes, the review view marks the earlier verdict superseded and the item can be decided again; the history keeps both.
 
+The dialog holds on to the state it showed when it opened: the repository fingerprint, the claim, and the latest verdict. If any of them changes before you record your decision, the dialog says so and the service refuses the verdict; close the dialog, review the current state, and decide again.
+
 VeriDone never records an automated verdict. Even a fully green work item waits for a person.
 
 ## 6. Export or move the workspace
 
 Use **Export packet** for a strict-privacy standalone HTML record. The workspace explorer offers HTML, Markdown, and JSON formats for decided items. JSON packets can be verified with `pnpm verify:packet`.
 
-The settings button opens workspace backup and restore. Backups include approved roots, local paths, checks, evidence, and verdicts. Imports validate schema and SHA-256 integrity first, then merge transactionally by stable ID without deleting existing data. A record in the backup replaces a local record with the same ID. The checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
+The settings button opens workspace backup and restore. Backups include approved roots, local paths, checks, evidence, and verdicts. Restore validates the schema and SHA-256 integrity first, then adds the records the workspace lacks in one transaction. Records that already exist stay as they are, recorded verdicts and evidence keep their content, and a backup that conflicts with them is refused as a whole. Restored evidence stays visible as history but passes no gate, so run the checks again, and pin the tools of restored checks before they run. The checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
 
 ## Keyboard and mobile use
 

@@ -1,110 +1,47 @@
-import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createApp } from './app.js';
-import { VeriDoneDatabase } from './database.js';
+import { VerdictConflictError } from './database.js';
+import { buildAcceptancePacket } from './packet.js';
+import { boundWorkspace } from './test-fixtures.js';
 
-const execFileAsync = promisify(execFile);
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function boundWorkItem() {
-  const directory = await mkdtemp(path.join(tmpdir(), 'veridone-verdict-'));
-  const database = new VeriDoneDatabase(':memory:');
-  cleanups.push(async () => {
-    database.close();
-    await rm(directory, { recursive: true, force: true });
-  });
-  const csrfToken = 'test-token';
-  const app = createApp({
-    database,
-    csrfToken,
-    config: {
-      host: '127.0.0.1',
-      port: 4317,
-      dataDirectory: directory,
-      databasePath: ':memory:',
-      allowedOrigins: ['http://127.0.0.1:4173'],
-      demoMode: false,
-    },
-  });
-  const post = async <T>(url: string, body: unknown): Promise<{ status: number; body: T }> => {
-    const response = await app.request(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-VeriDone-CSRF': csrfToken },
-      body: JSON.stringify(body),
-    });
-    return { status: response.status, body: (await response.json()) as T };
-  };
-
-  const repositoryPath = path.join(directory, 'repository');
-  await mkdir(repositoryPath);
-  await execFileAsync('git', ['init', '-b', 'main'], { cwd: repositoryPath });
-  await execFileAsync('git', ['config', 'user.email', 'test@veridone.local'], {
-    cwd: repositoryPath,
-  });
-  await execFileAsync('git', ['config', 'user.name', 'VeriDone Test'], { cwd: repositoryPath });
-  await writeFile(path.join(repositoryPath, 'README.md'), '# Fixture\n');
-  await execFileAsync('git', ['add', 'README.md'], { cwd: repositoryPath });
-  await execFileAsync('git', ['commit', '-m', 'fixture'], { cwd: repositoryPath });
-  const receiptPath = path.join(directory, 'receipt.json');
-  await writeFile(
-    receiptPath,
-    JSON.stringify({
-      schema_version: 1,
-      run_id: 'verdict-run',
-      source: 'codex',
-      title: 'Fix the importer',
-      claim: 'The importer is fixed.',
-      status: 'complete',
-      started_at: '2026-10-22T10:00:00.000Z',
-    }),
-  );
-
-  await post('/api/v1/roots', { path: directory });
-  const { repository } = (
-    await post<{ repository: { id: string } }>('/api/v1/repositories', { path: repositoryPath })
-  ).body;
-  const { imported } = (
-    await post<{ imported: Array<{ workItem: { id: string } }> }>('/api/v1/receipts/import', {
-      path: receiptPath,
-    })
-  ).body;
-  const workItemId = imported[0]?.workItem.id ?? '';
-  await post(`/api/v1/work-items/${workItemId}/link`, { repositoryId: repository.id });
-  const { check } = (
-    await post<{ check: { id: string } }>('/api/v1/checks', {
-      repositoryId: repository.id,
-      label: 'Deterministic check',
-      kind: 'test',
-      executable: process.execPath,
-      args: ['-e', 'process.stdout.write("verified")'],
-      cwdRelative: '.',
-      timeoutMs: 10_000,
-      maxOutputBytes: 10_000,
-    })
-  ).body;
-
-  return { post, workItemId, checkId: check.id };
+async function workspace() {
+  const fixture = await boundWorkspace();
+  cleanups.push(fixture.cleanup);
+  return fixture;
 }
 
-type VerdictResponse = { verdict: { overrideReason: string | null } };
+interface VerdictResponse {
+  verdict: {
+    id: string;
+    overrideReason: string | null;
+    sequence: number;
+    previousVerdictId: string | null;
+    claimHash: string | null;
+  };
+}
+
+interface ConflictResponse {
+  error: string;
+  reason: string;
+  message: string;
+}
 
 describe('verdict recording', () => {
   it('records an override reason only when required gates are open', async () => {
-    const { post, workItemId, checkId } = await boundWorkItem();
+    const { post, workItemId, approveCheck, decide } = await workspace();
+    const checkId = await approveCheck('process.stdout.write("verified")');
 
-    const overridden = await post<VerdictResponse>(`/api/v1/work-items/${workItemId}/verdicts`, {
-      decision: 'accepted',
-      note: 'Accepted before the check ran.',
+    const overridden = await decide<VerdictResponse>('accepted', 'Accepted before the check ran.', {
       overrideReason: 'The maintainer reviewed the diff by hand.',
     });
     expect(overridden.status).toBe(201);
@@ -117,12 +54,145 @@ describe('verdict recording', () => {
     });
     expect(run.body.readiness.ready).toBe(true);
 
-    const accepted = await post<VerdictResponse>(`/api/v1/work-items/${workItemId}/verdicts`, {
-      decision: 'accepted',
-      note: 'Accepted with fresh passing evidence.',
-      overrideReason: 'Sent by a client that thought the gates were open.',
-    });
+    const accepted = await decide<VerdictResponse>(
+      'accepted',
+      'Accepted with fresh passing evidence.',
+      { overrideReason: 'Sent by a client that thought the gates were open.' },
+    );
     expect(accepted.status).toBe(201);
     expect(accepted.body.verdict.overrideReason).toBeNull();
-  }, 20_000);
+  }, 30_000);
+
+  it('records the claim it judged and the verdict it supersedes', async () => {
+    const { decide, expectedState } = await workspace();
+
+    const first = await decide<VerdictResponse>('changes-requested', 'Add a regression test.');
+    const second = await decide<VerdictResponse>('rejected', 'The test is still missing.');
+
+    expect(first.body.verdict).toMatchObject({ sequence: 1, previousVerdictId: null });
+    expect(second.body.verdict).toMatchObject({
+      sequence: 2,
+      previousVerdictId: first.body.verdict.id,
+      claimHash: (await expectedState()).claimHash,
+    });
+  }, 30_000);
+  it('heads the packet with the latest verdict of the chain, whatever the clocks recorded', async () => {
+    const fixture = await workspace();
+    await fixture.decide('changes-requested', 'Add a regression test.');
+    const first = fixture.database.latestVerdict(fixture.workItemId);
+    if (!first) throw new Error('The verdict was not recorded.');
+    fixture.database.appendVerdict({
+      ...first,
+      id: randomUUID(),
+      decision: 'rejected',
+      note: 'Recorded on a machine whose clock ran behind.',
+      decidedAt: '2020-01-01T00:00:00.000Z',
+      sequence: 2,
+      previousVerdictId: first.id,
+    });
+
+    const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+
+    expect(packet.verdicts.map((verdict) => verdict.decision)).toEqual([
+      'rejected',
+      'changes-requested',
+    ]);
+  }, 30_000);
+});
+
+describe('verdicts are compare-and-swap writes', () => {
+  it('refuses a verdict on a repository state the reviewer did not see', async () => {
+    const fixture = await workspace();
+    const expected = await fixture.expectedState();
+    // No refresh runs between the change and the decision; the verdict request captures it.
+    await writeFile(path.join(fixture.repositoryPath, 'later.txt'), 'written after review\n');
+
+    const response = await fixture.decide<ConflictResponse>('rejected', 'Rejecting what I saw.', {
+      expected,
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: 'verdict_conflict',
+      reason: 'repository-changed',
+    });
+    expect(fixture.database.listVerdicts(fixture.workItemId)).toEqual([]);
+  }, 30_000);
+
+  it('refuses a verdict when another one was recorded after the reviewer looked', async () => {
+    const fixture = await workspace();
+    const expected = await fixture.expectedState();
+
+    const first = await fixture.decide('changes-requested', 'First reviewer.', { expected });
+    const late = await fixture.decide<ConflictResponse>('rejected', 'Second reviewer.', {
+      expected,
+    });
+
+    expect(first.status).toBe(201);
+    expect(late.status).toBe(409);
+    expect(late.body.reason).toBe('verdict-changed');
+    expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
+  }, 30_000);
+
+  it('refuses a verdict when the claim changed after the reviewer read it', async () => {
+    const fixture = await workspace();
+    const expected = await fixture.expectedState();
+    await fixture.writeReceipt('The importer is fixed and also faster.');
+    expect((await fixture.importReceipt()).status).toBe(201);
+
+    const response = await fixture.decide<ConflictResponse>('rejected', 'Judged the old claim.', {
+      expected,
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body.reason).toBe('claim-changed');
+  }, 30_000);
+
+  it('records exactly one of two verdicts sent against the same state', async () => {
+    const fixture = await workspace();
+    const expected = await fixture.expectedState();
+
+    const responses = await Promise.all([
+      fixture.decide('rejected', 'Reviewer A.', { expected }),
+      fixture.decide('changes-requested', 'Reviewer B.', { expected }),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+    expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
+  }, 30_000);
+
+  it('refuses the second of two verdicts expecting the same state inside one store transaction', async () => {
+    const fixture = await workspace();
+    const expected = await fixture.expectedState();
+    const verdict = {
+      workItemId: fixture.workItemId,
+      decision: 'rejected' as const,
+      note: 'Reviewer A.',
+      snapshotFingerprint: expected.fingerprint ?? '',
+      contractVersion: 'default-v1',
+      evidenceIds: [],
+      overrideReason: null,
+    };
+
+    fixture.database.recordVerdict(verdict, expected);
+
+    expect(() =>
+      fixture.database.recordVerdict({ ...verdict, note: 'Reviewer B.' }, expected),
+    ).toThrow(VerdictConflictError);
+    expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
+  }, 30_000);
+
+  it('keeps the claim of a work item that already has a verdict', async () => {
+    const fixture = await workspace();
+    await fixture.decide('changes-requested', 'Needs a regression test.');
+    await fixture.writeReceipt('A different claim under the same run.');
+
+    const reimport = await fixture.importReceipt();
+
+    expect(reimport.status).toBe(400);
+    expect(reimport.body).toMatchObject({
+      message: expect.stringMatching(/already has a verdict/u),
+    });
+    expect(fixture.database.getWorkItem(fixture.workItemId)?.claim).toBe('The importer is fixed.');
+  }, 30_000);
 });

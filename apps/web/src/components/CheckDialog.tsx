@@ -23,7 +23,7 @@ export function CheckDialog({
   const [label, setLabel] = useState('Unit and integration tests');
   const [kind, setKind] = useState('test');
   const [executable, setExecutable] = useState('node');
-  const [args, setArgs] = useState('["node_modules/vitest/vitest.mjs", "run"]');
+  const [args, setArgs] = useState('["--test"]');
   const [versionArgs, setVersionArgs] = useState('["--version"]');
   const [scopePaths, setScopePaths] = useState('');
   const [cwdRelative, setCwdRelative] = useState('.');

@@ -43,6 +43,8 @@ export function AddSourceDialog({
   const labelId = useId();
   const firstButton = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLElement>(null);
+  // Counts discoveries; only the latest one may fill the list, so a late answer is dropped.
+  const discoveryRun = useRef(0);
   const [kind, setKind] = useState<SourceKind>('root');
   const [path, setPath] = useState('');
   const [label, setLabel] = useState('');
@@ -79,8 +81,10 @@ export function AddSourceDialog({
       await onAdded();
       setState('success');
       window.setTimeout(() => {
+        discoveryRun.current += 1;
         setPath('');
         setLabel('');
+        setDiscovered([]);
         setReceiptPreview(null);
         setState('idle');
         onClose();
@@ -93,16 +97,23 @@ export function AddSourceDialog({
 
   const discover = async () => {
     if (!discoveryRootId) return;
+    const run = ++discoveryRun.current;
     setDiscovering(true);
+    // The previous list stays hidden until this discovery answers, so nothing is chosen from it.
+    setDiscovered([]);
     setError(null);
     try {
       const repositories = await discoverRepositories(discoveryRootId, csrfToken);
+      if (run !== discoveryRun.current) return;
       setDiscovered(repositories);
-      if (repositories[0]) setPath(repositories[0]);
+      setPath((current) =>
+        repositories.includes(current) ? current : (repositories[0] ?? current),
+      );
     } catch (caught) {
+      if (run !== discoveryRun.current) return;
       setError(caught instanceof Error ? caught.message : 'Repository discovery failed.');
     } finally {
-      setDiscovering(false);
+      if (run === discoveryRun.current) setDiscovering(false);
     }
   };
 

@@ -23,6 +23,8 @@ export interface RepositoryDto {
       untrackedFiles: number;
     };
     fingerprint: string;
+    contractVersion: string;
+    checkDefinitionVersion: string;
     capturedAt: string;
   };
   updatedAt: string;
@@ -67,6 +69,7 @@ export interface WorkItemDto {
   updatedAt: string;
   snapshotFingerprint: string | null;
   humanVerdict: 'accepted' | 'changes-requested' | 'rejected' | null;
+  claimHash: string;
 }
 
 export interface ContractDto {
@@ -89,6 +92,8 @@ export interface CheckDto {
   cwdRelative: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  resolvedExecutable: string | null;
+  executableSha256: string | null;
   definitionHash: string;
   approvedAt: string;
 }
@@ -103,11 +108,17 @@ export interface EvidenceDto {
   repositoryId: string;
   snapshotFingerprint: string;
   head: string;
+  contractVersion: string;
+  checkDefinitionVersion: string;
   completedAt: string;
   durationMs: number;
   toolVersion: string | null;
   exitCode: number | null;
   invalidReason: string | null;
+  isolation: 'clean-checkout' | null;
+  toolPath: string | null;
+  toolSha256: string | null;
+  origin: 'local' | 'imported';
 }
 
 export interface VerdictDto {
@@ -118,6 +129,16 @@ export interface VerdictDto {
   decidedAt: string;
   snapshotFingerprint: string;
   overrideReason: string | null;
+  sequence: number;
+  previousVerdictId: string | null;
+  claimHash: string | null;
+}
+
+/** The state a reviewer saw when a verdict opened; the server records the verdict only while it holds. */
+export interface VerdictExpectation {
+  fingerprint: string | null;
+  verdictId: string | null;
+  claimHash: string;
 }
 
 export interface BootstrapDto {
@@ -227,6 +248,25 @@ export async function createCheck(input: NewCheckInput, csrfToken: string): Prom
   await mutate('/api/v1/checks', csrfToken, input);
 }
 
+export interface ToolCandidate {
+  path: string;
+  sha256: string;
+}
+
+/** The tool file that pinning the check would record now. */
+export async function fetchToolCandidate(checkId: string): Promise<ToolCandidate> {
+  return (await request<{ tool: ToolCandidate }>(`/api/v1/checks/${checkId}/tool`)).tool;
+}
+
+/** Pins the reviewed tool file; the server refuses when another file resolves by then. */
+export async function pinCheckTool(
+  checkId: string,
+  expected: ToolCandidate,
+  csrfToken: string,
+): Promise<void> {
+  await mutate(`/api/v1/checks/${checkId}/pin`, csrfToken, { expected });
+}
+
 export async function runCheck(
   checkId: string,
   workItemId: string,
@@ -245,18 +285,20 @@ export async function createVerdict(
   decision: 'accepted' | 'changes-requested' | 'rejected',
   note: string,
   csrfToken: string,
+  expected: VerdictExpectation,
   overrideReason: string | null = null,
 ): Promise<void> {
   await mutate(`/api/v1/work-items/${workItemId}/verdicts`, csrfToken, {
     decision,
     note,
     overrideReason,
+    expected,
   });
 }
 
 export async function importWorkspaceDocument(
   document: unknown,
   csrfToken: string,
-): Promise<{ imported: Record<string, number> }> {
+): Promise<{ imported: Record<string, number>; unchanged: Record<string, number> }> {
   return mutate('/api/v1/workspace/import', csrfToken, document);
 }

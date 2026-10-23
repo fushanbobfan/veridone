@@ -169,8 +169,10 @@ test('a reviewer can accept normally after requesting changes on an earlier stat
   await page.getByRole('button', { name: 'Record request' }).click();
   await expect(page.getByRole('dialog')).toBeHidden();
 
-  // The agent revises the work; the earlier verdict now describes an older state.
+  // The agent revises and commits the work; the earlier verdict now describes an older state.
   await writeFile(path.join(repositoryPath, 'regression.test.txt'), 'added after review\n');
+  await execFileAsync('git', ['add', 'regression.test.txt'], { cwd: repositoryPath });
+  await execFileAsync('git', ['commit', '-m', 'Add the regression test'], { cwd: repositoryPath });
   await page.goto(`/?review=${itemC}`);
   await expect(page.getByText(/superseded/i).first()).toBeVisible();
   await page.getByRole('button', { name: 'Rebind to current state' }).click();

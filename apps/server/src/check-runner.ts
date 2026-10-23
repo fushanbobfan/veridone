@@ -1,9 +1,13 @@
 import path from 'node:path';
 
 import {
+  absolutePathEntries,
   captureGitSnapshot,
+  createCleanCheckout,
   resolveWithinApprovedRoots,
   runBoundedProcess,
+  sha256File,
+  type CheckoutComparison,
 } from '@veridone/adapters';
 import { assessDeclaredScope, canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
 
@@ -19,7 +23,33 @@ function minimalEnvironment(): Record<string, string> {
     const value = process.env[name];
     if (value) env[name] = value;
   }
+  // Programs the tool starts by name are found on absolute PATH entries, never in the checkout.
+  env.PATH = absolutePathEntries(env.PATH).join(path.delimiter);
+  if (process.platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
   return env;
+}
+
+/** Hashes the pinned tool file and refuses to continue unless it is the file the operator approved. */
+async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha256: string }> {
+  if (!check.resolvedExecutable || !check.executableSha256) {
+    throw new Error(
+      `The check "${check.label}" was approved before VeriDone pinned tools. Pin its tool again under Checks before running it.`,
+    );
+  }
+  let sha256: string;
+  try {
+    sha256 = await sha256File(check.resolvedExecutable);
+  } catch {
+    throw new Error(
+      `The pinned tool ${check.resolvedExecutable} is missing. Pin the check's tool again under Checks.`,
+    );
+  }
+  if (sha256 !== check.executableSha256) {
+    throw new Error(
+      `The pinned tool ${check.resolvedExecutable} changed since it was approved. Review the new version, then pin the check's tool again under Checks.`,
+    );
+  }
+  return { path: check.resolvedExecutable, sha256 };
 }
 
 function redact(value: string): string {
@@ -55,10 +85,6 @@ export async function runApprovedCheck(
     .filter((candidate) => candidate.repositoryId === repository.id);
   const checkDefinitionVersion = await aggregateCheckVersion(checks);
   const approvedRoots = database.listApprovedRoots().map((root) => root.path);
-  const workingDirectory = await resolveWithinApprovedRoots(
-    path.resolve(repository.path, check.cwdRelative),
-    [repository.path],
-  );
 
   const before = await captureGitSnapshot(repository.path, {
     approvedRoots,
@@ -71,36 +97,74 @@ export async function runApprovedCheck(
       'The work item binding is stale. Explicitly rebind it to the current repository state before running checks.',
     );
   }
+  if (before.snapshot.statusEntries.length > 0) {
+    throw new Error(
+      'The repository has uncommitted changes. Checks run on a clean checkout of the bound commit, so commit the work and rebind the claim before running checks.',
+    );
+  }
+  if (/^0+$/u.test(before.snapshot.head)) {
+    throw new Error('The repository has no commit to check out yet.');
+  }
+  await verifyPinnedTool(check);
 
-  const startedAt = new Date().toISOString();
-  const versionResult =
-    check.versionArgs.length === 0
-      ? null
-      : await runBoundedProcess({
-          executable: check.executable,
-          args: check.versionArgs,
-          cwd: workingDirectory,
-          timeoutMs: 5_000,
-          maxOutputBytes: 4_096,
-          env: minimalEnvironment(),
-          ...(signal ? { signal } : {}),
-        });
-  const toolVersion = versionResult
-    ? (redact(`${versionResult.stdout}\n${versionResult.stderr}`)
-        .trim()
-        .split(/\r?\n/u)[0]
-        ?.slice(0, 4_096) ?? null)
-    : null;
-  const result = await runBoundedProcess({
-    executable: check.executable,
-    args: check.args,
-    cwd: workingDirectory,
-    timeoutMs: check.timeoutMs,
-    maxOutputBytes: check.maxOutputBytes,
-    env: minimalEnvironment(),
-    ...(signal ? { signal } : {}),
-  });
-  const completedAt = new Date().toISOString();
+  // The check runs in a checkout VeriDone creates from the bound commit, so nothing in the
+  // operator's work tree, index, ignored files, or Git configuration can influence the result.
+  const checkout = await createCleanCheckout(
+    before.repositoryPath,
+    before.snapshot.head,
+    signal ? { signal } : {},
+  );
+  let startedAt: string;
+  let completedAt: string;
+  let toolVersion: string | null;
+  let result: Awaited<ReturnType<typeof runBoundedProcess>>;
+  let comparison: CheckoutComparison | { error: string };
+  let tool: { path: string; sha256: string };
+  let toolUnchanged: boolean;
+  try {
+    const workingDirectory = await resolveWithinApprovedRoots(
+      path.resolve(checkout.directory, check.cwdRelative),
+      [checkout.directory],
+    );
+    // Preparing the checkout can take a while; verify the tool again just before it starts.
+    tool = await verifyPinnedTool(check);
+    startedAt = new Date().toISOString();
+    const versionResult =
+      check.versionArgs.length === 0
+        ? null
+        : await runBoundedProcess({
+            executable: tool.path,
+            args: check.versionArgs,
+            cwd: workingDirectory,
+            timeoutMs: 5_000,
+            maxOutputBytes: 4_096,
+            env: minimalEnvironment(),
+            ...(signal ? { signal } : {}),
+          });
+    toolVersion = versionResult
+      ? (redact(`${versionResult.stdout}\n${versionResult.stderr}`)
+          .trim()
+          .split(/\r?\n/u)[0]
+          ?.slice(0, 4_096) ?? null)
+      : null;
+    result = await runBoundedProcess({
+      executable: tool.path,
+      args: check.args,
+      cwd: workingDirectory,
+      timeoutMs: check.timeoutMs,
+      maxOutputBytes: check.maxOutputBytes,
+      env: minimalEnvironment(),
+      ...(signal ? { signal } : {}),
+    });
+    completedAt = new Date().toISOString();
+    toolUnchanged = (await sha256File(tool.path).catch(() => null)) === tool.sha256;
+    // A checkout the check left unreadable counts as changed; the run is still recorded.
+    comparison = await checkout.compare().catch((error: unknown) => ({
+      error: error instanceof Error ? error.message : 'The comparison failed.',
+    }));
+  } finally {
+    await checkout.remove();
+  }
   const after = await captureGitSnapshot(repository.path, {
     approvedRoots,
     contractVersion: 'default-v1',
@@ -111,9 +175,19 @@ export async function runApprovedCheck(
   let checkResult: CheckResult =
     result.state === 'completed' ? (result.exitCode === 0 ? 'passed' : 'failed') : result.state;
   let invalidReason: string | null = null;
-  if (before.snapshot.fingerprint !== after.snapshot.fingerprint) {
+  if (!toolUnchanged) {
+    invalidReason = `The pinned tool ${tool.path} changed while the check ran.`;
+  } else if ('error' in comparison) {
+    invalidReason = `The checkout could not be compared with the bound commit after the check: ${comparison.error}`;
+  } else if (comparison.headMoved) {
+    invalidReason = 'The check moved its checkout away from the bound commit.';
+  } else if (comparison.changedPaths.length > 0) {
+    const { changedPaths } = comparison;
+    invalidReason = `The check changed files in its checkout: ${changedPaths.slice(0, 5).join(', ')}${changedPaths.length > 5 ? ', …' : ''}.`;
+  }
+  if (invalidReason !== null) {
     checkResult = 'mutated';
-    invalidReason = 'The repository state changed while the check was running.';
+    invalidReason = invalidReason.slice(0, 2_000);
   }
   const stdout = redact(result.stdout);
   const stderr = redact(result.stderr);
@@ -123,6 +197,7 @@ export async function runApprovedCheck(
       result: checkResult,
       exitCode: result.exitCode,
       toolVersion,
+      toolSha256: tool.sha256,
       stdout,
       stderr,
       snapshotFingerprint: before.snapshot.fingerprint,
@@ -149,6 +224,10 @@ export async function runApprovedCheck(
     stderr,
     artifactHashes: [artifactHash],
     invalidReason,
+    isolation: 'clean-checkout',
+    toolPath: tool.path,
+    toolSha256: tool.sha256,
+    origin: 'local',
   });
 }
 
@@ -182,13 +261,17 @@ export function acceptanceReadiness(
     repository.snapshot.statusEntries,
     checks.flatMap((check) => check.scopePaths),
   );
-  const allEvidence = database.listEvidence(workItemId);
+  // Only evidence this workspace produced counts; restored evidence stays history.
+  const allEvidence = database
+    .listEvidence(workItemId)
+    .filter((evidence) => evidence.origin === 'local');
   const latest = checks
     .map((check) => allEvidence.find((evidence) => evidence.checkId === check.id))
     .filter((evidence): evidence is EvidenceRecord => Boolean(evidence));
   const passing = latest.filter(
     (evidence) =>
       evidence.result === 'passed' &&
+      evidence.isolation === 'clean-checkout' &&
       evidence.snapshotFingerprint === repository.snapshot.fingerprint &&
       evidence.contractVersion === repository.snapshot.contractVersion &&
       evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
