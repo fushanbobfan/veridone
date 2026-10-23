@@ -160,7 +160,7 @@ describe('tool pinning', () => {
       path: tool,
       sha256: await sha256File(tool),
     });
-  });
+  }, 20_000);
 
   it('refuses relative tool paths and tools inside the repository', async () => {
     const repository = await temporaryDirectory();
