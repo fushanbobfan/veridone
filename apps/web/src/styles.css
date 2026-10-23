@@ -1600,6 +1600,18 @@ textarea.text-field.compact-code-field {
   margin-top: 13px;
 }
 
+.explorer-list .pin-review {
+  margin-top: 13px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+}
+
+.explorer-list .pin-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .explorer-list ul {
   display: grid;
   gap: 7px;

@@ -3,10 +3,12 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   cancelCheck,
   fetchBootstrap,
+  fetchToolCandidate,
   linkWorkItem,
   pinCheckTool,
   runCheck,
   type BootstrapDto,
+  type ToolCandidate,
   type VerdictDto,
   type VerdictExpectation,
 } from './api.js';
@@ -535,8 +537,9 @@ export function App() {
           onClose={() => setWorkspaceSection(null)}
           {...(bootstrap.mode === 'local'
             ? {
-                onPinTool: async (checkId: string) => {
-                  await pinCheckTool(checkId, bootstrap.csrfToken);
+                onReviewTool: fetchToolCandidate,
+                onPinTool: async (checkId: string, expected: ToolCandidate) => {
+                  await pinCheckTool(checkId, expected, bootstrap.csrfToken);
                   await reloadWorkspace();
                 },
               }

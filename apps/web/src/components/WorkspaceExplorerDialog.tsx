@@ -1,7 +1,7 @@
 import { Archive, FileCheck2, FolderGit2, ListChecks, X } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 
-import type { BootstrapDto } from '../api.js';
+import type { BootstrapDto, ToolCandidate } from '../api.js';
 import type { WorkspaceSection } from './Navigation.js';
 import { useDialogFocus } from './useDialogFocus.js';
 
@@ -22,6 +22,7 @@ export function WorkspaceExplorerDialog({
   bootstrap,
   onSection,
   onClose,
+  onReviewTool,
   onPinTool,
 }: {
   open: boolean;
@@ -29,28 +30,42 @@ export function WorkspaceExplorerDialog({
   bootstrap: BootstrapDto;
   onSection: (section: WorkspaceSection) => void;
   onClose: () => void;
-  onPinTool?: (checkId: string) => Promise<void>;
+  /** Reads the tool file that pinning would record now. */
+  onReviewTool?: (checkId: string) => Promise<ToolCandidate>;
+  /** Pins the reviewed file; the service refuses if another file resolves by then. */
+  onPinTool?: (checkId: string, expected: ToolCandidate) => Promise<void>;
 }) {
   const titleId = useId();
   const dialog = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [pinning, setPinning] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [candidate, setCandidate] = useState<(ToolCandidate & { checkId: string }) | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
   useDialogFocus(open, onClose, dialog, closeButton);
   if (!open) return null;
 
-  const pinTool = async (checkId: string) => {
-    if (!onPinTool) return;
-    setPinning(checkId);
+  const attempt = async (checkId: string, action: () => Promise<void>) => {
+    setBusy(checkId);
     setPinError(null);
     try {
-      await onPinTool(checkId);
+      await action();
     } catch (caught) {
       setPinError(caught instanceof Error ? caught.message : 'The tool could not be pinned.');
     } finally {
-      setPinning(null);
+      setBusy(null);
     }
   };
+  const reviewTool = (checkId: string) =>
+    attempt(checkId, async () => {
+      if (!onReviewTool) return;
+      setCandidate({ ...(await onReviewTool(checkId)), checkId });
+    });
+  const pinTool = (checkId: string, reviewed: ToolCandidate) =>
+    attempt(checkId, async () => {
+      if (!onPinTool) return;
+      await onPinTool(checkId, { path: reviewed.path, sha256: reviewed.sha256 });
+      setCandidate(null);
+    });
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -158,17 +173,49 @@ export function WorkspaceExplorerDialog({
                         <dd>{check.approvedAt.slice(0, 10)}</dd>
                       </div>
                     </dl>
-                    {onPinTool && (
-                      <button
-                        className="secondary-action pin-action"
-                        type="button"
-                        onClick={() => void pinTool(check.id)}
-                        disabled={pinning !== null}
-                        aria-label={`Pin the tool for ${check.label} again`}
-                      >
-                        {pinning === check.id ? 'Pinning…' : 'Pin tool again'}
-                      </button>
-                    )}
+                    {onReviewTool &&
+                      onPinTool &&
+                      (candidate?.checkId === check.id ? (
+                        <div className="pin-review" aria-label={`Tool to pin for ${check.label}`}>
+                          <dl>
+                            <div className="wide">
+                              <dt>File to pin</dt>
+                              <dd className="mono tool-path">{candidate.path}</dd>
+                            </div>
+                            <div className="wide">
+                              <dt>Its SHA-256</dt>
+                              <dd className="mono tool-path">{candidate.sha256}</dd>
+                            </div>
+                          </dl>
+                          <div className="pin-actions">
+                            <button
+                              className="primary-action"
+                              type="button"
+                              onClick={() => void pinTool(check.id, candidate)}
+                              disabled={busy !== null}
+                            >
+                              {busy === check.id ? 'Pinning…' : 'Pin this file'}
+                            </button>
+                            <button
+                              className="secondary-action"
+                              type="button"
+                              onClick={() => setCandidate(null)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          className="secondary-action pin-action"
+                          type="button"
+                          onClick={() => void reviewTool(check.id)}
+                          disabled={busy !== null}
+                          aria-label={`Review the tool for ${check.label} before pinning it again`}
+                        >
+                          {busy === check.id ? 'Reading the tool…' : 'Pin tool again'}
+                        </button>
+                      ))}
                   </article>
                 ))
               )}

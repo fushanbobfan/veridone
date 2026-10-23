@@ -30,6 +30,15 @@ const rootIdSchema = z.object({ rootId: z.string().uuid() });
 const repositoryRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const receiptRequestSchema = z.object({ path: z.string().min(1).max(4_096) });
 const linkRequestSchema = z.object({ repositoryId: z.string().min(1).max(128) });
+// The tool file the operator reviewed; pinning records it only if it is still what resolves.
+const pinRequestSchema = z.object({
+  expected: z
+    .object({
+      path: z.string().min(1).max(4_096),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+    })
+    .strict(),
+});
 const runCheckRequestSchema = z.object({
   workItemId: z.string().uuid(),
   runId: z.string().uuid().optional(),
@@ -270,12 +279,35 @@ export function createApp(options: AppOptions): Hono {
     return context.json({ check }, 201);
   });
 
+  // The file that pinning would record now, so the operator can review it first.
+  app.get('/api/v1/checks/:id/tool', async (context) => {
+    const existing = options.database.getCheck(context.req.param('id'));
+    if (!existing) return context.json({ error: 'check_not_found' }, 404);
+    const repository = options.database.getRepository(existing.repositoryId);
+    if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    return context.json({
+      tool: await pinExecutable(existing.executable, { repositoryPath: repository.path }),
+    });
+  });
+
   app.post('/api/v1/checks/:id/pin', async (context) => {
+    const request = pinRequestSchema.parse(await context.req.json());
     const existing = options.database.getCheck(context.req.param('id'));
     if (!existing) return context.json({ error: 'check_not_found' }, 404);
     const repository = options.database.getRepository(existing.repositoryId);
     if (!repository) return context.json({ error: 'repository_not_found' }, 404);
     const tool = await pinExecutable(existing.executable, { repositoryPath: repository.path });
+    if (tool.path !== request.expected.path || tool.sha256 !== request.expected.sha256) {
+      return context.json(
+        {
+          error: 'tool_changed',
+          message:
+            'The tool file changed after it was reviewed. Review it again before pinning it.',
+          tool,
+        },
+        409,
+      );
+    }
     const check = options.database.updateCheckPin(
       existing.id,
       tool,
@@ -318,7 +350,7 @@ export function createApp(options: AppOptions): Hono {
     if (!workItem?.repositoryId) return context.json({ error: 'work_item_not_bound' }, 409);
     const known = options.database.getRepository(workItem.repositoryId);
     if (!known) return context.json({ error: 'repository_not_found' }, 404);
-    // The decision binds to the repository as it is now, not to the last stored snapshot.
+    // The decision binds to the repository state captured at decision time.
     const repository = await recaptureRepository(known);
     // A changed state is the reason to report, ahead of any gate it may have reopened.
     options.database.assertVerdictExpectation(workItemId, request.expected);

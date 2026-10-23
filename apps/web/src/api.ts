@@ -248,9 +248,23 @@ export async function createCheck(input: NewCheckInput, csrfToken: string): Prom
   await mutate('/api/v1/checks', csrfToken, input);
 }
 
-/** Pins the tool file the check's executable resolves to now, after the operator reviewed it. */
-export async function pinCheckTool(checkId: string, csrfToken: string): Promise<void> {
-  await mutate(`/api/v1/checks/${checkId}/pin`, csrfToken, {});
+export interface ToolCandidate {
+  path: string;
+  sha256: string;
+}
+
+/** The tool file that pinning the check would record now. */
+export async function fetchToolCandidate(checkId: string): Promise<ToolCandidate> {
+  return (await request<{ tool: ToolCandidate }>(`/api/v1/checks/${checkId}/tool`)).tool;
+}
+
+/** Pins the reviewed tool file; the server refuses when another file resolves by then. */
+export async function pinCheckTool(
+  checkId: string,
+  expected: ToolCandidate,
+  csrfToken: string,
+): Promise<void> {
+  await mutate(`/api/v1/checks/${checkId}/pin`, csrfToken, { expected });
 }
 
 export async function runCheck(

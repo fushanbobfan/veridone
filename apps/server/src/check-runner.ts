@@ -105,7 +105,7 @@ export async function runApprovedCheck(
   if (/^0+$/u.test(before.snapshot.head)) {
     throw new Error('The repository has no commit to check out yet.');
   }
-  const tool = await verifyPinnedTool(check);
+  await verifyPinnedTool(check);
 
   // The check runs in a checkout VeriDone creates from the bound commit, so nothing in the
   // operator's work tree, index, ignored files, or Git configuration can influence the result.
@@ -119,11 +119,15 @@ export async function runApprovedCheck(
   let toolVersion: string | null;
   let result: Awaited<ReturnType<typeof runBoundedProcess>>;
   let comparison: CheckoutComparison | { error: string };
+  let tool: { path: string; sha256: string };
+  let toolUnchanged: boolean;
   try {
     const workingDirectory = await resolveWithinApprovedRoots(
       path.resolve(checkout.directory, check.cwdRelative),
       [checkout.directory],
     );
+    // Preparing the checkout can take a while; verify the tool again just before it starts.
+    tool = await verifyPinnedTool(check);
     startedAt = new Date().toISOString();
     const versionResult =
       check.versionArgs.length === 0
@@ -153,6 +157,7 @@ export async function runApprovedCheck(
       ...(signal ? { signal } : {}),
     });
     completedAt = new Date().toISOString();
+    toolUnchanged = (await sha256File(tool.path).catch(() => null)) === tool.sha256;
     // A checkout the check left unreadable counts as changed; the run is still recorded.
     comparison = await checkout.compare().catch((error: unknown) => ({
       error: error instanceof Error ? error.message : 'The comparison failed.',
@@ -170,7 +175,9 @@ export async function runApprovedCheck(
   let checkResult: CheckResult =
     result.state === 'completed' ? (result.exitCode === 0 ? 'passed' : 'failed') : result.state;
   let invalidReason: string | null = null;
-  if ('error' in comparison) {
+  if (!toolUnchanged) {
+    invalidReason = `The pinned tool ${tool.path} changed while the check ran.`;
+  } else if ('error' in comparison) {
     invalidReason = `The checkout could not be compared with the bound commit after the check: ${comparison.error}`;
   } else if (comparison.headMoved) {
     invalidReason = 'The check moved its checkout away from the bound commit.';

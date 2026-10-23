@@ -21,6 +21,16 @@ async function workspace(files?: Record<string, string>) {
   return fixture;
 }
 
+/** Reviews the file that pinning would record, then pins exactly that file. */
+async function pinReviewedTool(fixture: Awaited<ReturnType<typeof workspace>>, checkId: string) {
+  const reviewed = await fixture.get<{ tool: { path: string; sha256: string } }>(
+    `/api/v1/checks/${checkId}/tool`,
+  );
+  return fixture.post<{ check: { executableSha256: string } }>(`/api/v1/checks/${checkId}/pin`, {
+    expected: reviewed.body.tool,
+  });
+}
+
 interface RunResponse {
   evidence: {
     result: string;
@@ -232,10 +242,7 @@ describe('check tools are pinned', () => {
     expect(refused.body.message).toMatch(/changed since it was approved/u);
     expect(fixture.database.listEvidence(fixture.workItemId)).toEqual([]);
 
-    const pinned = await fixture.post<{ check: { executableSha256: string } }>(
-      `/api/v1/checks/${checkId}/pin`,
-      {},
-    );
+    const pinned = await pinReviewedTool(fixture, checkId);
     expect(pinned.status).toBe(200);
     expect(pinned.body.check.executableSha256).toBe(await sha256File(process.execPath));
     const run = await fixture.post<RunResponse>(`/api/v1/checks/${checkId}/run`, {
@@ -269,11 +276,32 @@ describe('check tools are pinned', () => {
     expect(refused.status).toBe(400);
     expect(refused.body.message).toMatch(/approved before VeriDone pinned tools/u);
 
-    await fixture.post(`/api/v1/checks/${legacy.id}/pin`, {});
+    expect((await pinReviewedTool(fixture, legacy.id)).status).toBe(200);
     const run = await fixture.post<RunResponse>(`/api/v1/checks/${legacy.id}/run`, {
       workItemId: fixture.workItemId,
     });
     expect(run.body).toMatchObject({ evidence: { result: 'passed' }, readiness: { ready: true } });
+  }, 30_000);
+
+  it('pins only the tool file the operator reviewed', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    const before = fixture.database.getCheck(checkId);
+    const reviewed = await fixture.get<{ tool: { path: string; sha256: string } }>(
+      `/api/v1/checks/${checkId}/tool`,
+    );
+    expect(reviewed.body.tool).toEqual({
+      path: await realpath(process.execPath),
+      sha256: await sha256File(process.execPath),
+    });
+
+    const refused = await fixture.post<{ error: string }>(`/api/v1/checks/${checkId}/pin`, {
+      expected: { ...reviewed.body.tool, sha256: '0'.repeat(64) },
+    });
+
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('tool_changed');
+    expect(fixture.database.getCheck(checkId)).toEqual(before);
   }, 30_000);
 
   it('treats a scope of ./ as no declared scope', async () => {
