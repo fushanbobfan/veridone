@@ -4,9 +4,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Dependabot leaves pnpm-lock.yaml untouched, so npm version updates stay paused. Alerts and
-    # security updates continue; regenerate the lockfile on a security update's branch before merging.
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
+    # pnpm installs only versions published at least a day ago (minimumReleaseAge).
+    cooldown:
+      default-days: 3
+    groups:
+      npm-minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: /
     schedule:
