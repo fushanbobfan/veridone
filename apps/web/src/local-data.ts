@@ -172,7 +172,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
                 ? `Restored from a backup (${evidence.result}); run the check here to count it`
                 : evidence
                   ? `${evidence.result} · ${evidence.durationMs} ms · ${evidence.head.slice(0, 8)}${evidence.toolSha256 ? ` · tool ${evidence.toolSha256.slice(0, 8)}` : ''}`
-                  : 'Approved, but not run for this work item',
+                  : 'Approved; run it for this work item to record evidence',
             state: fresh
               ? ('passed' as const)
               : evidence?.result === 'failed' || evidence?.result === 'mutated'
