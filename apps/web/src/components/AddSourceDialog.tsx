@@ -81,7 +81,9 @@ export function AddSourceDialog({
       await onAdded();
       setState('success');
       window.setTimeout(() => {
+        // A discovery still running is dropped with its answer, so nothing else would clear its flag.
         discoveryRun.current += 1;
+        setDiscovering(false);
         setPath('');
         setLabel('');
         setDiscovered([]);
