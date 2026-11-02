@@ -21,7 +21,7 @@ The public deployment runs the same client and domain behavior against a clearly
 
 - `apps/web` — responsive React UI, URL-backed review state, accessibility, and browser tests.
 - `apps/server` — loopback HTTP API, filesystem boundary, check process lifecycle, and persistence composition root.
-- `packages/core` — framework-independent domain types, repository fingerprints, and declared-scope checks. It also exports criterion, freshness, and triage evaluators that only its unit tests call so far.
+- `packages/core` — framework-independent domain types, repository fingerprints, and declared-scope checks.
 - `packages/adapters` — Git, portable/harness receipt, path-boundary, and bounded-process implementations.
 - `e2e` — isolated repository/receipt fixtures created at runtime plus browser acceptance tests.
 
@@ -45,7 +45,7 @@ A normalized, hashed record of repository identity, HEAD, branch, index and work
 
 ### Acceptance contract
 
-v1 ships one default contract: every approved check for the repository needs fresh passing evidence, and claim text never satisfies it. Versioned criteria that accept specific evidence kinds exist in `packages/core` and are not wired into the product yet.
+VeriDone ships one default contract: every approved check for the repository needs fresh passing evidence, and claim text never satisfies it.
 
 ### Evidence
 
@@ -61,7 +61,9 @@ A verdict request carries the fingerprint, claim hash, and latest verdict the re
 
 SQLite is the local source of truth. Migrations are versioned and tested. Evidence output is capped before persistence; the database stores redacted output plus content hashes. Foreign keys, WAL journaling, and transactional verdict/import writes are enabled, and triggers keep verdicts and evidence append-only.
 
-Workspace export is versioned JSON containing supported domain records and a SHA-256 payload hash. Restore checks the hash over the payload as written and validates the schema, then adds what the workspace lacks in one transaction. Existing records stay as they are; evidence and verdicts that share an ID with a local record must match it exactly; verdicts replay in chain order through the same append path as new verdicts. A conflicting backup is refused as a whole. Restored evidence is marked imported and satisfies no gate, and restored checks need their tools pinned before they run.
+Two workspace keys live in the database, each created on first use: the HMAC key behind packet pseudonyms and the Ed25519 key that signs packets. Backups leave both out, so a restored workspace signs with its own key.
+
+Workspace export is versioned JSON containing supported domain records and a SHA-256 payload hash. Restore checks the hash over the payload as written and validates the schema, then adds what the workspace lacks in one transaction. Existing records stay as they are; evidence and verdicts that share an ID with a local record must match it exactly; verdicts replay in chain order through the same append path as new verdicts. A conflicting backup is refused as a whole. Restored evidence is marked imported and satisfies no gate, restored checks need their tools pinned before they run, and restored roots stay pending until the operator approves them. A restore preview runs the same transaction and rolls it back, so it reports exactly what the restore would add, or the conflict that would refuse it.
 
 ## Fingerprints and freshness
 
@@ -73,7 +75,9 @@ A repository content fingerprint includes:
 - submodule commits when present; uncommitted changes inside a submodule's work tree are outside the fingerprint;
 - raw staged diff and byte hashes for modified and untracked working files; files matched by `.gitignore` are outside the fingerprint.
 
-Acceptance-policy versions are checked separately from repository content. Evidence is `fresh` only when this workspace produced it in a clean checkout, repository identity, HEAD, content fingerprint, contract version, and aggregate check-definition version match, and the check changed nothing in its checkout. It becomes `stale`, `mismatched`, `invalid`, or `unbound` for explainable reasons.
+Acceptance-policy versions are checked separately from repository content. Evidence is fresh only when this workspace produced it in a clean checkout, passed, its content fingerprint, contract version, and aggregate check-definition version match the repository's current snapshot, and the check changed nothing in its checkout.
+
+The service computes each work item's readiness in one function, which the verdict gate and the bootstrap response both use. Each approved check for the repository is `passed` when its latest run is fresh, `failed` when that run failed or changed its checkout, `missing` without a run, and `stale` in every other case: the run is out of date, came from a backup, timed out, was cancelled, could not start, or hit the output cap. A work item is ready when its binding is the repository's current snapshot, its receipt reports no failed or incomplete stage, at least one check is approved, every check passed, and every changed path lies within the declared scope. The web client presents this result and computes no gate of its own.
 
 ## Git invocation
 
@@ -87,14 +91,21 @@ Checks are declared locally with an executable and argument array. Approval reso
 2. hashes the pinned tool and refuses to run if the file changed since approval, and hashes it again just before starting it;
 3. fetches the bound commit into a new repository in a temporary directory, verifies that it received exactly that commit, and checks it out; the transfer recomputes every object hash, and nothing from the operator's work tree, index, ignored files, or configuration reaches the checkout;
 4. resolves the working directory inside the checkout and captures the tool version;
-5. spawns the pinned file without a shell, with a minimal environment whose `PATH` keeps only absolute entries;
-6. streams capped stdout/stderr with redaction and enforces timeout, cancellation, output cap, and service-wide concurrency;
-7. requires the checkout's HEAD to still be the bound commit, compares its work tree with a fresh index read from that commit, lists new files its own `.gitignore` files do not cover, and hashes the tool once more; a moved HEAD, a changed or new file, a changed tool, or a comparison that cannot run marks the evidence mutated; then removes the checkout;
-8. stores evidence with its isolation, tool path, and tool hash.
+5. runs the check's setup arguments, when it has any, with the same pinned file, working directory, and environment, under the setup timeout; a setup that fails ends the run, and its result becomes the evidence;
+6. spawns the pinned file without a shell, with a minimal environment whose `PATH` keeps only absolute entries;
+7. streams capped stdout/stderr with redaction and enforces timeout, cancellation, output cap, and service-wide concurrency;
+8. requires the checkout's HEAD to still be the bound commit, compares its work tree with a fresh index read from that commit, lists new files its own `.gitignore` files do not cover, and hashes the tool once more; a moved HEAD, a changed or new file, a changed tool, or a comparison that cannot run marks the evidence mutated; then removes the checkout;
+9. stores evidence with its isolation, tool path, and tool hash.
+
+The setup arguments and timeout are part of the check definition. A check without setup keeps the definition hash it had before setup existed.
+
+## Acceptance packets
+
+The packet builder assembles one payload per work item: the work item, a path-free repository summary, the contract, the check definitions, evidence summaries with the test counts read from each runner's summary line, and the verdict history. Identifiers computed from local data become HMAC pseudonyms, and text passes through the packet sanitizer. The payload is serialized with object keys in UTF-16 code-unit order, hashed with SHA-256, and signed with the workspace's Ed25519 key. JSON carries the payload and its manifest; Markdown and HTML render from one view built from the packet, so the three formats carry the same facts.
 
 ## API
 
-The local API uses versioned routes and runtime schemas. Mutating requests require an origin check and per-process anti-CSRF token. A static deployment falls back to labeled synthetic records and keeps demo verdict interactions ephemeral in the browser.
+The local API uses versioned routes and runtime schemas. Every request must be addressed to a loopback name on the service's port or to the host of an allowed origin. Mutating requests require an origin check and per-process anti-CSRF token. A static deployment falls back to labeled synthetic records and keeps demo verdict interactions ephemeral in the browser.
 
 ## Portability
 

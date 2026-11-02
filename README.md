@@ -25,19 +25,19 @@ The product keeps three ideas separate:
 - **Evidence** — independently captured output tied to the exact repository and policy state.
 - **Verdict** — an append-only human acceptance, rejection, or request for changes.
 
-## What v1.1 includes
+## What VeriDone includes
 
-- Zero-account, loopback-only local workspace backed by SQLite.
+- Zero-account, loopback-only local workspace backed by SQLite; the API answers only requests addressed to its loopback names.
 - Approved-root repository discovery with traversal and symlink-escape defenses.
 - Commit, branch, index, untracked-file content, submodule, diff-stat, and worktree hashing.
 - Harness receipts plus a documented portable receipt for Codex, Claude Code, CI, and generic tools.
 - Explicit multi-repository claim binding with commit, path, dirty-state, and fingerprint confirmation.
 - Explainable review inbox with search, filters, sort, deep-link state, risk paths, and scope drift.
-- Approved checks run in a fresh checkout of the bound commit that VeriDone creates itself, never in the agent's work tree, with literal arguments, no shell, minimal environment, redaction, timeout, cancellation, output cap, concurrency limit, mutation detection, tool version, and exit code.
+- Approved checks run in a fresh checkout of the bound commit that VeriDone creates itself, never in the agent's work tree, with literal arguments, no shell, minimal environment, redaction, timeout, cancellation, output cap, concurrency limit, mutation detection, tool version, and exit code. A check can prepare its checkout first with the same pinned tool, for example with a frozen dependency install.
 - Check tools pinned at approval by path and SHA-256, verified before every run, and recorded with each result; Git started by absolute path with a fixed configuration.
 - Explicit normal and override verdict paths with persistent reasons. A verdict is recorded only if the repository, claim, and latest verdict still match what the reviewer saw, and the database keeps verdicts and evidence append-only.
-- Deterministic JSON, Markdown, and standalone HTML acceptance packets with a SHA-256 integrity checksum.
-- Transactional workspace backup with a SHA-256 integrity checksum, and a restore that adds missing records and leaves recorded verdicts and evidence as they are.
+- Deterministic JSON, Markdown, and standalone HTML acceptance packets rendered from one view, naming each check's command and test counts, and signed with an Ed25519 key the workspace creates.
+- Transactional workspace backup with a SHA-256 integrity checksum, and a restore that lists what it would add before it runs, adds only missing records, leaves recorded verdicts and evidence as they are, and holds restored roots until the operator approves them.
 - Responsive 360 px–desktop UX, light/dark/system themes, reduced motion, keyboard focus management, and automated WCAG 2.2 AA scans.
 - A clearly labeled, filesystem-free synthetic public demo.
 
@@ -68,15 +68,15 @@ pnpm start
 3. Link the claim to the current repository fingerprint.
 4. Approve one or more checks. Imported text is never executable policy.
 5. Run the checks, inspect risk/scope signals, and record a human verdict.
-6. Export an HTML packet for review or JSON for checksum verification.
+6. Export an HTML packet for review or a signed JSON packet for verification.
 
-Check a JSON packet's checksum without opening the UI:
+Verify a JSON packet without opening the UI:
 
 ```bash
-pnpm verify:packet path/to/veridone-work-item.json
+pnpm verify:packet path/to/veridone-work-item.json --key veridone-signing-key.pem
 ```
 
-The checksum detects accidental changes to a packet. It carries no signature: anyone who edits a packet can recompute it, so a packet vouches for its contents only when it reaches you through a channel you trust.
+VeriDone signs each packet with an Ed25519 key it creates for the workspace. Download the public key from Backup & restore and publish it where your readers can find it. With `--key`, verification reports whether that key signed the packet; without it, a sound signature shows only that some key signed it, because anyone who edits a packet can sign it again with a key of their own. Packets from VeriDone 1.1 and earlier carry a checksum only, which detects accidental changes.
 
 ## Documentation
 
@@ -103,7 +103,7 @@ CI repeats the core suite on Windows, macOS, and Linux. CodeQL, dependency updat
 
 ## Privacy and trust boundary
 
-VeriDone has no telemetry and does not upload repositories. Workspace backups intentionally contain approved local paths and check definitions; the UI says so before export. Acceptance packets use strict privacy mode: raw process output, detected credentials, and common absolute local paths are excluded or redacted.
+VeriDone has no telemetry and does not upload repositories. Workspace backups intentionally contain approved local paths and check definitions; the UI says so before export. Acceptance packets use strict privacy mode: raw process output, detected credentials, and common absolute local paths are excluded or redacted, and identifiers computed from local data appear as pseudonyms keyed to the workspace.
 
 VeriDone is not a sandbox for hostile executables. A check is a command the local operator explicitly authorizes, and it runs code from the commit under review with the operator's permissions. The clean checkout keeps uncommitted and ignored files out of the result. Run untrusted build tools in an OS/container sandbox appropriate to the repository.
 

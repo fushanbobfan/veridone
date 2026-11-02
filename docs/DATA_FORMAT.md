@@ -44,30 +44,51 @@ Workspace backup is a JSON document with:
 - approved roots, repositories, receipts, work items, contracts, checks, evidence, and verdicts;
 - an `integrity` object containing the SHA-256 hash of canonical payload JSON.
 
-Version 2 adds, for each check, the pinned tool (`resolvedExecutable`, `executableSha256`); for each evidence record, its `isolation`, `toolPath`, `toolSha256`, and `origin` (`local` or `imported`); and for each verdict, its position in the work item's chain (`sequence`, `previousVerdictId`) and the `claimHash` it judged.
+Version 2 adds, for each check, the pinned tool (`resolvedExecutable`, `executableSha256`) and its setup step (`setupArgs`, `setupTimeoutMs`); for each evidence record, its `isolation`, `toolPath`, `toolSha256`, and `origin` (`local` or `imported`); and for each verdict, its position in the work item's chain (`sequence`, `previousVerdictId`) and the `claimHash` it judged. A check without `setupArgs` restores with no setup step and a `setupTimeoutMs` of 600000.
 
-Backups include absolute local paths and approved executable definitions. Treat them as private operational records. Restore is bounded at 25 MB, checks the hash over the payload as written, validates the schema, and commits in one SQLite transaction. It adds what the workspace lacks:
+Backups include absolute local paths and approved executable definitions. Treat them as private operational records. They leave out the workspace's packet keys. Restore is bounded at 25 MB, checks the hash over the payload as written, validates the schema, and commits in one SQLite transaction. It adds what the workspace lacks:
 
 - records that already exist stay as they are;
 - evidence and verdicts that share an ID with a local record must match it exactly;
 - each work item's verdicts replay in chain order and must extend the local history;
 - restored evidence is marked `imported` and satisfies no gate;
-- restored checks are validated like new ones, lose their tool pins, and get their definition hash recomputed, so they run only after the operator pins their tools.
+- restored checks are validated like new ones, lose their tool pins, and get their definition hash recomputed, so they run only after the operator pins their tools;
+- restored roots are `pending` and grant no access until the operator approves each one on this machine.
 
 A backup that conflicts with recorded history is refused as a whole. Version 1 backups still restore; their verdicts are chained in the order they were decided.
 
-## Acceptance packet v1
+`POST /api/v1/workspace/preview` takes the same document, runs the restore, and rolls it back. It answers with the counts of records the restore would add and find unchanged, and with the roots, repositories, checks, and work items it would add, or with the error that would refuse the restore.
 
-JSON packet payloads include application/schema identity, strict privacy mode, deterministic generation time, work item, path-free repository summary, contract, evidence summaries, and verdict history. The manifest contains:
+## Acceptance packet v2
+
+A JSON packet holds a payload and a `manifest`. The payload carries `schemaVersion: 2`, `application: "veridone"`, `privacyMode: "strict"`, `identifiers: "hmac-sha256-workspace-pseudonyms"`, a deterministic `generatedAt` taken from the latest verdict, evidence, or work item, the work item, a path-free repository summary, the contract the latest verdict, evidence, or snapshot was recorded under, `checks`, evidence summaries, and the verdict history.
+
+Each entry in `checks` gives a check approved for the repository, or one behind the packet's evidence: its label and kind, its executable's file name without the directory, the pinned tool's SHA-256, its arguments, version arguments, setup arguments, working directory, scope prefixes, timeouts, output cap, and approval time. Each evidence summary carries its result, exit code, tool version, the tool's SHA-256, its isolation (`clean-checkout` for checks run in VeriDone's checkout of the bound commit), its origin, and `testCounts`: the passed, failed, skipped, and total counts and the runner, read from the last summary that node:test, Vitest, Jest, or pytest printed, or `null` when the output holds none. Raw stdout and stderr stay out of the packet.
+
+Identifiers computed from local data appear as HMAC-SHA256 pseudonyms under a random key that the workspace keeps and leaves out of backups: the repository id, the fingerprint and worktree hash, the claim hash, check-definition hashes and versions, and artifact hashes. Equal values get equal pseudonyms within one workspace, so the packet's bindings can still be compared. The commit (`head`) appears as it is. Credential-shaped values and common absolute local paths are redacted from text.
+
+The manifest contains:
 
 ```json
 {
   "algorithm": "sha256",
   "payloadHash": "…",
-  "evidenceArtifacts": ["…"]
+  "evidenceArtifacts": ["…"],
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "…",
+    "publicKey": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----\n",
+    "value": "…"
+  }
 }
 ```
 
-The verifier recomputes canonical payload SHA-256 and checks that artifact hashes in evidence match the manifest. The checksum detects accidental changes; it is unsigned, so an edited packet with a recomputed checksum also verifies. Raw stdout/stderr and each tool's local path are excluded; each evidence summary carries the tool's SHA-256, its isolation (`clean-checkout` for checks run in VeriDone's checkout of the bound commit), and its origin. Credential-shaped values and common absolute local paths are redacted from human text.
+`payloadHash` is the SHA-256 of the payload serialized as JSON without whitespace, with object keys in UTF-16 code-unit order (the order RFC 8785 uses). `signature.value` is the base64 Ed25519 signature over the same bytes, and `keyId` is the SHA-256 of the public key's SPKI DER encoding.
 
-Markdown and standalone HTML carry the same claim, repository binding, contract, evidence results, tool versions, exit codes, verdict history, privacy declaration, and payload hash. Standalone HTML escapes all imported text and uses a default-deny CSP.
+The verifier recomputes the payload hash, checks that the artifact hashes in evidence match the manifest, checks that the embedded public key has the named `keyId`, and verifies the signature. The public key travels inside the packet, so a sound signature shows only that the holder of that key signed. `pnpm verify:packet <packet.json> --key <public-key.pem>` also requires the signing key to be one of the keys given; `--key` may repeat. The workspace's public key downloads from Backup & restore, or from `GET /api/v1/workspace/signing-key`, which names the key in its `X-VeriDone-Key-Id` header.
+
+Markdown and standalone HTML render from one view of the packet and carry the same claim, source, repository binding and fingerprint, contract clauses, check commands, evidence results with test counts, tool versions, exit codes, verdict history, privacy declaration, payload hash, and signing key id. Standalone HTML escapes all imported text and uses a default-deny CSP.
+
+### Packet schema 1
+
+Packets from VeriDone 1.1 and earlier have `schemaVersion: 1`, no signature, identifiers as recorded, and a payload hash over keys in locale-aware order. The verifier still accepts them and reports them unsigned; their checksum detects accidental changes only.
