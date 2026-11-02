@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { useState } from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -69,6 +69,21 @@ describe('review desk', () => {
     expect(window.location.search).toContain('filter=ready');
     expect(window.location.search).toContain('q=receipt');
     expect(window.location.search).toContain('sort=repository');
+  });
+
+  it('drops the pending focus move when the desk unmounts', () => {
+    const { unmount } = render(<App />);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const query = vi.spyOn(document, 'querySelector');
+    try {
+      fireEvent.click(screen.getByRole('button', { name: /import harness run receipts/i }));
+      unmount();
+      vi.advanceTimersByTime(300);
+      expect(query).not.toHaveBeenCalledWith('#review-detail');
+    } finally {
+      query.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('traps dialog focus and returns it to the trigger', async () => {
