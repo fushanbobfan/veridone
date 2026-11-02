@@ -199,16 +199,25 @@ export async function runApprovedCheck(
     invalidReason = invalidReason.slice(0, 2_000);
   }
   // With a setup, the output carries both steps under headers; when the setup failed, it is the setup's alone.
+  // Each text stays within the check's output limit, since a backup refuses a longer one and evidence never
+  // changes: the setup's part is cut first, and the cap applies again after redaction, whose markers can be
+  // longer than what they replace.
   const checkRan = setup !== result;
-  const setupHeader = setup ? `--- setup exited with ${setup.exitCode ?? setup.state} ---\n` : '';
+  const limit = check.maxOutputBytes;
+  const joined = (setupText: string, head: string, tail: string) =>
+    `${head}${setupText.slice(0, Math.max(0, limit - head.length - tail.length))}${tail}`;
   const stdout = redactSecrets(
     setup
-      ? `${setupHeader}${setup.stdout}${checkRan ? `\n--- check ---\n${result.stdout}` : ''}`
+      ? joined(
+          setup.stdout,
+          `--- setup exited with ${setup.exitCode ?? setup.state} ---\n`,
+          checkRan ? `\n--- check ---\n${result.stdout}` : '',
+        )
       : result.stdout,
-  );
+  ).slice(0, limit);
   const stderr = redactSecrets(
-    setup ? `${setup.stderr}${checkRan ? result.stderr : ''}` : result.stderr,
-  );
+    setup ? joined(setup.stderr, '', checkRan ? result.stderr : '') : result.stderr,
+  ).slice(0, limit);
   const artifactHash = await sha256Hex(
     canonicalJson({
       checkId,

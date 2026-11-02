@@ -493,6 +493,52 @@ describe('setup before a check', () => {
     expect(run.body.evidence.invalidReason).toContain('generated.txt');
   }, 60_000);
 
+  // A backup refuses an evidence text longer than the largest output limit, and evidence cannot change afterwards.
+  it("keeps the evidence within the check's output limit, cutting the setup's part first", async () => {
+    const fixture = await workspace();
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Noisy install',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs: ['-e', 'process.stdout.write("s".repeat(2000))'],
+      args: ['-e', 'process.stdout.write("c".repeat(2000))'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 2_048,
+    });
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('passed');
+    expect(run.body.evidence.stdout.length).toBeLessThanOrEqual(2_048);
+    expect(run.body.evidence.stdout).toContain('c'.repeat(2000));
+  }, 60_000);
+
+  it('keeps redacted output within the limit, where markers lengthen it', async () => {
+    const fixture = await workspace();
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Prints settings',
+      kind: 'test',
+      executable: process.execPath,
+      args: ['-e', 'process.stdout.write("token=x\\n".repeat(250))'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 2_048,
+    });
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('passed');
+    expect(run.body.evidence.stdout.length).toBeLessThanOrEqual(2_048);
+    expect(run.body.evidence.stdout).toMatch(/^token=\[REDACTED\]\n/u);
+  }, 60_000);
+
   it('records a failed setup and leaves the check unrun', async () => {
     const fixture = await workspace();
     const approved = await approve(
