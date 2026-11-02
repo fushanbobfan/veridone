@@ -7,11 +7,11 @@ All notable changes are documented here. This project follows Semantic Versionin
 ### Added
 
 - **Checks** in the navigation lists each approved check with its pinned tool, arguments, and hash, and pins a tool again after the operator reviews it.
-- Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. **Download the packet signing key**, under backup and restore, saves the public key, and `pnpm verify:packet <packet.json> --key <public-key.pem>` checks that this key signed a packet. Packets written by VeriDone 1.1 and earlier still verify, as unsigned.
-- A check can name setup arguments that its pinned tool runs in the checkout before the check, with a ten-minute timeout, for example a frozen `pnpm install`. A setup that fails ends the run with its own exit code and output, files it writes outside ignored paths mark the evidence mutated, and a check without setup keeps its definition hash.
+- Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. **Download the packet signing key**, under backup and restore, saves the public key, and `pnpm verify:packet <packet.json> --key <public-key.pem>` checks that this key signed a packet. Packets written by VeriDone 1.1 and earlier still verify, as unsigned, and the verifier refuses a signing key of any other type.
+- A check can name setup arguments that its pinned tool runs in the checkout before the check, with a ten-minute timeout, for example a frozen `pnpm install`. A setup that fails ends the run with its own exit code and output, files it writes outside ignored paths mark the evidence mutated, and a check without setup keeps its definition hash. Stored stdout and stderr each stay within the check's output limit, with the setup's part cut first.
 - Restoring a backup first lists the roots, repositories, checks, and work items it would add, with the evidence and verdict counts, and writes nothing until the operator confirms; `POST /api/v1/workspace/preview` returns the same list.
 - **Roots** in the workspace explorer lists each root with its state and approves a root restored from a backup.
-- Packets name each check's command, setup command, working directory, and tool hash, and give the test counts from the summary that node:test, Vitest, Jest, or pytest printed.
+- Packets name each check's command, setup command, working directory, and tool hash, and give the test counts from the last summary that node:test, Vitest, Jest, or pytest printed.
 
 ### Changed
 
@@ -45,10 +45,10 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Updated `hono` to 4.13.13, `vite` to 8.1.6, `vitest` to 4.1.12, and `concurrently` to 10.0.6, and pinned patched transitive `undici`, `postcss`, `nanoid`, and `source-map-js`; `pnpm audit --audit-level low` reports no known vulnerabilities.
 - Updated `zod` to 4.6.7 for GHSA-mrhx-c7xc-m3w5, in which validating an oversized constrained collection could exhaust memory.
 - The API answers 403 to a request whose `Host` header, or the host of an absolute request URL, names anything other than its loopback names on its port or the host of an allowed origin. A web page that points its own domain name at 127.0.0.1 reads nothing from the API, the anti-CSRF token included.
-- Redaction covers secret names that end an identifier, such as `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY`, quoted values that hold spaces, fine-grained GitHub, GitLab, Slack, and npm tokens, AWS key ids, JWTs, bearer values, and private key blocks, including one that the output cap cut off. Packet text also loses Windows paths written with forward slashes, UNC paths, home-relative paths, and paths under `/mnt`, `/srv`, `/root`, `/Volumes`, `/private`, and `/media`. Each pattern takes linear time on hostile check output.
+- Redaction covers secret names that end an identifier, such as `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY`, quoted values that hold spaces or escaped quotes or lack their closing quote, the value after an option named for a secret, fine-grained GitHub, GitLab, Slack, and npm tokens, AWS key ids, JWTs, bearer values, and private key blocks, including one that the output cap cut off. Every text in a packet passes through these rules, a restored contract's included, and also loses Windows paths written with forward slashes or escaped as in JSON, paths holding spaces, UNC paths, home-relative paths, and paths under `/mnt`, `/srv`, `/root`, `/Volumes`, `/private`, and `/media`. Each pattern takes linear time on hostile check output.
 - Packets carry the repository id, fingerprint, worktree hash, claim hash, check-definition hashes, and artifact hashes as HMAC-SHA256 pseudonyms under a workspace key that backups leave out. The repository id hashes the local path and the others take local data as inputs, so each raw value would let a reader confirm a guessed path or file.
 - A root restored from a backup stays pending until the operator approves it: discovery refuses it, and nothing under it counts as approved. Approval resolves the path again and refuses one that is missing or now resolves somewhere else.
-- Accepting a work item whose receipt reports a failed or incomplete stage requires an override reason; the server used to record such an acceptance as a plain one.
+- Accepting a work item whose receipt reports a failed or incomplete stage requires an override reason; the server used to record such an acceptance as a plain one. The receipt is found by its exact run id.
 
 ### Documentation
 

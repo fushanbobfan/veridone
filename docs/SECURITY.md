@@ -14,7 +14,7 @@ The local operator is trusted to approve roots, define checks, pin their tools, 
 
 **Threat:** a receipt contains a command or prompt that attempts to trigger execution.
 
-**Control:** imported commands are inert strings. Only operator-authored check declarations are executable. The process API accepts stored check IDs, not arbitrary command text.
+**Control:** imported commands are inert strings. Only operator-authored check declarations are executable. The process API accepts only stored check IDs.
 
 ### Agent-writable repository state
 
@@ -52,7 +52,7 @@ Checks run in VeriDone's own checkout: each run fetches the bound commit into a 
 
 **Threat:** logs or bundles expose tokens, environment secrets, home paths, or repository credentials.
 
-**Control:** minimal environment, redaction of credential assignments, common token formats, bearer values, and private key blocks (a key cut off by the output limit is redacted to the end of the text), output limits, export allowlists, path privacy modes, no `.git` object export, and a pre-export secret scan. Packets carry each tool's hash and leave its local path out.
+**Control:** minimal environment, redaction of credential assignments (a quoted value up to its closing quote, past escaped quotes, or to the end of the line), the value after an option named for a secret, common token formats, bearer values, and private key blocks (a key cut off by the output limit is redacted to the end of the text), output limits, export allowlists, path privacy modes, no `.git` object export, and a pre-export secret scan. Packets carry each tool's hash and leave its local path out.
 
 A hash of local data in a packet would let a reader confirm a guess: the repository id hashes the local path, and the fingerprint, worktree, claim, check-definition, and artifact hashes take local paths, text before sanitizing, or uncommitted file content as inputs. Packets carry each of these as an HMAC-SHA256 pseudonym under a random key that the workspace keeps in its database and leaves out of backups. Equal values get equal pseudonyms within one workspace, so a reader can still see that a verdict, its evidence, and the work item name the same state.
 
@@ -62,7 +62,7 @@ A hash of local data in a packet would let a reader confirm a guess: the reposit
 
 **Control:** bind evidence to repository and check-definition fingerprints, hash each check result, recompute packet and workspace checksums when they are verified or imported, classify source provenance, and never upgrade unbound imported claims into executable evidence. Evidence restored from a backup is marked imported and never satisfies a gate.
 
-Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. The verifier checks the signature against the public key the packet carries, and with `--key` it also requires that key to be one the reader trusts. The operator publishes the public key; a reader who checks against it can tell a changed packet from the one the workspace signed, even when the changer recomputed every hash and signed again with a key of their own. A packet rewritten as schema 1 without its signature verifies only as unsigned, and fails once the reader gives a key. Workspace backup checksums stay unsigned and detect accidental changes only.
+Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. The verifier checks the signature against the public key the packet carries, which must be an Ed25519 key, and with `--key` it also requires that key to be one the reader trusts. The operator publishes the public key; a reader who checks against it can tell a changed packet from the one the workspace signed, even when the changer recomputed every hash and signed again with a key of their own. A packet rewritten as schema 1 without its signature verifies only as unsigned, and fails once the reader gives a key. Workspace backup checksums stay unsigned and detect accidental changes only.
 
 ### Acceptance on incomplete evidence
 

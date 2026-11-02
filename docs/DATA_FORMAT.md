@@ -29,7 +29,7 @@ Required fields are `schema_version`, `run_id`, `title`, `claim`, `status`, and 
 
 A top-level status or stage status outside `complete`, `completed`, `passed`, `success`, `succeeded`, and `ok` marks the import degraded. It does not execute or trust output fields.
 
-You may select a directory instead of one file. VeriDone parses every direct `.json` child before writing anything, with limits of 50 files and 10 MB total. One invalid file rejects the complete batch; a successful batch commits atomically.
+You may also select a directory. VeriDone parses every direct `.json` child before writing anything, with limits of 50 files and 10 MB total. One invalid file rejects the complete batch; a successful batch commits atomically.
 
 ## Harness receipt
 
@@ -65,7 +65,7 @@ A JSON packet holds a payload and a `manifest`. The payload carries `schemaVersi
 
 Each entry in `checks` gives a check approved for the repository, or one behind the packet's evidence: its label and kind, its executable's file name without the directory, the pinned tool's SHA-256, its arguments, version arguments, setup arguments, working directory, scope prefixes, timeouts, output cap, and approval time. Each evidence summary carries its result, exit code, tool version, the tool's SHA-256, its isolation (`clean-checkout` for checks run in VeriDone's checkout of the bound commit), its origin, and `testCounts`: the passed, failed, skipped, and total counts and the runner, read from the last summary that node:test, Vitest, Jest, or pytest printed, or `null` when the output holds none. Raw stdout and stderr stay out of the packet.
 
-Identifiers computed from local data appear as HMAC-SHA256 pseudonyms under a random key that the workspace keeps and leaves out of backups: the repository id, the fingerprint and worktree hash, the claim hash, check-definition hashes and versions, and artifact hashes. Equal values get equal pseudonyms within one workspace, so the packet's bindings can still be compared. The commit (`head`) appears as it is. Credential-shaped values and common absolute local paths are redacted from text.
+Identifiers computed from local data appear as HMAC-SHA256 pseudonyms under a random key that the workspace keeps and leaves out of backups: the repository id, the fingerprint and worktree hash, the claim hash, check-definition hashes and versions, and artifact hashes. Equal values get equal pseudonyms within one workspace, so the packet's bindings can still be compared. The commit (`head`) appears as it is. Credential-shaped values, the value after an option named for a secret, and common absolute local paths are redacted from every text in the packet, the contract and check arguments included.
 
 The manifest contains:
 
@@ -85,7 +85,7 @@ The manifest contains:
 
 `payloadHash` is the SHA-256 of the payload serialized as JSON without whitespace, with object keys in UTF-16 code-unit order (the order RFC 8785 uses). `signature.value` is the base64 Ed25519 signature over the same bytes, and `keyId` is the SHA-256 of the public key's SPKI DER encoding.
 
-The verifier recomputes the payload hash, checks that the artifact hashes in evidence match the manifest, checks that the embedded public key has the named `keyId`, and verifies the signature. The public key travels inside the packet, so a sound signature shows only that the holder of that key signed. `pnpm verify:packet <packet.json> --key <public-key.pem>` also requires the signing key to be one of the keys given; `--key` may repeat. The workspace's public key downloads from Backup & restore, or from `GET /api/v1/workspace/signing-key`, which names the key in its `X-VeriDone-Key-Id` header.
+The verifier recomputes the payload hash, checks that the artifact hashes in evidence match the manifest, checks that the embedded public key is an Ed25519 key with the named `keyId`, and verifies the signature. The public key travels inside the packet, so a sound signature shows only that the holder of that key signed. `pnpm verify:packet <packet.json> --key <public-key.pem>` also requires the signing key to be one of the keys given; `--key` may repeat. The workspace's public key downloads from Backup & restore, or from `GET /api/v1/workspace/signing-key`, which names the key in its `X-VeriDone-Key-Id` header.
 
 Markdown and standalone HTML render from one view of the packet and carry the same claim, source, repository binding and fingerprint, contract clauses, check commands, evidence results with test counts, tool versions, exit codes, verdict history, privacy declaration, payload hash, and signing key id. Standalone HTML escapes all imported text and uses a default-deny CSP.
 
