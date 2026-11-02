@@ -451,6 +451,22 @@ describe('setup before a check', () => {
     expect(run.body.evidence).toMatchObject({ result: 'passed', invalidReason: null });
   }, 60_000);
 
+  it('counts a file the setup writes outside ignored paths as a change to the checkout', async () => {
+    const fixture = await workspace({ 'README.md': '# Fixture\n', '.gitignore': 'deps/\n' });
+    const approved = await approve(
+      fixture,
+      ['-e', "require('node:fs').writeFileSync('generated.txt', 'left by the setup')"],
+      ['-e', 'process.exit(0)'],
+    );
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('mutated');
+    expect(run.body.evidence.invalidReason).toContain('generated.txt');
+  }, 60_000);
+
   it('records a failed setup and leaves the check unrun', async () => {
     const fixture = await workspace();
     const approved = await approve(
