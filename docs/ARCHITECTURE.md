@@ -101,7 +101,7 @@ The setup arguments and timeout are part of the check definition. A check withou
 
 ## Acceptance packets
 
-The packet builder assembles one payload per work item: the work item, a path-free repository summary, the contract, the check definitions, evidence summaries with the test counts read from each runner's summary line, and the verdict history. Identifiers computed from local data become HMAC pseudonyms, and text passes through a packet sanitizer built for the workspace: it removes credentials, replaces the local paths the workspace knows, and then the path shapes the general patterns recognize. The payload is serialized with object keys in UTF-16 code-unit order, hashed with SHA-256, and signed with the workspace's Ed25519 key. JSON carries the payload and its manifest; Markdown and HTML render from one view built from the packet, so the three formats carry the same facts.
+The packet builder assembles one payload per work item: the work item, a path-free repository summary, the contract, the check definitions, evidence summaries with the test counts read from each runner's summary line, and the verdict history. Identifiers computed from local data become HMAC pseudonyms, and every string in the payload passes through a packet sanitizer built for the workspace: it replaces the local paths the workspace knows, then removes credentials and the path shapes the general patterns recognize. The payload is serialized with object keys in UTF-16 code-unit order, hashed with SHA-256, and signed with the workspace's Ed25519 key. JSON carries the payload and its manifest; Markdown and HTML render from one view built from the packet, so the three formats carry the same facts.
 
 ## API
 
