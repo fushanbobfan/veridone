@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { redactSecrets, sanitizeArgsForPacket, sanitizeForPacket } from './redaction.js';
+import {
+  createPacketSanitizer,
+  redactSecrets,
+  sanitizeArgsForPacket,
+  sanitizeForPacket,
+} from './redaction.js';
 
 /** Joins a test value from parts, so the repository's secret scan reads no fixture as a leaked credential. */
 const joined = (...parts: string[]) => parts.join('');
@@ -239,5 +244,126 @@ describe('packet arguments', () => {
         '--token=abc123',
       ]),
     ).toEqual(['--max-tokens', '4096', '--test', '[LOCAL_PATH]', '--token=[REDACTED]']);
+  });
+});
+
+// The patterns above recognize paths by their shape; the paths the workspace knows are replaced exactly, whatever
+// their prefix, quoting or spacing.
+describe('known local paths', () => {
+  const sanitize = createPacketSanitizer(
+    ['/work/clients/acme/importer', String.raw`D:\clients\acme repo`, '/work/客户 acme'],
+    { caseInsensitive: false },
+  );
+
+  it('replaces a known path and whatever follows it inside that path', () => {
+    expect(sanitize('built /work/clients/acme/importer/src/app.ts today')).toBe(
+      'built [LOCAL_PATH] today',
+    );
+    expect(sanitize('cd /work/clients/acme/importer && ls')).toBe('cd [LOCAL_PATH] && ls');
+  });
+
+  it('replaces a known path in any written form', () => {
+    expect(sanitize(JSON.stringify({ path: String.raw`D:\clients\acme repo\notes.md` }))).toBe(
+      '{"path":"[LOCAL_PATH]"}',
+    );
+    expect(sanitize('see D:/clients/acme repo/notes.md here')).toBe('see [LOCAL_PATH] here');
+    expect(sanitize(String.raw`see D:\clients\acme repo here`)).toBe('see [LOCAL_PATH] here');
+    expect(sanitize('at file:///work/%E5%AE%A2%E6%88%B7%20acme/src/app.js:3:9')).toBe(
+      'at file:[LOCAL_PATH]:3:9',
+    );
+    expect(sanitize(String.raw`{"cwd":"\/work\/clients\/acme\/importer\/src"}`)).toBe(
+      '{"cwd":"[LOCAL_PATH]"}',
+    );
+    expect(
+      sanitize(
+        String.raw`ls /d/clients/acme\ repo /cygdrive/d/clients/acme repo /mnt/d/clients/acme repo here`,
+      ),
+    ).toBe('ls [LOCAL_PATH] [LOCAL_PATH] [LOCAL_PATH] here');
+    expect(sanitize('open "/work/clients/acme/importer/My Notes.md" now')).toBe(
+      'open "[LOCAL_PATH]" now',
+    );
+    expect(sanitize('修复了/work/clients/acme/importer里的问题')).toBe(
+      '修复了[LOCAL_PATH]里的问题',
+    );
+  });
+
+  it('prefers the longest known path, so a folder name with a space stays whole', () => {
+    const nested = createPacketSanitizer(['/build/fixture', '/build/fixture/client acme'], {
+      caseInsensitive: false,
+    });
+    expect(nested('Fixed the importer in /build/fixture/client acme.')).toBe(
+      'Fixed the importer in [LOCAL_PATH].',
+    );
+    expect(nested('see /build/fixture/other here')).toBe('see [LOCAL_PATH] here');
+  });
+
+  it('splits many known paths across patterns of bounded size, longest first', () => {
+    // Shorter than the nested path and longer than its prefix, the fillers push the two into different patterns.
+    const fillers = Array.from({ length: 5_000 }, (_, index) => `/filler-${index}/abcdefgh`);
+    const many = createPacketSanitizer(
+      [
+        '/build/fixture',
+        ...fillers,
+        '/build/fixture/client acme',
+        `/${'d'.repeat(4_000)}`,
+        `/${'e'.repeat(40_000)}`,
+      ],
+      { caseInsensitive: false },
+    );
+    expect(many('Fixed the importer in /build/fixture/client acme.')).toBe(
+      'Fixed the importer in [LOCAL_PATH].',
+    );
+    expect(many('see /filler-0/abcdefgh and /filler-4999/abcdefgh/x here')).toBe(
+      'see [LOCAL_PATH] and [LOCAL_PATH] here',
+    );
+    expect(many(`see /${'d'.repeat(4_000)}/x here`)).toBe('see [LOCAL_PATH] here');
+    // A path longer than Linux allows is left to the general patterns.
+    expect(many(`see /${'e'.repeat(40_000)} here`)).toBe(`see /${'e'.repeat(40_000)} here`);
+  });
+
+  it('matches a name written composed or decomposed', () => {
+    const accented = createPacketSanitizer(['/work/caf\u00e9'], { caseInsensitive: false });
+    expect(accented('see /work/cafe\u0301/menu here')).toBe('see [LOCAL_PATH] here');
+  });
+
+  it('applies to command arguments', () => {
+    expect(
+      sanitizeArgsForPacket(['--root', '/work/clients/acme/importer', '--token', 'x'], sanitize),
+    ).toEqual(['--root', '[LOCAL_PATH]', '--token', '[REDACTED]']);
+  });
+
+  it('matches whole path segments only', () => {
+    expect(sanitize('see /work/clients/acme/importer-v2 here')).toBe(
+      'see /work/clients/acme/importer-v2 here',
+    );
+  });
+
+  it('matches letter case as the file system does', () => {
+    const insensitive = createPacketSanitizer([String.raw`C:\Work\Acme`], {
+      caseInsensitive: true,
+    });
+    expect(insensitive(String.raw`see c:\work\ACME\x.txt here`)).toBe('see [LOCAL_PATH] here');
+  });
+
+  it('ignores a bare root, which would match every path', () => {
+    expect(createPacketSanitizer(['/', 'C:\\'])('see /usr/lib here')).toBe('see /usr/lib here');
+  });
+
+  it('stays fast on hostile text and many known paths', () => {
+    const many = createPacketSanitizer(
+      Array.from({ length: 200 }, (_, index) => `/work/client-${index}/repository`),
+    );
+    for (const hostile of [
+      `/work/clients/acme/importer${'/a b'.repeat(40_000)}`,
+      `${'/work/client-1/'.repeat(30_000)}`,
+      `${'/work/clients/acme/importe'.repeat(10_000)}`,
+      '/'.repeat(200_000),
+      `"${'\\'.repeat(200_000)}`,
+    ]) {
+      const started = performance.now();
+      sanitize(hostile);
+      many(hostile);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
   });
 });

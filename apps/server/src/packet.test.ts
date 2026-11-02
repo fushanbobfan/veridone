@@ -51,6 +51,25 @@ afterEach(async () => {
 });
 
 describe('acceptance packets', () => {
+  // Outside quotes, the shape-based patterns end a path at its first space, so a repository folder named with a space
+  // would keep its last words; the repository's own path is known, so it goes whole.
+  it('replaces the repository path it knows, a folder name with a space included', async () => {
+    const fixture = await boundWorkspace({ repositoryName: 'client acme' });
+    cleanups.push(fixture.cleanup);
+    await fixture.writeReceipt(`Fixed the importer in ${fixture.repositoryPath}.`);
+    await fixture.importReceipt();
+
+    const { packet, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+
+    expect(packet.workItem.claim).toBe('Fixed the importer in [LOCAL_PATH].');
+    for (const text of [markdown, html]) {
+      expect(text).toContain('Fixed the importer in [LOCAL_PATH].');
+    }
+  }, 30_000);
+
   it('sanitizes the title and the branch in the JSON packet', async () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);
