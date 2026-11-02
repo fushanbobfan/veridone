@@ -399,6 +399,32 @@ describe('acceptance readiness', () => {
     });
   }, 60_000);
 
+  it("ignores a degraded receipt whose run id only ends like this item's", async () => {
+    const fixture = await boundWorkspace({ runId: 'parent:child' });
+    cleanups.push(fixture.cleanup);
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+    const unrelated = path.join(fixture.directory, 'unrelated-receipt.json');
+    await writeFile(
+      unrelated,
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'child',
+        source: 'codex',
+        title: 'Another run',
+        claim: 'Something else.',
+        status: 'failed',
+        started_at: '2026-10-22T10:00:00.000Z',
+      }),
+    );
+    expect((await fixture.post('/api/v1/receipts/import', { path: unrelated })).status).toBe(201);
+
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId)).toMatchObject({
+      ready: true,
+      degraded: false,
+    });
+  }, 60_000);
+
   it('sends each work item readiness with the bootstrap, as the verdict gate computes it', async () => {
     const fixture = await workspace();
     const checkId = await fixture.approveCheck('process.exit(0)');

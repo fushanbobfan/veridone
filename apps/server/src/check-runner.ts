@@ -279,12 +279,13 @@ export function acceptanceReadiness(
   workItemId: string,
 ): AcceptanceReadiness {
   const workItem = database.getWorkItem(workItemId);
-  const degraded = Boolean(
-    workItem &&
-    database
-      .listReceipts()
-      .some((receipt) => receipt.degraded && workItem.sourceRef.endsWith(`:${receipt.runId}`)),
-  );
+  // A receipt's work item has the source reference `<source type>:<run id>`, and no source type holds a colon, so
+  // the run id is all that follows the first colon. Run ids may hold colons themselves: a suffix match would let the
+  // degraded run `child` hold up the work item of the run `parent:child`.
+  const runId = workItem?.sourceRef.slice(workItem.sourceRef.indexOf(':') + 1);
+  const degraded = database
+    .listReceipts()
+    .some((receipt) => receipt.degraded && receipt.runId === runId);
   const repository = workItem?.repositoryId ? database.getRepository(workItem.repositoryId) : null;
   if (!workItem || !repository) {
     return {
