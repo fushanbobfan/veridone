@@ -2,8 +2,9 @@ import { createHmac } from 'node:crypto';
 
 import { canonicalJson, sha256Hex } from '@veridone/core';
 
-import type { EvidenceRecord, VeriDoneDatabase } from './database.js';
+import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
 import { sanitizeForPacket } from './redaction.js';
+import { summarizeTestOutput } from './test-summary.js';
 
 /** The packet schemas a verifier accepts; schema 2 carries pseudonymous identifiers. */
 const packetSchemaVersions = new Set([1, 2]);
@@ -27,9 +28,11 @@ function escapeMarkdown(value: string): string {
 }
 
 function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
-  // The tool's SHA-256 identifies it; its local path stays out of the packet.
-  return evidence.map(({ stdout: _stdout, stderr: _stderr, toolPath: _toolPath, ...item }) => ({
+  // The tool's SHA-256 identifies it; its local path and the output stay out of the packet, and only the counts
+  // from a test runner's own summary line go in.
+  return evidence.map(({ stdout, stderr, toolPath: _toolPath, ...item }) => ({
     ...item,
+    testCounts: summarizeTestOutput(`${stdout}\n${stderr}`),
     label: sanitizeForPacket(item.label),
     toolVersion: item.toolVersion ? sanitizeForPacket(item.toolVersion) : null,
     invalidReason: item.invalidReason ? sanitizeForPacket(item.invalidReason) : null,
@@ -37,6 +40,26 @@ function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
     snapshotFingerprint: pseudonym('fingerprint', item.snapshotFingerprint),
     checkDefinitionVersion: pseudonym('check-definitions', item.checkDefinitionVersion),
     artifactHashes: item.artifactHashes.map((hash) => pseudonym('artifact', hash)),
+  }));
+}
+
+/** What each check ran, so a reader can see the command behind its evidence. */
+function publicChecks(checks: CheckRecord[], pseudonym: Pseudonym) {
+  return checks.map((check) => ({
+    id: check.id,
+    label: sanitizeForPacket(check.label),
+    kind: check.kind,
+    // The file name and the pinned SHA-256 identify the tool; the directory it sits in stays local.
+    executable: sanitizeForPacket(check.executable.split(/[\\/]/u).pop() ?? check.executable),
+    toolSha256: check.executableSha256,
+    args: check.args.map(sanitizeForPacket),
+    versionArgs: check.versionArgs.map(sanitizeForPacket),
+    cwdRelative: sanitizeForPacket(check.cwdRelative),
+    scopePaths: check.scopePaths.map(sanitizeForPacket),
+    timeoutMs: check.timeoutMs,
+    maxOutputBytes: check.maxOutputBytes,
+    definitionHash: pseudonym('check-definition', check.definitionHash),
+    approvedAt: check.approvedAt,
   }));
 }
 
@@ -137,6 +160,16 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     claimHash: pseudonym('claim', rawWorkItem.claimHash),
   };
   const evidence = publicEvidence(rawEvidence, pseudonym);
+  const evidenceCheckIds = new Set(rawEvidence.map((item) => item.checkId));
+  const checks = publicChecks(
+    database
+      .listChecks()
+      .filter(
+        (check) =>
+          check.repositoryId === rawWorkItem.repositoryId || evidenceCheckIds.has(check.id),
+      ),
+    pseudonym,
+  );
   const verdicts = rawVerdicts.map((verdict) => ({
     ...verdict,
     note: sanitizeForPacket(verdict.note),
@@ -165,6 +198,7 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
         }
       : null,
     contract,
+    checks,
     evidence,
     verdicts,
   };

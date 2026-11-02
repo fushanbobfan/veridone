@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { VeriDoneDatabase } from './database.js';
@@ -70,6 +72,60 @@ describe('acceptance packets', () => {
     expect(packet.manifest.evidenceArtifacts).toEqual(packet.evidence[0]?.artifactHashes);
     expect(await verifyAcceptancePacket(packet)).toMatchObject({ valid: true, issues: [] });
   }, 30_000);
+
+  it('names each check and counts its tests without carrying its output', async () => {
+    const fixture = await boundWorkspace({
+      files: {
+        'README.md': '# Fixture\n',
+        'example.test.mjs': [
+          "import test from 'node:test';",
+          "test('a', () => {});",
+          "test('b', () => {});",
+          "test('c', { skip: true }, () => {});",
+        ].join('\n'),
+      },
+    });
+    cleanups.push(fixture.cleanup);
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Node tests',
+      kind: 'test',
+      executable: process.execPath,
+      args: ['--test'],
+      cwdRelative: '.',
+      timeoutMs: 30_000,
+      maxOutputBytes: 100_000,
+    });
+    const run = await fixture.post<{ evidence: { result: string } }>(
+      `/api/v1/checks/${approved.body.check.id}/run`,
+      { workItemId: fixture.workItemId },
+    );
+    expect(run.body.evidence.result).toBe('passed');
+
+    const { packet, json } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+
+    expect(packet.checks).toEqual([
+      expect.objectContaining({
+        id: approved.body.check.id,
+        label: 'Node tests',
+        executable: path.basename(process.execPath),
+        toolSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        args: ['--test'],
+        cwdRelative: '.',
+        timeoutMs: 30_000,
+      }),
+    ]);
+    expect(packet.evidence[0]?.testCounts).toEqual({
+      runner: 'node:test',
+      total: 3,
+      passed: 2,
+      failed: 0,
+      skipped: 1,
+    });
+    // The output and the tool's local path stay on this machine.
+    expect(json).not.toContain('duration_ms');
+    expect(json).not.toContain(JSON.stringify(process.execPath).slice(1, -1));
+  }, 60_000);
 
   it('keeps its pseudonyms stable within a workspace and its key out of backups', async () => {
     const fixture = await boundWorkspace();
