@@ -149,7 +149,7 @@ export function RepositoryLinkDialog({
           <div className="safety-callout">
             <ShieldCheck aria-hidden="true" size={16} />
             <span>
-              The imported claim stays untrusted; this action records identity, not proof.
+              The imported claim stays untrusted; linking records which repository it concerns.
             </span>
           </div>
 

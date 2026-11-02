@@ -35,7 +35,7 @@ describe('repository fingerprint', () => {
 });
 
 describe('declared scope', () => {
-  it('uses path boundaries instead of unsafe string prefixes', () => {
+  it('matches a scope prefix only at a path boundary', () => {
     expect(
       assessDeclaredScope([' M apps/web/src/App.tsx', '?? apps/webhook/escape.ts'], ['apps/web']),
     ).toMatchObject({
@@ -45,7 +45,7 @@ describe('declared scope', () => {
     });
   });
 
-  it('treats an absent declaration as unknown rather than drift', () => {
+  it('reports no drift when no scope is declared', () => {
     expect(assessDeclaredScope([' M SECURITY.md'], [])).toMatchObject({
       declared: false,
       satisfied: true,
