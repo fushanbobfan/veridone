@@ -22,6 +22,11 @@ describe('secret redaction', () => {
       'password="[REDACTED]"',
     ],
     [
+      'a quoted value continued past a line break',
+      'password="a\\\nstill-secret"',
+      'password="[REDACTED]"',
+    ],
+    [
       'an environment variable',
       'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
       'AWS_SECRET_ACCESS_KEY=[REDACTED]',
@@ -116,6 +121,24 @@ describe('packet sanitizing', () => {
     expect(sanitizeForPacket(text)).toBe('{"path":"[LOCAL_PATH]"}');
   });
 
+  it('replaces a quoted path whose last part holds a space', () => {
+    expect(
+      sanitizeForPacket(JSON.stringify({ path: String.raw`C:\Users\Alice\private file.txt` })),
+    ).toBe('{"path":"[LOCAL_PATH]"}');
+    expect(sanitizeForPacket(String.raw`home is "C:\Users\Bob Smith".`)).toBe(
+      'home is "[LOCAL_PATH]".',
+    );
+    expect(sanitizeForPacket("open '/home/bob smith/private notes.md' now")).toBe(
+      "open '[LOCAL_PATH]' now",
+    );
+  });
+
+  it('keeps the prose that follows a path, slashes in it included', () => {
+    expect(sanitizeForPacket('See /home/page and verify pass/fail counts.')).toBe(
+      'See [LOCAL_PATH] and verify pass/fail counts.',
+    );
+  });
+
   it('stays fast on hostile paths', () => {
     for (const hostile of [
       `C:\\${'a '.repeat(50_000)}`,
@@ -124,6 +147,8 @@ describe('packet sanitizing', () => {
       `/home/${'a '.repeat(50_000)}`,
       `\\\\${'a\\'.repeat(50_000)} b`,
       `~/${'a b/'.repeat(30_000)}`,
+      `"C:\\${'a '.repeat(50_000)}`,
+      `${'"C:\\a '.repeat(20_000)}`,
     ]) {
       const started = performance.now();
       sanitizeForPacket(hostile);

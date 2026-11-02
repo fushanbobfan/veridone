@@ -1,12 +1,12 @@
 // A name that ends in a secret word, written as an assignment, a header or a JSON field. The word must end the
 // name, so `max_tokens` and `token_count` stay readable while `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY` lose their
-// values. A quoted value is replaced up to its closing quote, past escaped quotes, or to the end of the line when the
-// output was cut off before the quote closed. The name's prefix is bounded: check output comes from the commit under
-// review, and an unbounded prefix takes quadratic time on input such as `a-a-a-…`.
+// values. A quoted value is replaced up to its closing quote, past escaped quotes and escaped line breaks, or to the
+// end of the line when the output was cut off before the quote closed. The name's prefix is bounded: check output
+// comes from the commit under review, and an unbounded prefix takes quadratic time on input such as `a-a-a-…`.
 const secretWord =
   'password|passwd|secret|secret[_-]?key|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?';
 const secretAssignment = new RegExp(
-  String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:"(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?|[^\s"',;]+)`,
+  String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:"(?:[^"\\\n]|\\[\s\S])*"?|'(?:[^'\\\n]|\\[\s\S])*'?|[^\s"',;]+)`,
   'giu',
 );
 // An option such as `--token` whose value is the next argument.
@@ -28,18 +28,21 @@ const bearerValue = /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gu;
 const keyBegin = /-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----/gu;
 const keyEnd = /-----END [A-Z ]{0,40}PRIVATE KEY-----/gu;
 
-// Separators may repeat, as in JSON-escaped Windows paths (`C:\\Users\\…`). A segment holds spaces inside it when
-// another separator follows, as in `C:\Program Files\` or `/home/Bob Smith/`; the last segment ends at the first
-// space, so the prose after a path stays. Each alternative either ends at a separator or cannot hold a space, so a
-// segment is read once: the patterns take linear time.
+// A path inside quotes runs to the closing quote, spaces included, as JSON and shell quoting write it; these go first.
+const quotedPath =
+  /(["'])((?:[A-Za-z]:[\\/]|\\{2,}[^\s\\<>:"|?*]|\/(?:Users|home|var|tmp|opt|etc|mnt|srv|root|Volumes|private|media)\/|~\/)[^"'\n<>|?*]*)\1/gu;
+// Outside quotes, separators may repeat, as in JSON-escaped Windows paths (`C:\\Users\\…`). A segment holds up to two
+// single spaces when another separator follows, as in `C:\Program Files (x86)\` or `/home/Bob Smith/`; the last
+// segment ends at the first space, so the prose after a path stays, and prose such as `pass/fail` after a path is not
+// read as more of it. Every alternative is bounded or ends at a separator, so the patterns take linear time.
 const windowsPath =
-  /\b[A-Za-z]:[\\/]+(?:(?:[^\s\\/<>:"|?*](?:[^\\/<>:"|?*\n]*[^\s\\/<>:"|?*])?(?=[\\/])|[^\s\\/<>:"|?*]+)[\\/]*)*/gu;
+  /\b[A-Za-z]:[\\/]+(?:(?:[^\s\\/<>:"|?*]+(?: [^\s\\/<>:"|?*]+){0,2}(?=[\\/])|[^\s\\/<>:"|?*]+)[\\/]*)*/gu;
 const uncPath =
-  /(?<![\w\\:])\\{2,}[^\s\\<>:"|?*]+(?:\\+(?:[^\s\\<>:"|?*](?:[^\\<>:"|?*\n]*[^\s\\<>:"|?*])?(?=\\)|[^\s\\<>:"|?*]+))+\\*/gu;
+  /(?<![\w\\:])\\{2,}[^\s\\<>:"|?*]+(?:\\+(?:[^\s\\<>:"|?*]+(?: [^\s\\<>:"|?*]+){0,2}(?=\\)|[^\s\\<>:"|?*]+))+\\*/gu;
 const privatePosixPath =
-  /(?<![\w.])\/(?:Users|home|var|tmp|opt|etc|mnt|srv|root|Volumes|private|media)(?:\/+(?:[^\s/<>'"](?:[^/<>'"\n]*[^\s/<>'"])?(?=\/)|[^\s/<>'"]+))+\/?/gu;
+  /(?<![\w.])\/(?:Users|home|var|tmp|opt|etc|mnt|srv|root|Volumes|private|media)(?:\/+(?:[^\s/<>'"]+(?: [^\s/<>'"]+){0,2}(?=\/)|[^\s/<>'"]+))+\/?/gu;
 const homeRelativePath =
-  /(?<![\w/])~(?:\/+(?:[^\s/<>'"](?:[^/<>'"\n]*[^\s/<>'"])?(?=\/)|[^\s/<>'"]+))+\/?/gu;
+  /(?<![\w/])~(?:\/+(?:[^\s/<>'"]+(?: [^\s/<>'"]+){0,2}(?=\/)|[^\s/<>'"]+))+\/?/gu;
 
 /**
  * Replaces each private key block with a marker, in one pass. A key that the output limit cut off has no end line,
@@ -76,6 +79,7 @@ export function redactSecrets(value: string): string {
 /** Text that may leave the machine in a strict-privacy packet: no credentials and no local paths. */
 export function sanitizeForPacket(value: string): string {
   return redactSecrets(value)
+    .replace(quotedPath, '$1[LOCAL_PATH]$1')
     .replace(uncPath, '[LOCAL_PATH]')
     .replace(windowsPath, '[LOCAL_PATH]')
     .replace(privatePosixPath, '[LOCAL_PATH]')
