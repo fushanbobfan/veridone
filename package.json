@@ -32,14 +32,14 @@
     "quality": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm verify:published-evidence && pnpm build && pnpm smoke:built && pnpm audit --audit-level low && pnpm licenses:check && pnpm secrets:check"
   },
   "devDependencies": {
-    "@axe-core/playwright": "4.12.1",
+    "@axe-core/playwright": "4.14.0",
     "@playwright/test": "1.64.1",
-    "@types/node": "26.1.1",
+    "@types/node": "26.6.6",
     "concurrently": "10.0.6",
-    "oxlint": "1.75.0",
-    "prettier": "3.9.6",
+    "oxlint": "1.90.0",
+    "prettier": "3.9.10",
     "tsup": "8.5.1",
-    "tsx": "4.23.1",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vitest": "4.1.12"
   }
