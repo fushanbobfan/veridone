@@ -110,6 +110,7 @@ Packets are signed with an Ed25519 key that the workspace creates on first use a
 - A setup step that installs dependencies fetches packages from the network and, depending on the package manager, may run their install scripts, with the operator's permissions.
 - A packet's signature shows which key signed it. Tying that key to a person or an organization is up to the operator, through the channel that publishes the public key. Anyone who can read the workspace database can sign with its key and recompute its pseudonyms.
 - Packets from one workspace share pseudonyms, so a reader can tell that two packets concern the same repository or state.
+- Outside quotes, a path ends at its first space unless another separator follows, so the words after the first space of a last part that holds one, as in `C:\Users\Bob Smith`, stay in the text. A quoted path is redacted up to its closing quote.
 - A packet's test counts come from the summary line in the check's own output, which code in the commit under review can print as it likes. The exit code and the post-run comparison decide the result; the counts describe it.
 - Workspace backups are unsigned.
 - Every process on this machine can reach the loopback API. The Host, Origin, and anti-CSRF controls defend against web pages.

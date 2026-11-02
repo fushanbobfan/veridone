@@ -93,7 +93,7 @@ Checks are declared locally with an executable and argument array. Approval reso
 4. resolves the working directory inside the checkout and captures the tool version;
 5. runs the check's setup arguments, when it has any, with the same pinned file, working directory, and environment, under the setup timeout; a setup that fails ends the run, and its result becomes the evidence;
 6. spawns the pinned file without a shell, with a minimal environment whose `PATH` keeps only absolute entries;
-7. streams capped stdout/stderr with redaction and enforces timeout, cancellation, output cap, and service-wide concurrency; stored stdout and stderr each stay within the output cap after redaction, and with a setup its part is cut first;
+7. streams capped stdout/stderr with redaction and enforces timeout, cancellation, output cap, and service-wide concurrency; stored stdout and stderr each stay within the output cap in UTF-8 bytes after redaction, and with a setup its part is cut first;
 8. requires the checkout's HEAD to still be the bound commit, compares its work tree with a fresh index read from that commit, lists new files its own `.gitignore` files do not cover, and hashes the tool once more; a moved HEAD, a changed or new file, a changed tool, or a comparison that cannot run marks the evidence mutated; then removes the checkout;
 9. stores evidence with its isolation, tool path, and tool hash.
 
