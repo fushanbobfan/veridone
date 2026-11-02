@@ -27,6 +27,11 @@ describe('secret redaction', () => {
       'password="[REDACTED]"',
     ],
     [
+      'a quoted value continued past a Windows line break',
+      'password="a\\\r\nstill-secret"',
+      'password="[REDACTED]"',
+    ],
+    [
       'an environment variable',
       'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
       'AWS_SECRET_ACCESS_KEY=[REDACTED]',
@@ -133,9 +138,23 @@ describe('packet sanitizing', () => {
     );
   });
 
-  it('keeps the prose that follows a path, slashes in it included', () => {
-    expect(sanitizeForPacket('See /home/page and verify pass/fail counts.')).toBe(
-      'See [LOCAL_PATH] and verify pass/fail counts.',
+  // Privacy comes before the prose around a path: a directory name may hold any number of spaces, so words between a
+  // path and a later slash on the same line can go with it.
+  it('replaces a path whose directories hold several spaces', () => {
+    for (const input of [
+      '/home/one two three four/private/file.txt',
+      String.raw`C:\Users\Bob  Smith\private\file.txt`,
+    ]) {
+      expect(sanitizeForPacket(`see ${input} here`)).toBe('see [LOCAL_PATH] here');
+    }
+  });
+
+  it('replaces a quoted path holding an escaped quote or the other kind of quote', () => {
+    expect(
+      sanitizeForPacket(JSON.stringify({ path: '/home/bob/private "sensitive notes".txt' })),
+    ).toBe('{"path":"[LOCAL_PATH]"}');
+    expect(sanitizeForPacket(`open "/home/bob's private/a b.md" now`)).toBe(
+      'open "[LOCAL_PATH]" now',
     );
   });
 
@@ -149,6 +168,8 @@ describe('packet sanitizing', () => {
       `~/${'a b/'.repeat(30_000)}`,
       `"C:\\${'a '.repeat(50_000)}`,
       `${'"C:\\a '.repeat(20_000)}`,
+      `${'"C:\\a\\"'.repeat(20_000)}`,
+      `"/home/${'a\\"'.repeat(40_000)}`,
     ]) {
       const started = performance.now();
       sanitizeForPacket(hostile);
