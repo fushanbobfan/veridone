@@ -85,15 +85,12 @@ function escapeMarkdown(value: string): string {
     .replaceAll('>', '&gt;');
 }
 
-function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym, sanitize: Sanitize) {
+function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
   // The tool's SHA-256 identifies it; its local path and the output stay out of the packet, and only the counts
   // from a test runner's own summary line go in.
   return evidence.map(({ stdout, stderr, toolPath: _toolPath, ...item }) => ({
     ...item,
     testCounts: summarizeTestOutput(`${stdout}\n${stderr}`),
-    label: sanitize(item.label),
-    toolVersion: item.toolVersion ? sanitize(item.toolVersion) : null,
-    invalidReason: item.invalidReason ? sanitize(item.invalidReason) : null,
     repositoryId: pseudonym('repository', item.repositoryId),
     snapshotFingerprint: pseudonym('fingerprint', item.snapshotFingerprint),
     checkDefinitionVersion: pseudonym('check-definitions', item.checkDefinitionVersion),
@@ -113,19 +110,22 @@ function sanitizeDeep(value: unknown, sanitize: Sanitize): unknown {
   return value;
 }
 
-/** What each check ran, so a reader can see the command behind its evidence. */
+/**
+ * What each check ran, so a reader can see the command behind its evidence. The value after an option named for a
+ * secret is replaced here, where the arguments are still in order.
+ */
 function publicChecks(checks: CheckRecord[], pseudonym: Pseudonym, sanitize: Sanitize) {
   return checks.map((check) => ({
     id: check.id,
-    label: sanitize(check.label),
+    label: check.label,
     kind: check.kind,
     // The file name and the pinned SHA-256 identify the tool; the directory it sits in stays local.
-    executable: sanitize(check.executable.split(/[\\/]/u).pop() ?? check.executable),
+    executable: check.executable.split(/[\\/]/u).pop() ?? check.executable,
     toolSha256: check.executableSha256,
     args: sanitizeArgsForPacket(check.args, sanitize),
     versionArgs: sanitizeArgsForPacket(check.versionArgs, sanitize),
-    cwdRelative: sanitize(check.cwdRelative),
-    scopePaths: check.scopePaths.map(sanitize),
+    cwdRelative: check.cwdRelative,
+    scopePaths: check.scopePaths,
     timeoutMs: check.timeoutMs,
     maxOutputBytes: check.maxOutputBytes,
     setupArgs: sanitizeArgsForPacket(check.setupArgs, sanitize),
@@ -267,31 +267,64 @@ export async function verifyAcceptancePacket(
   };
 }
 
+/** The records a packet's known local paths come from, as the workspace database keeps them. */
+export interface KnownPathSources {
+  listRoots(): Array<{ path: string; status: string }>;
+  listRepositories(): Array<{ path: string }>;
+  listChecks(): Array<{ resolvedExecutable: string | null }>;
+}
+
 /**
- * The local paths a packet must not show: the workspace's roots, repositories and pinned tools, the home directory
- * and the temporary directory. A path under a directory that the system also writes another way, as a Windows short
- * name or macOS's `/var` for `/private/var`, goes in both ways.
+ * The local paths a packet must not show, most trusted first, since the sanitizer keeps a bounded number: the home and
+ * temporary directories, the approved roots, the pinned tools, the repositories, and last the roots a restored backup
+ * brought, still pending. A path under a directory the system also writes another way, as a Windows short name or
+ * macOS's `/var` for `/private/var`, goes in both ways, and a path under the home directory also from `~`.
  */
-async function knownLocalPaths(database: VeriDoneDatabase, evidence: EvidenceRecord[]) {
-  const known = new Set([
-    ...database.listRoots().map((root) => root.path),
-    ...database.listRepositories().map((repository) => repository.path),
+export async function knownLocalPaths(
+  database: KnownPathSources,
+  evidence: Array<{ toolPath: string | null }>,
+  system = { home: homedir(), temp: tmpdir() },
+): Promise<string[]> {
+  const aliases: Array<[string, string]> = [];
+  for (const written of [system.home, system.temp, '/tmp', '/var']) {
+    const canonical = await realpath(written).catch(() => written);
+    if (canonical !== written) aliases.push([written, canonical]);
+  }
+  const homes = [
+    system.home,
+    ...aliases.flatMap(([written, canonical]) => (written === system.home ? [canonical] : [])),
+  ];
+  const roots = database.listRoots();
+  const ordered = [
+    system.home,
+    system.temp,
+    ...roots.filter((root) => root.status === 'approved').map((root) => root.path),
     ...database.listChecks().flatMap((check) => check.resolvedExecutable ?? []),
     ...evidence.flatMap((item) => item.toolPath ?? []),
-    homedir(),
-    tmpdir(),
-  ]);
-  const aliases: string[] = [];
-  for (const written of [homedir(), tmpdir(), '/tmp', '/var']) {
-    const canonical = await realpath(written).catch(() => written);
-    if (canonical === written) continue;
-    for (const knownPath of known) {
-      if (knownPath === canonical || knownPath.startsWith(`${canonical}${path.sep}`)) {
-        aliases.push(`${written}${knownPath.slice(canonical.length)}`);
+    ...database.listRepositories().map((repository) => repository.path),
+    ...roots.filter((root) => root.status !== 'approved').map((root) => root.path),
+  ];
+  const known = new Set<string>();
+  for (const knownPath of ordered) {
+    const forms = [knownPath];
+    for (const [written, canonical] of aliases) {
+      for (const [from, to] of [
+        [canonical, written],
+        [written, canonical],
+      ] as const) {
+        if (knownPath === from || knownPath.startsWith(`${from}${path.sep}`)) {
+          forms.push(`${to}${knownPath.slice(from.length)}`);
+        }
       }
     }
+    const fromHome = forms.flatMap((form) =>
+      homes.flatMap((home) =>
+        form.startsWith(`${home}${path.sep}`) ? [`~${form.slice(home.length)}`] : [],
+      ),
+    );
+    for (const form of [...forms, ...fromHome]) known.add(form);
   }
-  return [...known, ...aliases];
+  return [...known];
 }
 
 export async function buildAcceptancePacket(database: VeriDoneDatabase, workItemId: string) {
@@ -311,12 +344,8 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     rawVerdicts[0]?.contractVersion ??
     rawEvidence[0]?.contractVersion ??
     repository?.snapshot.contractVersion;
-  // A restored backup can carry any contract text, so the contract is sanitized like the rest.
-  const recordedContract =
+  const contract =
     contracts.find((candidate) => candidate.version === contractVersion) ?? contracts[0] ?? null;
-  const contract = recordedContract
-    ? (sanitizeDeep(recordedContract, sanitize) as typeof recordedContract)
-    : null;
   // The repository id hashes the local path, and the fingerprint, worktree, claim, definition and artifact hashes
   // each mix local data with fields a packet carries, so each could confirm a guessed path or file. They appear as
   // HMACs under a key only this workspace holds; equal values stay equal, so a packet's bindings can still be
@@ -326,10 +355,6 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     createHmac('sha256', key).update(`${kind}:${value}`).digest('hex');
   const workItem = {
     ...rawWorkItem,
-    title: sanitize(rawWorkItem.title),
-    claim: sanitize(rawWorkItem.claim),
-    sourceLabel: sanitize(rawWorkItem.sourceLabel),
-    sourceRef: sanitize(rawWorkItem.sourceRef),
     repositoryId: rawWorkItem.repositoryId
       ? pseudonym('repository', rawWorkItem.repositoryId)
       : null,
@@ -338,7 +363,7 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
       : null,
     claimHash: pseudonym('claim', rawWorkItem.claimHash),
   };
-  const evidence = publicEvidence(rawEvidence, pseudonym, sanitize);
+  const evidence = publicEvidence(rawEvidence, pseudonym);
   const evidenceCheckIds = new Set(rawEvidence.map((item) => item.checkId));
   const checks = publicChecks(
     database
@@ -352,13 +377,11 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
   );
   const verdicts = rawVerdicts.map((verdict) => ({
     ...verdict,
-    note: sanitize(verdict.note),
-    overrideReason: verdict.overrideReason ? sanitize(verdict.overrideReason) : null,
     snapshotFingerprint: pseudonym('fingerprint', verdict.snapshotFingerprint),
     claimHash: verdict.claimHash ? pseudonym('claim', verdict.claimHash) : null,
   }));
   const fingerprint = repository ? pseudonym('fingerprint', repository.snapshot.fingerprint) : null;
-  const payload = {
+  const fields = {
     schemaVersion: 2,
     application: 'veridone',
     privacyMode: 'strict',
@@ -368,13 +391,13 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     repository: repository
       ? {
           id: pseudonym('repository', repository.id),
-          name: sanitize(repository.name),
-          branch: repository.snapshot.branch ? sanitize(repository.snapshot.branch) : null,
+          name: repository.name,
+          branch: repository.snapshot.branch,
           head: repository.snapshot.head,
           fingerprint,
           worktreeHash: pseudonym('worktree', repository.snapshot.worktreeHash),
           diffStats: repository.snapshot.diffStats,
-          statusEntries: repository.snapshot.statusEntries.map(sanitize),
+          statusEntries: repository.snapshot.statusEntries,
         }
       : null,
     contract,
@@ -382,6 +405,9 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     evidence,
     verdicts,
   };
+  // Every string in the payload, object keys included, passes through the sanitizer: a restored backup can carry any
+  // text in any field, the contract and an evidence record's result included.
+  const payload = sanitizeDeep(fields, sanitize) as typeof fields;
   const canonical = packetCanonicalJson(payload);
   const payloadHash = await sha256Hex(canonical);
   // The signature lets a reader who holds this workspace's public key tell a changed packet from the one signed

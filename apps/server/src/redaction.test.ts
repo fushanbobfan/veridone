@@ -299,26 +299,43 @@ describe('known local paths', () => {
 
   it('splits many known paths across patterns of bounded size, longest first', () => {
     // Shorter than the nested path and longer than its prefix, the fillers push the two into different patterns.
-    const fillers = Array.from({ length: 5_000 }, (_, index) => `/filler-${index}/abcdefgh`);
+    const fillers = Array.from({ length: 2_500 }, (_, index) => `/filler-${index}/abcdefgh`);
     const many = createPacketSanitizer(
       [
         '/build/fixture',
         ...fillers,
         '/build/fixture/client acme',
-        `/${'d'.repeat(4_000)}`,
-        `/${'e'.repeat(40_000)}`,
+        `/${'d'.repeat(500)}`,
+        `/${'e'.repeat(4_000)}`,
       ],
       { caseInsensitive: false },
     );
     expect(many('Fixed the importer in /build/fixture/client acme.')).toBe(
       'Fixed the importer in [LOCAL_PATH].',
     );
-    expect(many('see /filler-0/abcdefgh and /filler-4999/abcdefgh/x here')).toBe(
+    expect(many('see /filler-0/abcdefgh and /filler-2499/abcdefgh/x here')).toBe(
       'see [LOCAL_PATH] and [LOCAL_PATH] here',
     );
-    expect(many(`see /${'d'.repeat(4_000)}/x here`)).toBe('see [LOCAL_PATH] here');
-    // A path longer than Linux allows is left to the general patterns.
-    expect(many(`see /${'e'.repeat(40_000)} here`)).toBe(`see /${'e'.repeat(40_000)} here`);
+    expect(many(`see /${'d'.repeat(500)}/x here`)).toBe('see [LOCAL_PATH] here');
+    // A known path longer than 512 characters is left to the general patterns.
+    expect(many(`see /${'e'.repeat(4_000)} here`)).toBe(`see /${'e'.repeat(4_000)} here`);
+  });
+
+  it('stays within V8 limits and keeps the known paths that come first', () => {
+    const hangul = `/${Array.from({ length: 8 }, () => '한'.repeat(60)).join('/')}`;
+    const deep = Array.from({ length: 40 }, (_, index) => `/p${index}${'/a'.repeat(240)}`);
+    const later = Array.from({ length: 5_000 }, (_, index) => `/later/client-${index}/repository`);
+    const bounded = createPacketSanitizer([hangul, ...deep, `/${'é'.repeat(3_459)}`, ...later], {
+      caseInsensitive: false,
+    });
+    expect(bounded(`see ${hangul}/x here`)).toBe('see [LOCAL_PATH] here');
+    expect(bounded(`see ${hangul.normalize('NFD')}/x here`)).toBe('see [LOCAL_PATH] here');
+    expect(bounded(`see /p39${'/a'.repeat(240)}/x here`)).toBe('see [LOCAL_PATH] here');
+    expect(bounded('see /later/client-0/repository here')).toBe('see [LOCAL_PATH] here');
+    // Past 100,000 characters of known paths in all, the rest are left to the general patterns.
+    expect(bounded('see /later/client-4999/repository here')).toBe(
+      'see /later/client-4999/repository here',
+    );
   });
 
   it('matches a name written composed or decomposed', () => {
@@ -332,10 +349,156 @@ describe('known local paths', () => {
     ).toEqual(['--root', '[LOCAL_PATH]', '--token', '[REDACTED]']);
   });
 
+  it('reads what follows a known path at least as far as the general patterns do', () => {
+    const cases: Array<[string, string, string]> = [
+      ['/home/bob', String.raw`cp /home/bob/My\ Documents/secret-plan.txt .`, 'cp [LOCAL_PATH] .'],
+      [
+        '/home/bob',
+        'restore /home/bob/backups/2024-01-01T10:00:00/payroll.sql now',
+        'restore [LOCAL_PATH] now',
+      ],
+      ['/home/bob', 'see /home/bob/a|b/what?/a`b/secret.txt now', 'see [LOCAL_PATH] now'],
+      [
+        '/Users/bob',
+        'see /Users/bob/Screenshots/Screen Shot 2024-01-01 at 10:00:00/x.png now',
+        'see [LOCAL_PATH] now',
+      ],
+      [
+        String.raw`C:\work\acme`,
+        String.raw`opened C:\work\acme\Client's Data\Q3 report\summary.xlsx today`,
+        'opened [LOCAL_PATH] today',
+      ],
+      [
+        String.raw`C:\Users\Bob Smith`,
+        String.raw`opened C:\Users\Bob Smith\a` + '`' + String.raw`b\Secret Folder\x.txt today`,
+        'opened [LOCAL_PATH] today',
+      ],
+    ];
+    for (const [known, text, expected] of cases) {
+      // The general patterns alone already remove each of these paths whole.
+      expect(sanitizeForPacket(text)).toBe(expected);
+      expect(createPacketSanitizer([known])(text)).toBe(expected);
+    }
+  });
+
+  it('replaces a known path before credentials, so an assignment keeps none of it', () => {
+    const home = createPacketSanitizer([String.raw`C:\Users\Bob Smith`]);
+    expect(
+      home(
+        String.raw`GOOGLE_APPLICATION_CREDENTIALS=C:\Users\Bob Smith\AppData\Roaming\gcloud\adc.json`,
+      ),
+    ).toBe('GOOGLE_APPLICATION_CREDENTIALS=[REDACTED]');
+    const tokenLike = joined('/work/sk', '-learn-experiments-2024');
+    const repos = createPacketSanitizer(['/work/acme repo', tokenLike]);
+    expect(
+      sanitizeArgsForPacket(['sign', '--private-key=/work/acme repo/keys/id_ed25519'], repos),
+    ).toEqual(['sign', '--private-key=[REDACTED]']);
+    expect(repos(`see ${tokenLike}/notes here`)).toBe('see [LOCAL_PATH] here');
+  });
+
+  it('replaces a known path in file URLs, JSON escapes and shell escapes', () => {
+    const home = createPacketSanitizer([String.raw`C:\Users\Bob Smith`], { caseInsensitive: true });
+    expect(home('see file:///c%3A/Users/Bob%20Smith/notes.md here')).toBe(
+      'see file:///[LOCAL_PATH] here',
+    );
+    const repos = createPacketSanitizer(
+      [
+        '/work/acme repo',
+        '/work/acme (old)',
+        "/work/bob's repo",
+        '/work/客户 acme',
+        String.raw`D:\clients\acme repo`,
+        '~/work/home repo',
+      ],
+      { caseInsensitive: false },
+    );
+    expect(repos('see file://localhost/work/acme%20repo/src/x.py here')).toBe(
+      'see file://localhost[LOCAL_PATH] here',
+    );
+    expect(repos('see file:///work/acme%20%28old%29/x here')).toBe('see file:[LOCAL_PATH] here');
+    expect(repos('see file:///work/bob%27s%20repo/y here')).toBe('see file:[LOCAL_PATH] here');
+    expect(repos('see file:///work/%e5%ae%a2%e6%88%b7%20acme/src here')).toBe(
+      'see file:[LOCAL_PATH] here',
+    );
+    expect(repos(String.raw`{"cwd": "/work/\u5ba2\u6237 acme/src"}`)).toBe(
+      '{"cwd": "[LOCAL_PATH]"}',
+    );
+    expect(repos(String.raw`{"cmd": "cd \/mnt\/d\/clients\/acme repo && ls"}`)).toBe(
+      '{"cmd": "cd [LOCAL_PATH] && ls"}',
+    );
+    expect(repos('Fixed it in ~/work/home repo. Also in $HOME/work/home repo/x')).toBe(
+      'Fixed it in [LOCAL_PATH]. Also in [LOCAL_PATH]',
+    );
+    expect(repos(String.raw`cd /work/acme\ \(old\)/src && cd /work/bob\'s\ repo/src`)).toBe(
+      'cd [LOCAL_PATH] && cd [LOCAL_PATH]',
+    );
+    const apostrophe = createPacketSanitizer([String.raw`C:\Users\Bob O'Brien`]);
+    expect(
+      apostrophe(String.raw`see 'C:\Users\Bob O'Brien\notes.txt' and C:\Users\Bob O'Brien\x here`),
+    ).toBe("see '[LOCAL_PATH]' and [LOCAL_PATH] here");
+    expect(apostrophe(String.raw`at Object.<anonymous> (C:\Users\Bob O'Brien\src\x.js:3:9)`)).toBe(
+      'at Object.<anonymous> ([LOCAL_PATH]:3:9)',
+    );
+    const percent = createPacketSanitizer(['/work/100% done'], { caseInsensitive: false });
+    expect(percent('see file:///work/100%25%20done/x here')).toBe('see file:[LOCAL_PATH] here');
+    expect(percent('see /work/100% done/y here')).toBe('see [LOCAL_PATH] here');
+  });
+
+  it('finds a known path after a command-line flag or in a URL', () => {
+    const repos = createPacketSanitizer(
+      ['/work/acme', '/work/acme repo', String.raw`D:\clients\acme`],
+      { caseInsensitive: false },
+    );
+    expect(repos('cc -I/work/acme/include main.c')).toBe('cc -I[LOCAL_PATH] main.c');
+    expect(repos('ld --library-path/work/acme/lib -o x')).toBe(
+      'ld --library-path[LOCAL_PATH] -o x',
+    );
+    expect(repos('GET http://localhost:5173/@fs/work/acme repo/src/main.ts')).toBe(
+      'GET http://localhost:5173/@fs[LOCAL_PATH]',
+    );
+    expect(repos('open vscode://file/work/acme repo/src/x.ts now')).toBe(
+      'open vscode://file[LOCAL_PATH] now',
+    );
+    expect(repos(String.raw`cl /ID:\clients\acme\include x.c`)).toBe('cl /I[LOCAL_PATH] x.c');
+    // A relative path that merely holds a known path's segments stays.
+    expect(createPacketSanitizer(['/app'])('built src/app/page.tsx')).toBe(
+      'built src/app/page.tsx',
+    );
+  });
+
+  it('ends a Windows path at the semicolon of a PATH list', () => {
+    expect(
+      sanitizeForPacket(String.raw`PATH=C:\tools\bin;E:\Private Stuff\Bob Smith\tools;C:\Windows`),
+    ).toBe('PATH=[LOCAL_PATH];[LOCAL_PATH];[LOCAL_PATH]');
+    // After a known path, the rest of the list goes with it, since a POSIX name may hold `;`.
+    expect(
+      sanitize(String.raw`PATH=D:\clients\acme repo\bin;E:\Private Stuff\Bob Smith\tools`),
+    ).toBe('PATH=[LOCAL_PATH]');
+  });
+
+  it('removes no less after a known path than the general patterns do', () => {
+    // A fixed sample of the differential check: each text holds a marker below a known path.
+    const cases: Array<[string, string]> = [
+      ['/home/bob', 'see /home/bob/;!MARKER and more'],
+      ['/Users/bob', '/Users/bob/,;^MARKER/:!?/& )'],
+      ['/home/bob', 'see /home/bob/x:12)MARKER here'],
+      ['/tmp/run', String.raw`"/tmp/run/[{;@/_MARKER?\(`],
+    ];
+    for (const [known, text] of cases) {
+      expect(sanitizeForPacket(text)).not.toContain('MARKER');
+      expect(createPacketSanitizer([known])(text)).not.toContain('MARKER');
+    }
+  });
+
   it('matches whole path segments only', () => {
     expect(sanitize('see /work/clients/acme/importer-v2 here')).toBe(
       'see /work/clients/acme/importer-v2 here',
     );
+    const roots = createPacketSanitizer(['/work', '/app'], { caseInsensitive: false });
+    const routes = String.raw`route "/workers/status", '/workshop notes', {"r":"/workflows"} and "/apple-touch-icon.png"`;
+    expect(roots(routes)).toBe(routes);
+    const siblings = 'see "/work/clients/acme/importer-v2/x" and /work/clients/acme/importeré/x';
+    expect(sanitize(siblings)).toBe(siblings);
   });
 
   it('matches letter case as the file system does', () => {
@@ -365,5 +528,15 @@ describe('known local paths', () => {
       many(hostile);
       expect(performance.now() - started).toBeLessThan(500);
     }
+  });
+
+  it("stays linear when a known path's segments begin with a space", () => {
+    // `/\ a` splits two ways, a separator run and an escaped space, unless only one of them is offered.
+    const spaced = createPacketSanitizer([`/x${'/ a'.repeat(150)}/end`], {
+      caseInsensitive: false,
+    });
+    const started = performance.now();
+    spaced(`see /x${String.raw`/\ a`.repeat(150)}/enX here`);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });
