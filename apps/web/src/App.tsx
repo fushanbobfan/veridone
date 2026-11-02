@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  approveRoot,
   cancelCheck,
   fetchBootstrap,
   fetchToolCandidate,
@@ -259,7 +260,7 @@ export function App() {
           <AddSourceDialog
             open={sourceDialogOpen}
             csrfToken={bootstrap.csrfToken}
-            roots={bootstrap.roots}
+            roots={bootstrap.roots.filter((root) => root.status === 'approved')}
             onClose={() => setSourceDialogOpen(false)}
             onAdded={reloadWorkspace}
           />
@@ -439,7 +440,7 @@ export function App() {
         <AddSourceDialog
           open={sourceDialogOpen}
           csrfToken={bootstrap.csrfToken}
-          roots={bootstrap.roots}
+          roots={bootstrap.roots.filter((root) => root.status === 'approved')}
           onClose={() => setSourceDialogOpen(false)}
           onAdded={reloadWorkspace}
         />
@@ -551,6 +552,10 @@ export function App() {
                 onReviewTool: fetchToolCandidate,
                 onPinTool: async (checkId: string, expected: ToolCandidate) => {
                   await pinCheckTool(checkId, expected, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+                onApproveRoot: async (rootId: string) => {
+                  await approveRoot(rootId, bootstrap.csrfToken);
                   await reloadWorkspace();
                 },
               }

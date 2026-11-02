@@ -3,6 +3,8 @@ export interface ApprovedRootDto {
   path: string;
   label: string;
   createdAt: string;
+  /** `pending` for a root restored from a backup until the operator approves it. */
+  status: 'approved' | 'pending';
 }
 
 export interface RepositoryDto {
@@ -267,6 +269,11 @@ export async function pinCheckTool(
   csrfToken: string,
 ): Promise<void> {
   await mutate(`/api/v1/checks/${checkId}/pin`, csrfToken, { expected });
+}
+
+/** Approves a root restored from a backup; the service checks the directory again first. */
+export async function approveRoot(rootId: string, csrfToken: string): Promise<void> {
+  await mutate(`/api/v1/roots/${rootId}/approve`, csrfToken, {});
 }
 
 export async function runCheck(

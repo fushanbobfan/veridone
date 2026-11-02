@@ -351,3 +351,59 @@ describe('receipt times in backups', () => {
     await expect(exportWorkspace(database)).rejects.toThrow(/legacy-unreadable/u);
   });
 });
+
+describe('restored roots wait for the operator', () => {
+  it('keeps a restored root out of reach until the operator approves it', async () => {
+    const source = await boundWorkspace();
+    cleanups.push(source.cleanup);
+    const sourceRoot = source.database.listApprovedRoots()[0];
+    if (!sourceRoot) throw new Error('The source fixture approved no root.');
+    const target = await boundWorkspace({ runId: 'target-run' });
+    cleanups.push(target.cleanup);
+
+    await importWorkspace(target.database, await exportWorkspace(source.database));
+
+    const restored = target.database.listRoots().find((root) => root.path === sourceRoot.path);
+    expect(restored?.status).toBe('pending');
+    expect(target.database.listApprovedRoots().map((root) => root.path)).not.toContain(
+      sourceRoot.path,
+    );
+    const refused = await target.post('/api/v1/repositories/discover', { rootId: restored?.id });
+    expect(refused).toMatchObject({ status: 409, body: { error: 'root_pending_approval' } });
+
+    const approved = await target.post<{ root: { status: string } }>(
+      `/api/v1/roots/${restored?.id}/approve`,
+      {},
+    );
+    expect(approved).toMatchObject({ status: 200, body: { root: { status: 'approved' } } });
+    const discovered = await target.post<{ repositories: string[] }>(
+      '/api/v1/repositories/discover',
+      { rootId: restored?.id },
+    );
+    expect(discovered.status).toBe(200);
+    expect(discovered.body.repositories.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('refuses to approve a restored root whose directory is not on this machine', async () => {
+    const target = await boundWorkspace();
+    cleanups.push(target.cleanup);
+    const backup = (await exportWorkspace(emptyDatabase())) as unknown as Backup & {
+      data: { approvedRoots: Array<Record<string, unknown>> };
+    };
+    backup.data.approvedRoots.push({
+      id: randomUUID(),
+      path: path.join(target.directory, 'no-such-directory'),
+      label: 'Elsewhere',
+      createdAt: '2026-10-22T10:00:00.000Z',
+    });
+
+    await importWorkspace(target.database, await resealed(backup));
+
+    const restored = target.database.listRoots().find((root) => root.label === 'Elsewhere');
+    const response = await target.post(`/api/v1/roots/${restored?.id}/approve`, {});
+    expect(response.status).toBe(400);
+    expect(target.database.listRoots().find((root) => root.label === 'Elsewhere')?.status).toBe(
+      'pending',
+    );
+  }, 30_000);
+});

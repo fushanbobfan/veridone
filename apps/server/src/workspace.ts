@@ -194,7 +194,8 @@ export async function exportWorkspace(database: VeriDoneDatabase): Promise<Works
     application: 'veridone',
     exportedAt: new Date().toISOString(),
     data: {
-      approvedRoots: database.listApprovedRoots(),
+      // Every root goes into the backup; a restore marks each one pending again.
+      approvedRoots: database.listRoots().map(({ status: _status, ...root }) => root),
       repositories: database.listRepositories(),
       receipts: database.listReceipts().map(exportableReceipt),
       workItems: database.listWorkItems(),
@@ -367,9 +368,10 @@ export async function importWorkspace(
 
   connection
     .transaction(() => {
+      // A backup cannot vouch for a directory on this machine; a restored root waits for the operator.
       const insertRoot = connection.prepare(`
-        INSERT INTO approved_roots (id, canonical_path, label, created_at)
-        VALUES (@id, @path, @label, @createdAt)
+        INSERT INTO approved_roots (id, canonical_path, label, created_at, status)
+        VALUES (@id, @path, @label, @createdAt, 'pending')
         ON CONFLICT DO NOTHING
       `);
       for (const record of data.approvedRoots) {

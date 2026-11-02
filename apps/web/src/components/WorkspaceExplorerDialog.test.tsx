@@ -81,3 +81,45 @@ describe('workspace explorer checks', () => {
     expect(onPinTool).toHaveBeenCalledWith('check', candidate);
   });
 });
+
+describe('workspace explorer roots', () => {
+  it('offers approval for a restored root and none for an approved one', async () => {
+    const user = userEvent.setup();
+    const onApproveRoot = vi.fn(async () => undefined);
+    const withRoots: BootstrapDto = {
+      ...bootstrap,
+      roots: [
+        {
+          id: 'local',
+          path: '/work/local',
+          label: 'Local work',
+          createdAt: '2026-10-22T10:00:00.000Z',
+          status: 'approved',
+        },
+        {
+          id: 'restored',
+          path: '/work/restored',
+          label: 'Restored work',
+          createdAt: '2026-10-22T10:00:00.000Z',
+          status: 'pending',
+        },
+      ],
+    };
+
+    render(
+      <WorkspaceExplorerDialog
+        open
+        section="roots"
+        bootstrap={withRoots}
+        onSection={() => undefined}
+        onClose={() => undefined}
+        onApproveRoot={onApproveRoot}
+      />,
+    );
+
+    expect(screen.getByText('/work/local')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^Approve/u })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Approve Restored work' }));
+    expect(onApproveRoot).toHaveBeenCalledWith('restored');
+  });
+});

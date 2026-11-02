@@ -12,7 +12,13 @@ afterEach(() => {
 });
 
 const roots = [
-  { id: 'root-1', path: 'D:\\work', label: 'Work', createdAt: '2026-10-22T00:00:00.000Z' },
+  {
+    id: 'root-1',
+    path: 'D:\\work',
+    label: 'Work',
+    createdAt: '2026-10-22T00:00:00.000Z',
+    status: 'approved' as const,
+  },
 ];
 const repositories = ['D:\\work\\alpha', 'D:\\work\\beta'];
 

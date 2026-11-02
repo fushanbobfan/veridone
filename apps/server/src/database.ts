@@ -218,6 +218,12 @@ const migrationNine = `
   );
 `;
 
+// A root restored from a backup waits for the operator; only approved roots bound what VeriDone reads.
+const migrationTen = `
+  ALTER TABLE approved_roots ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'
+    CHECK (status IN ('approved', 'pending'));
+`;
+
 export type WorkspaceKeyPurpose = 'packet-pseudonyms' | 'packet-signing';
 
 const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
@@ -258,6 +264,28 @@ export interface ApprovedRootRecord {
   path: string;
   label: string;
   createdAt: string;
+  /** `pending` for a root restored from a backup until the operator approves it on this machine. */
+  status: 'approved' | 'pending';
+}
+
+interface RootRow {
+  id: string;
+  canonical_path: string;
+  label: string;
+  created_at: string;
+  status: string;
+}
+
+const rootColumns = 'id, canonical_path, label, created_at, status';
+
+function rootFromRow(row: RootRow): ApprovedRootRecord {
+  return {
+    id: row.id,
+    path: row.canonical_path,
+    label: row.label,
+    createdAt: row.created_at,
+    status: row.status === 'pending' ? 'pending' : 'approved',
+  };
 }
 
 export interface RepositoryRecord {
@@ -393,6 +421,7 @@ export class VeriDoneDatabase {
       { version: 7, sql: migrationSeven },
       { version: 8, sql: migrationEight },
       { version: 9, sql: migrationNine },
+      { version: 10, sql: migrationTen },
     ];
 
     for (const migration of migrations) {
@@ -443,58 +472,56 @@ export class VeriDoneDatabase {
     return (select.get(purpose) as { material: string }).material;
   }
 
+  /** Adds a root the operator chose; adding a restored root's path again approves it. */
   addApprovedRoot(canonicalPath: string, label = path.basename(canonicalPath)): ApprovedRootRecord {
-    const record: ApprovedRootRecord = {
-      id: randomUUID(),
-      path: canonicalPath,
-      label: label || canonicalPath,
-      createdAt: new Date().toISOString(),
-    };
     this.connection
       .prepare(
-        `INSERT INTO approved_roots (id, canonical_path, label, created_at)
-         VALUES (@id, @path, @label, @createdAt)
-         ON CONFLICT(canonical_path) DO UPDATE SET label = excluded.label`,
+        `INSERT INTO approved_roots (id, canonical_path, label, created_at, status)
+         VALUES (@id, @path, @label, @createdAt, 'approved')
+         ON CONFLICT(canonical_path) DO UPDATE SET label = excluded.label, status = 'approved'`,
       )
-      .run(record);
+      .run({
+        id: randomUUID(),
+        path: canonicalPath,
+        label: label || canonicalPath,
+        createdAt: new Date().toISOString(),
+      });
     const existing = this.connection
-      .prepare(
-        'SELECT id, canonical_path, label, created_at FROM approved_roots WHERE canonical_path = ?',
-      )
-      .get(canonicalPath) as
-      { id: string; canonical_path: string; label: string; created_at: string } | undefined;
+      .prepare(`SELECT ${rootColumns} FROM approved_roots WHERE canonical_path = ?`)
+      .get(canonicalPath) as RootRow | undefined;
     if (!existing) throw new Error('The approved root could not be persisted.');
-    return {
-      id: existing.id,
-      path: existing.canonical_path,
-      label: existing.label,
-      createdAt: existing.created_at,
-    };
+    return rootFromRow(existing);
   }
 
+  /** The roots that bound what VeriDone reads. */
   listApprovedRoots(): ApprovedRootRecord[] {
+    return this.listRoots().filter((root) => root.status === 'approved');
+  }
+
+  /** Every root, restored ones still waiting for approval included. */
+  listRoots(): ApprovedRootRecord[] {
     return (
       this.connection
-        .prepare(
-          'SELECT id, canonical_path, label, created_at FROM approved_roots ORDER BY label COLLATE NOCASE',
-        )
-        .all() as Array<{ id: string; canonical_path: string; label: string; created_at: string }>
-    ).map((row) => ({
-      id: row.id,
-      path: row.canonical_path,
-      label: row.label,
-      createdAt: row.created_at,
-    }));
+        .prepare(`SELECT ${rootColumns} FROM approved_roots ORDER BY label COLLATE NOCASE`)
+        .all() as RootRow[]
+    ).map(rootFromRow);
+  }
+
+  getRoot(id: string): ApprovedRootRecord | null {
+    const row = this.connection
+      .prepare(`SELECT ${rootColumns} FROM approved_roots WHERE id = ?`)
+      .get(id) as RootRow | undefined;
+    return row ? rootFromRow(row) : null;
   }
 
   getApprovedRoot(id: string): ApprovedRootRecord | null {
-    const row = this.connection
-      .prepare('SELECT id, canonical_path, label, created_at FROM approved_roots WHERE id = ?')
-      .get(id) as
-      { id: string; canonical_path: string; label: string; created_at: string } | undefined;
-    return row
-      ? { id: row.id, path: row.canonical_path, label: row.label, createdAt: row.created_at }
-      : null;
+    const root = this.getRoot(id);
+    return root?.status === 'approved' ? root : null;
+  }
+
+  approveRoot(id: string): ApprovedRootRecord | null {
+    this.connection.prepare("UPDATE approved_roots SET status = 'approved' WHERE id = ?").run(id);
+    return this.getRoot(id);
   }
 
   upsertRepository(canonicalPath: string, snapshot: RepositorySnapshot): RepositoryRecord {

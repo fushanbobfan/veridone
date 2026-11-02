@@ -1,4 +1,4 @@
-import { Archive, FileCheck2, FolderGit2, ListChecks, X } from 'lucide-react';
+import { Archive, FileCheck2, FolderGit2, FolderTree, ListChecks, X } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 
 import type { BootstrapDto, ToolCandidate } from '../api.js';
@@ -10,6 +10,7 @@ const sections: Array<{
   label: string;
   icon: typeof FolderGit2;
 }> = [
+  { id: 'roots', label: 'Roots', icon: FolderTree },
   { id: 'repositories', label: 'Repositories', icon: FolderGit2 },
   { id: 'checks', label: 'Checks', icon: ListChecks },
   { id: 'contracts', label: 'Contracts', icon: FileCheck2 },
@@ -24,6 +25,7 @@ export function WorkspaceExplorerDialog({
   onClose,
   onReviewTool,
   onPinTool,
+  onApproveRoot,
 }: {
   open: boolean;
   section: WorkspaceSection;
@@ -34,6 +36,8 @@ export function WorkspaceExplorerDialog({
   onReviewTool?: (checkId: string) => Promise<ToolCandidate>;
   /** Pins the reviewed file; the service refuses if another file resolves by then. */
   onPinTool?: (checkId: string, expected: ToolCandidate) => Promise<void>;
+  /** Approves a root restored from a backup; the service checks the directory again first. */
+  onApproveRoot?: (rootId: string) => Promise<void>;
 }) {
   const titleId = useId();
   const dialog = useRef<HTMLElement>(null);
@@ -41,6 +45,7 @@ export function WorkspaceExplorerDialog({
   const [busy, setBusy] = useState<string | null>(null);
   const [candidate, setCandidate] = useState<(ToolCandidate & { checkId: string }) | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
+  const [rootError, setRootError] = useState<string | null>(null);
   useDialogFocus(open, onClose, dialog, closeButton);
   if (!open) return null;
 
@@ -66,6 +71,18 @@ export function WorkspaceExplorerDialog({
       await onPinTool(checkId, { path: reviewed.path, sha256: reviewed.sha256 });
       setCandidate(null);
     });
+  const approveRoot = async (rootId: string) => {
+    if (!onApproveRoot) return;
+    setBusy(rootId);
+    setRootError(null);
+    try {
+      await onApproveRoot(rootId);
+    } catch (caught) {
+      setRootError(caught instanceof Error ? caught.message : 'The root could not be approved.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -105,6 +122,53 @@ export function WorkspaceExplorerDialog({
         </div>
 
         <div className="explorer-panel" role="tabpanel" tabIndex={0}>
+          {section === 'roots' && (
+            <div className="explorer-list">
+              {bootstrap.roots.length === 0 ? (
+                <p>No roots are approved.</p>
+              ) : (
+                bootstrap.roots.map((root) => (
+                  <article key={root.id}>
+                    <div>
+                      <strong>{root.label}</strong>
+                      <span>
+                        {root.status === 'pending' ? 'Restored · waiting for approval' : 'Approved'}
+                      </span>
+                    </div>
+                    <dl>
+                      <div className="wide">
+                        <dt>Directory</dt>
+                        <dd className="mono tool-path">{root.path}</dd>
+                      </div>
+                    </dl>
+                    {root.status === 'pending' && (
+                      <>
+                        <p>
+                          Restored from a backup. VeriDone reads nothing under it until you approve
+                          it on this machine.
+                        </p>
+                        {onApproveRoot && (
+                          <button
+                            className="secondary-action pin-action"
+                            type="button"
+                            onClick={() => void approveRoot(root.id)}
+                            disabled={busy !== null}
+                            aria-label={`Approve ${root.label}`}
+                          >
+                            {busy === root.id ? 'Approving…' : 'Approve'}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </article>
+                ))
+              )}
+              <div className="dialog-message" aria-live="polite">
+                {rootError && <span className="error-message">{rootError}</span>}
+              </div>
+            </div>
+          )}
+
           {section === 'repositories' && (
             <div className="explorer-list">
               {bootstrap.repositories.length === 0 ? (

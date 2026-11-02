@@ -41,7 +41,7 @@ export function WorkspaceDialog({
       const total = (counts: Record<string, number>) =>
         Object.values(counts).reduce((sum, value) => sum + value, 0);
       setMessage(
-        `Added ${total(result.imported)} records; ${total(result.unchanged)} were already here. Restored evidence is history and passes no gate; pin restored checks before they run.`,
+        `Added ${total(result.imported)} records; ${total(result.unchanged)} were already here. Restored evidence is history and passes no gate; approve restored roots under Roots and pin restored checks before they run.`,
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The workspace could not be imported.');

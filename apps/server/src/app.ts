@@ -172,7 +172,7 @@ export function createApp(options: AppOptions): Hono {
       mode: options.config.demoMode ? 'demo' : 'local',
       csrfToken,
       sourceIssues,
-      roots: options.database.listApprovedRoots(),
+      roots: options.database.listRoots(),
       repositories: options.database.listRepositories(),
       receipts: options.database.listReceipts(),
       workItems: options.database.listWorkItems(),
@@ -224,10 +224,40 @@ export function createApp(options: AppOptions): Hono {
     return context.json({ root }, 201);
   });
 
+  // A restored root takes effect once the operator approves it, after the checks adding a root runs, and only
+  // while its stored path still resolves to itself.
+  app.post('/api/v1/roots/:id/approve', async (context) => {
+    const root = options.database.getRoot(context.req.param('id'));
+    if (!root) return context.json({ error: 'approved_root_not_found' }, 404);
+    let canonicalPath: string;
+    try {
+      canonicalPath = await realpath(root.path);
+    } catch {
+      return context.json(
+        { error: 'root_missing', message: `${root.path} does not exist on this machine.` },
+        400,
+      );
+    }
+    if (!(await stat(canonicalPath)).isDirectory()) {
+      return context.json({ error: 'root_is_not_directory' }, 400);
+    }
+    if (canonicalPath !== root.path) {
+      return context.json(
+        {
+          error: 'root_moved',
+          message: `${root.path} now resolves to ${canonicalPath}. Add that directory as a new root instead.`,
+        },
+        409,
+      );
+    }
+    return context.json({ root: options.database.approveRoot(root.id) });
+  });
+
   app.post('/api/v1/repositories/discover', async (context) => {
     const request = rootIdSchema.parse(await context.req.json());
-    const root = options.database.getApprovedRoot(request.rootId);
+    const root = options.database.getRoot(request.rootId);
     if (!root) return context.json({ error: 'approved_root_not_found' }, 404);
+    if (root.status !== 'approved') return context.json({ error: 'root_pending_approval' }, 409);
     const repositories = await discoverGitRepositories(root.path);
     return context.json({ repositories });
   });
