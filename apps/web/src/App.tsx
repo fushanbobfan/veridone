@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   cancelCheck,
@@ -126,6 +126,8 @@ export function App() {
   );
   const theme: Theme = themePreference === 'system' ? systemTheme : themePreference;
   const [mobilePane, setMobilePane] = useState<'inbox' | 'detail'>('inbox');
+  // The focus move that follows a selection; cleared when the desk unmounts.
+  const focusTimer = useRef<number | undefined>(undefined);
   const [decisions, setDecisions] = useState<Record<string, string>>({});
   const [bootstrap, setBootstrap] = useState<BootstrapDto | null>(null);
   const [connectionState, setConnectionState] = useState<'loading' | 'ready' | 'demo'>(
@@ -190,6 +192,11 @@ export function App() {
       controller.abort();
       window.clearInterval(interval);
     };
+  }, []);
+
+  useEffect(() => {
+    const timers = focusTimer;
+    return () => window.clearTimeout(timers.current);
   }, []);
 
   useEffect(() => {
@@ -373,7 +380,11 @@ export function App() {
   const selectReview = (id: string) => {
     setSelectedId(id);
     setMobilePane('detail');
-    window.setTimeout(() => document.querySelector<HTMLElement>('#review-detail')?.focus(), 240);
+    window.clearTimeout(focusTimer.current);
+    focusTimer.current = window.setTimeout(
+      () => document.querySelector<HTMLElement>('#review-detail')?.focus(),
+      240,
+    );
   };
 
   return (
