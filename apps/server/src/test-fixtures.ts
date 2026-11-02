@@ -19,7 +19,7 @@ export interface ApiResponse<T> {
  * bound to it. Every request goes through the real API.
  */
 export async function boundWorkspace(
-  options: { files?: Record<string, string>; runId?: string } = {},
+  options: { files?: Record<string, string>; runId?: string; status?: string } = {},
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), 'veridone-fixture-'));
   const database = new VeriDoneDatabase(':memory:');
@@ -73,7 +73,7 @@ export async function boundWorkspace(
         source: 'codex',
         title,
         claim,
-        status: 'complete',
+        status: options.status ?? 'complete',
         started_at: '2026-10-22T10:00:00.000Z',
       }),
     );

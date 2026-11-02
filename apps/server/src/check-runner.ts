@@ -223,58 +223,106 @@ export async function runApprovedCheck(
   });
 }
 
-export function acceptanceReadiness(
-  database: VeriDoneDatabase,
-  workItemId: string,
-): {
+/** One approved check's gate: its state and the run that state comes from. */
+export interface CheckReadiness {
+  checkId: string;
+  state: 'passed' | 'failed' | 'stale' | 'missing';
+  /** The latest run this workspace produced, or a restored one when this workspace has none. */
+  evidenceId: string | null;
+}
+
+/** Whether a work item may be accepted without an override, and why; the web shows exactly this. */
+export interface AcceptanceReadiness {
   ready: boolean;
+  /** The work item is bound to a repository snapshot. */
+  bound: boolean;
+  /** The bound snapshot is the repository's current state. */
+  bindingFresh: boolean;
+  /** The agent's receipt reports a failing or incomplete stage. */
+  degraded: boolean;
   checkCount: number;
   passingCount: number;
   evidenceIds: string[];
   scopeDeclared: boolean;
   scopeDriftPaths: string[];
-} {
-  const empty = {
-    ready: false,
-    checkCount: 0,
-    passingCount: 0,
-    evidenceIds: [],
-    scopeDeclared: false,
-    scopeDriftPaths: [],
-  };
+  checks: CheckReadiness[];
+}
+
+export function acceptanceReadiness(
+  database: VeriDoneDatabase,
+  workItemId: string,
+): AcceptanceReadiness {
   const workItem = database.getWorkItem(workItemId);
-  if (!workItem?.repositoryId) {
-    return empty;
+  const degraded = Boolean(
+    workItem &&
+    database
+      .listReceipts()
+      .some((receipt) => receipt.degraded && workItem.sourceRef.endsWith(`:${receipt.runId}`)),
+  );
+  const repository = workItem?.repositoryId ? database.getRepository(workItem.repositoryId) : null;
+  if (!workItem || !repository) {
+    return {
+      ready: false,
+      bound: false,
+      bindingFresh: false,
+      degraded,
+      checkCount: 0,
+      passingCount: 0,
+      evidenceIds: [],
+      scopeDeclared: false,
+      scopeDriftPaths: [],
+      checks: [],
+    };
   }
-  const repository = database.getRepository(workItem.repositoryId);
-  if (!repository) return empty;
+  const bindingFresh = workItem.snapshotFingerprint === repository.snapshot.fingerprint;
   const checks = database.listChecks().filter((check) => check.repositoryId === repository.id);
   const scope = assessDeclaredScope(
     repository.snapshot.statusEntries,
     checks.flatMap((check) => check.scopePaths),
   );
-  // Only evidence this workspace produced counts; restored evidence stays history.
-  const allEvidence = database
-    .listEvidence(workItemId)
-    .filter((evidence) => evidence.origin === 'local');
-  const latest = checks
-    .map((check) => allEvidence.find((evidence) => evidence.checkId === check.id))
-    .filter((evidence): evidence is EvidenceRecord => Boolean(evidence));
-  const passing = latest.filter(
-    (evidence) =>
-      evidence.result === 'passed' &&
-      evidence.isolation === 'clean-checkout' &&
-      evidence.snapshotFingerprint === repository.snapshot.fingerprint &&
-      evidence.contractVersion === repository.snapshot.contractVersion &&
-      evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
-      evidence.invalidReason === null,
-  );
+  const evidence = database.listEvidence(workItemId);
+  const isFresh = (run: EvidenceRecord) =>
+    // Only evidence this workspace produced counts; restored evidence stays history.
+    run.origin === 'local' &&
+    run.result === 'passed' &&
+    run.isolation === 'clean-checkout' &&
+    run.snapshotFingerprint === repository.snapshot.fingerprint &&
+    run.contractVersion === repository.snapshot.contractVersion &&
+    run.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
+    run.invalidReason === null;
+  const checkStates = checks.map((check): CheckReadiness & { fresh: boolean } => {
+    const runs = evidence.filter((run) => run.checkId === check.id);
+    const latest = runs.find((run) => run.origin === 'local') ?? runs[0];
+    const fresh = latest ? isFresh(latest) : false;
+    return {
+      checkId: check.id,
+      state: fresh
+        ? 'passed'
+        : latest?.result === 'failed' || latest?.result === 'mutated'
+          ? 'failed'
+          : latest
+            ? 'stale'
+            : 'missing',
+      evidenceId: latest?.id ?? null,
+      fresh,
+    };
+  });
+  const passing = checkStates.filter((check) => check.fresh);
   return {
-    ready: checks.length > 0 && passing.length === checks.length && scope.satisfied,
+    ready:
+      !degraded &&
+      bindingFresh &&
+      checks.length > 0 &&
+      passing.length === checks.length &&
+      scope.satisfied,
+    bound: workItem.snapshotFingerprint !== null,
+    bindingFresh,
+    degraded,
     checkCount: checks.length,
     passingCount: passing.length,
-    evidenceIds: passing.map((evidence) => evidence.id),
+    evidenceIds: passing.flatMap((check) => (check.evidenceId ? [check.evidenceId] : [])),
     scopeDeclared: scope.declared,
     scopeDriftPaths: scope.outsidePaths,
+    checks: checkStates.map(({ fresh: _fresh, ...check }) => check),
   };
 }

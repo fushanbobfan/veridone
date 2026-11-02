@@ -6,15 +6,18 @@ import { latestVerdict, workItemToReview } from './local-data.js';
 const currentFingerprint = 'a'.repeat(64);
 const earlierFingerprint = 'b'.repeat(64);
 
+/**
+ * A workspace as the service reports it. Readiness comes from the service, which decides what counts (its tests
+ * cover the conditions); these tests cover how the review view presents it.
+ */
 function workspace(options: {
   verdict?: Pick<VerdictDto, 'decision' | 'snapshotFingerprint'>;
   evidence?: boolean;
-  /** Evidence recorded before checks ran in a clean checkout carries no isolation. */
-  legacyEvidence?: boolean;
   restoredEvidence?: boolean;
-  /** Evidence produced for an earlier check set, such as before a tool was pinned again. */
-  earlierChecks?: boolean;
+  /** The agent's receipt reports a failing or incomplete stage. */
+  degraded?: boolean;
 }): BootstrapDto {
+  const passing = Boolean(options.evidence && !options.restoredEvidence);
   return {
     mode: 'local',
     csrfToken: 'token',
@@ -95,13 +98,13 @@ function workspace(options: {
             snapshotFingerprint: currentFingerprint,
             head: 'c'.repeat(40),
             contractVersion: 'default-v1',
-            checkDefinitionVersion: options.earlierChecks ? 'checks-v1' : 'checks-v2',
+            checkDefinitionVersion: 'checks-v2',
             completedAt: '2026-10-22T10:05:00.000Z',
             durationMs: 500,
             toolVersion: 'v24.19.0',
             exitCode: 0,
             invalidReason: null,
-            isolation: options.legacyEvidence ? null : 'clean-checkout',
+            isolation: 'clean-checkout',
             toolPath: '/usr/bin/node',
             toolSha256: 'f'.repeat(64),
             origin: options.restoredEvidence ? 'imported' : 'local',
@@ -124,6 +127,26 @@ function workspace(options: {
         ]
       : [],
     signingKey: { keyId: 'e'.repeat(64) },
+    readiness: {
+      work: {
+        ready: passing && !options.degraded,
+        bound: true,
+        bindingFresh: true,
+        degraded: options.degraded ?? false,
+        checkCount: 1,
+        passingCount: passing ? 1 : 0,
+        evidenceIds: passing ? ['evidence'] : [],
+        scopeDeclared: false,
+        scopeDriftPaths: [],
+        checks: [
+          {
+            checkId: 'check',
+            state: passing ? 'passed' : options.evidence ? 'stale' : 'missing',
+            evidenceId: options.evidence ? 'evidence' : null,
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -143,18 +166,15 @@ describe('local review state', () => {
     expect(review({ evidence: true })).toMatchObject({ state: 'ready', gatesReady: true });
   });
 
-  it('does not count evidence that did not run in a clean checkout', () => {
-    expect(review({ evidence: true, legacyEvidence: true })).toMatchObject({
-      state: 'blocked',
-      gatesReady: false,
-    });
-  });
-
-  it('does not count evidence produced for an earlier check definition', () => {
-    expect(review({ evidence: true, earlierChecks: true })).toMatchObject({
-      state: 'blocked',
-      gatesReady: false,
-    });
+  it('counts the receipt as a gate that a degraded run fails', () => {
+    const clean = review({ evidence: true });
+    const degraded = review({ evidence: true, degraded: true });
+    expect(degraded).toMatchObject({ state: 'blocked', gatesReady: false });
+    expect(degraded.criteria.find((criterion) => criterion.id === 'provenance')?.state).toBe(
+      'failed',
+    );
+    expect(clean.requiredTotal).toBe(degraded.requiredTotal);
+    expect(degraded.requiredSatisfied).toBe(clean.requiredSatisfied - 1);
   });
 
   it('shows restored evidence as history that passes no gate', () => {

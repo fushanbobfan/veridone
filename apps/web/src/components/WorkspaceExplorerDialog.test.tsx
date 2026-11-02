@@ -40,6 +40,7 @@ const bootstrap: BootstrapDto = {
   evidence: [],
   verdicts: [],
   signingKey: { keyId: 'e'.repeat(64) },
+  readiness: {},
 };
 
 describe('workspace explorer checks', () => {

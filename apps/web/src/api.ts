@@ -157,6 +157,25 @@ export interface BootstrapDto {
   verdicts: VerdictDto[];
   /** The key this workspace signs packets with; its public half downloads from the signing-key route. */
   signingKey: { keyId: string };
+  /** Each work item's readiness as the service's verdict gate computes it, keyed by work item id. */
+  readiness: Record<string, ReadinessDto>;
+}
+
+export interface ReadinessDto {
+  ready: boolean;
+  bound: boolean;
+  bindingFresh: boolean;
+  degraded: boolean;
+  checkCount: number;
+  passingCount: number;
+  evidenceIds: string[];
+  scopeDeclared: boolean;
+  scopeDriftPaths: string[];
+  checks: Array<{
+    checkId: string;
+    state: 'passed' | 'failed' | 'stale' | 'missing';
+    evidenceId: string | null;
+  }>;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

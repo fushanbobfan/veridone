@@ -337,3 +337,74 @@ describe('check tools are pinned', () => {
     expect(response.body.message).toMatch(/relative paths are not pinned/u);
   }, 30_000);
 });
+
+describe('acceptance readiness', () => {
+  it('reports each approved check with its state and the run it comes from', async () => {
+    const fixture = await workspace();
+    const passing = await fixture.approveCheck('process.exit(0)', 'Passing check');
+    const pending = await fixture.approveCheck('process.exit(0)', 'Pending check');
+    const run = await fixture.post<{ evidence: { id: string } }>(`/api/v1/checks/${passing}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    const readiness = acceptanceReadiness(fixture.database, fixture.workItemId);
+
+    expect(readiness).toMatchObject({
+      ready: false,
+      bound: true,
+      bindingFresh: true,
+      degraded: false,
+      passingCount: 1,
+    });
+    expect(readiness.checks).toEqual(
+      expect.arrayContaining([
+        { checkId: passing, state: 'passed', evidenceId: run.body.evidence.id },
+        { checkId: pending, state: 'missing', evidenceId: null },
+      ]),
+    );
+  }, 60_000);
+
+  it('leaves earlier evidence stale once another check is approved', async () => {
+    const fixture = await workspace();
+    const first = await fixture.approveCheck('process.exit(0)', 'First check');
+    await fixture.post(`/api/v1/checks/${first}/run`, { workItemId: fixture.workItemId });
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(true);
+
+    await fixture.approveCheck('process.exit(0)', 'Second check');
+
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId).checks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkId: first, state: 'stale' })]),
+    );
+  }, 60_000);
+
+  it('holds acceptance for a degraded receipt until an override explains it', async () => {
+    const fixture = await boundWorkspace({ status: 'failed' });
+    cleanups.push(fixture.cleanup);
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId)).toMatchObject({
+      ready: false,
+      degraded: true,
+      passingCount: 1,
+    });
+    await expect(fixture.decide('accepted', 'Looks fine.')).resolves.toMatchObject({
+      status: 409,
+      body: { error: 'required_gates_open' },
+    });
+  }, 60_000);
+
+  it('sends each work item readiness with the bootstrap, as the verdict gate computes it', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+
+    const bootstrap = await fixture.get<{ readiness: Record<string, unknown> }>(
+      '/api/v1/bootstrap',
+    );
+
+    expect(bootstrap.body.readiness[fixture.workItemId]).toEqual(
+      acceptanceReadiness(fixture.database, fixture.workItemId),
+    );
+  }, 60_000);
+});

@@ -181,6 +181,12 @@ export function createApp(options: AppOptions): Hono {
       evidence: options.database.listEvidence(),
       verdicts: options.database.listVerdicts(),
       signingKey: { keyId: workspaceSigningKey(options.database).keyId },
+      // The same readiness the verdict gate applies, so the review view and the service agree.
+      readiness: Object.fromEntries(
+        options.database
+          .listWorkItems()
+          .map((item) => [item.id, acceptanceReadiness(options.database, item.id)]),
+      ),
     });
   });
 
