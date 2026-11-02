@@ -22,7 +22,9 @@ if (files.length === 0) {
         failed = true;
         process.stderr.write(`${file}: ${verification.issues.join('; ')}\n`);
       } else {
-        process.stdout.write(`${file}: verified ${verification.expectedPayloadHash}\n`);
+        process.stdout.write(
+          `${file}: verified ${verification.expectedPayloadHash} (${verification.signed ? `signed by key ${verification.keyId}` : 'unsigned'})\n`,
+        );
       }
     } catch (error) {
       failed = true;

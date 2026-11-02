@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +12,13 @@ afterEach(() => {
 });
 
 const roots = [
-  { id: 'root-1', path: 'D:\\work', label: 'Work', createdAt: '2026-10-22T00:00:00.000Z' },
+  {
+    id: 'root-1',
+    path: 'D:\\work',
+    label: 'Work',
+    createdAt: '2026-10-22T00:00:00.000Z',
+    status: 'approved' as const,
+  },
 ];
 const repositories = ['D:\\work\\alpha', 'D:\\work\\beta'];
 
@@ -97,5 +103,29 @@ describe('add source dialog', () => {
     expect((screen.getByLabelText('Absolute local path') as HTMLInputElement).value).toBe(
       repositories[0],
     );
+  });
+
+  it('shows discovery as idle when the dialog opens again after an add', async () => {
+    const user = userEvent.setup();
+    // The discovery never answers; adding a typed path succeeds meanwhile.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes('/repositories/discover')
+        ? new Promise<Response>(() => undefined)
+        : new Response(JSON.stringify({ repository: { id: 'repository-1' } }), { status: 201 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const onClose = vi.fn();
+    const props = { csrfToken: 'token', roots, onClose, onAdded: async () => undefined };
+
+    const { rerender } = render(<AddSourceDialog open {...props} />);
+    await user.click(screen.getByText('Git repository'));
+    await user.click(screen.getByRole('button', { name: 'Discover repositories' }));
+    await user.type(screen.getByLabelText('Absolute local path'), '/work/alpha');
+    await user.click(screen.getByRole('button', { name: 'Connect source' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: 2_000 });
+
+    rerender(<AddSourceDialog open={false} {...props} />);
+    rerender(<AddSourceDialog open {...props} />);
+    expect(screen.getByRole('button', { name: 'Discover repositories' })).toBeTruthy();
   });
 });

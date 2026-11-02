@@ -17,9 +17,9 @@ import {
 import { CheckCapacityError, CheckExecutionManager } from './check-execution.js';
 import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
 import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
-import type { ServerConfig } from './config.js';
+import { allowedHosts, type ServerConfig } from './config.js';
 import { VerdictConflictError, type RepositoryRecord, type VeriDoneDatabase } from './database.js';
-import { buildAcceptancePacket } from './packet.js';
+import { buildAcceptancePacket, workspaceSigningKey } from './packet.js';
 import { exportWorkspace, importWorkspace, WorkspaceConflictError } from './workspace.js';
 
 const rootRequestSchema = z.object({
@@ -86,6 +86,18 @@ export function createApp(options: AppOptions): Hono {
       },
     }),
   );
+
+  // A page that rebinds its own domain to 127.0.0.1 reaches this server under that domain's name, so the server
+  // answers only to its loopback names. The request line can carry an absolute URL, so both places are checked.
+  const hosts = new Set(allowedHosts(options.config));
+  app.use('*', async (context, next) => {
+    const header = context.req.header('Host')?.toLowerCase();
+    const addressed = new URL(context.req.url).host.toLowerCase();
+    if ((header !== undefined && !hosts.has(header)) || !hosts.has(addressed)) {
+      return context.json({ error: 'host_not_allowed' }, 403);
+    }
+    return next();
+  });
 
   /** Captures a known repository again with its current check set and stores the snapshot. */
   const recaptureRepository = async (repository: RepositoryRecord) => {
@@ -160,7 +172,7 @@ export function createApp(options: AppOptions): Hono {
       mode: options.config.demoMode ? 'demo' : 'local',
       csrfToken,
       sourceIssues,
-      roots: options.database.listApprovedRoots(),
+      roots: options.database.listRoots(),
       repositories: options.database.listRepositories(),
       receipts: options.database.listReceipts(),
       workItems: options.database.listWorkItems(),
@@ -168,7 +180,23 @@ export function createApp(options: AppOptions): Hono {
       checks: options.database.listChecks(),
       evidence: options.database.listEvidence(),
       verdicts: options.database.listVerdicts(),
+      signingKey: { keyId: workspaceSigningKey(options.database).keyId },
+      // The same readiness the verdict gate applies, so the review view and the service agree.
+      readiness: Object.fromEntries(
+        options.database
+          .listWorkItems()
+          .map((item) => [item.id, acceptanceReadiness(options.database, item.id)]),
+      ),
     });
+  });
+
+  // The public half of the key packets are signed with, for the operator to publish where readers can find it.
+  app.get('/api/v1/workspace/signing-key', (context) => {
+    const key = workspaceSigningKey(options.database);
+    context.header('Content-Type', 'application/x-pem-file; charset=utf-8');
+    context.header('Content-Disposition', 'attachment; filename="veridone-signing-key.pem"');
+    context.header('X-VeriDone-Key-Id', key.keyId);
+    return context.body(key.publicKey);
   });
 
   app.get('/api/v1/workspace/export', async (context) => {
@@ -181,17 +209,22 @@ export function createApp(options: AppOptions): Hono {
     return context.body(`${JSON.stringify(document, null, 2)}\n`);
   });
 
-  app.post(
-    '/api/v1/workspace/import',
-    bodyLimit({
-      maxSize: 25_000_000,
-      onError: (context) => context.json({ error: 'workspace_too_large' }, 413),
-    }),
-    async (context) => {
-      const result = await importWorkspace(options.database, await context.req.json());
-      return context.json(result, 201);
-    },
+  const workspaceBodyLimit = bodyLimit({
+    maxSize: 25_000_000,
+    onError: (context) => context.json({ error: 'workspace_too_large' }, 413),
+  });
+
+  // What a restore of this backup would add, found by running the restore and rolling it back.
+  app.post('/api/v1/workspace/preview', workspaceBodyLimit, async (context) =>
+    context.json(
+      await importWorkspace(options.database, await context.req.json(), { dryRun: true }),
+    ),
   );
+
+  app.post('/api/v1/workspace/import', workspaceBodyLimit, async (context) => {
+    const result = await importWorkspace(options.database, await context.req.json());
+    return context.json(result, 201);
+  });
 
   app.post('/api/v1/roots', async (context) => {
     const request = rootRequestSchema.parse(await context.req.json());
@@ -202,10 +235,40 @@ export function createApp(options: AppOptions): Hono {
     return context.json({ root }, 201);
   });
 
+  // A restored root takes effect once the operator approves it, after the checks adding a root runs, and only
+  // while its stored path still resolves to itself.
+  app.post('/api/v1/roots/:id/approve', async (context) => {
+    const root = options.database.getRoot(context.req.param('id'));
+    if (!root) return context.json({ error: 'approved_root_not_found' }, 404);
+    let canonicalPath: string;
+    try {
+      canonicalPath = await realpath(root.path);
+    } catch {
+      return context.json(
+        { error: 'root_missing', message: `${root.path} does not exist on this machine.` },
+        400,
+      );
+    }
+    if (!(await stat(canonicalPath)).isDirectory()) {
+      return context.json({ error: 'root_is_not_directory' }, 400);
+    }
+    if (canonicalPath !== root.path) {
+      return context.json(
+        {
+          error: 'root_moved',
+          message: `${root.path} now resolves to ${canonicalPath}. To use that directory, add it as a new root.`,
+        },
+        409,
+      );
+    }
+    return context.json({ root: options.database.approveRoot(root.id) });
+  });
+
   app.post('/api/v1/repositories/discover', async (context) => {
     const request = rootIdSchema.parse(await context.req.json());
-    const root = options.database.getApprovedRoot(request.rootId);
+    const root = options.database.getRoot(request.rootId);
     if (!root) return context.json({ error: 'approved_root_not_found' }, 404);
+    if (root.status !== 'approved') return context.json({ error: 'root_pending_approval' }, 409);
     const repositories = await discoverGitRepositories(root.path);
     return context.json({ repositories });
   });

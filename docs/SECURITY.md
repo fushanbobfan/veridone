@@ -14,7 +14,7 @@ The local operator is trusted to approve roots, define checks, pin their tools, 
 
 **Threat:** a receipt contains a command or prompt that attempts to trigger execution.
 
-**Control:** imported commands are inert strings. Only operator-authored check declarations are executable. The process API accepts stored check IDs, not arbitrary command text.
+**Control:** imported commands are inert strings. Only operator-authored check declarations are executable. The process API accepts only stored check IDs.
 
 ### Agent-writable repository state
 
@@ -38,9 +38,9 @@ Checks run in VeriDone's own checkout: each run fetches the bound commit into a 
 
 ### Local web attacks
 
-**Threat:** a hostile website calls the loopback API, or the UI renders injected content.
+**Threat:** a hostile website calls the loopback API, points its own domain name at the loopback address to read the API as a same-origin page, or the UI renders injected content.
 
-**Control:** loopback binding, strict Origin allowlist, per-process anti-CSRF token, restrictive CORS/CSP, secure response headers, JSON content types, React escaping, and sanitized standalone HTML exports.
+**Control:** loopback binding, a Host allowlist, strict Origin allowlist, per-process anti-CSRF token, restrictive CORS/CSP, secure response headers, JSON content types, React escaping, and sanitized standalone HTML exports. The Host allowlist holds the loopback names on the service's port and the hosts of the allowed origins; the service answers 403 when the `Host` header or the host of an absolute request URL is anything else, so a page served under another name reads nothing, the anti-CSRF token included.
 
 ### Shell injection
 
@@ -52,13 +52,29 @@ Checks run in VeriDone's own checkout: each run fetches the bound commit into a 
 
 **Threat:** logs or bundles expose tokens, environment secrets, home paths, or repository credentials.
 
-**Control:** minimal environment, key-pattern and value redaction, output limits, export allowlists, path privacy modes, no `.git` object export, and a pre-export secret scan. Packets carry each tool's hash and leave its local path out.
+**Control:** minimal environment, redaction of credential assignments (a quoted value up to its closing quote, past escaped quotes, or to the end of the line, and a value joined from adjacent quoted or escaped parts, as shell quoting writes it), the value after an option named for a secret, common token formats, bearer values, and private key blocks (a key cut off by the output limit is redacted to the end of the text), output limits, export allowlists, path privacy modes, no `.git` object export, and a pre-export secret scan. Packets carry each tool's hash and leave its local path out.
+
+A hash of local data in a packet would let a reader confirm a guess: the repository id hashes the local path, and the fingerprint, worktree, claim, check-definition, and artifact hashes take local paths, text before sanitizing, or uncommitted file content as inputs. Packets carry each of these as an HMAC-SHA256 pseudonym under a random key that the workspace keeps in its database and leaves out of backups. Equal values get equal pseudonyms within one workspace, so a reader can still see that a verdict, its evidence, and the work item name the same state.
 
 ### Stale or forged evidence
 
 **Threat:** old results or edited artifacts are presented as current.
 
-**Control:** bind evidence to repository and check-definition fingerprints, hash each check result, recompute packet and workspace checksums when they are verified or imported, classify source provenance, and never upgrade unbound imported claims into executable evidence. Evidence restored from a backup is marked imported and never satisfies a gate. The checksums detect accidental changes. They are unsigned, so a party who can edit a packet or backup can also recompute its checksum; trust exported files only through a channel you control.
+**Control:** bind evidence to repository and check-definition fingerprints, hash each check result, recompute packet and workspace checksums when they are verified or imported, classify source provenance, and never upgrade unbound imported claims into executable evidence. Evidence restored from a backup is marked imported and never satisfies a gate.
+
+Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. The verifier checks the signature against the public key the packet carries, which must be an Ed25519 key, and with `--key` it also requires that key to be one the reader trusts. The operator publishes the public key; a reader who checks against it can tell a changed packet from the one the workspace signed, even when the changer recomputed every hash and signed again with a key of their own. A packet rewritten as schema 1 without its signature verifies only as unsigned, and fails once the reader gives a key. Workspace backup checksums stay unsigned and detect accidental changes only.
+
+### Acceptance on incomplete evidence
+
+**Threat:** a work item is accepted while a check lacks fresh passing evidence, its binding is out of date, the agent's own receipt reports a failed or incomplete stage, or changed paths leave the declared scope.
+
+**Control:** the service computes each work item's readiness in one place. The verdict gate refuses an acceptance without an override reason unless every condition holds, and the review view shows the readiness the service computed.
+
+### Restored access
+
+**Threat:** a backup made on another machine, or by someone else, grants read access to directories on this one.
+
+**Control:** restore adds roots as pending. A pending root grants nothing: discovery refuses it, and repository capture, receipt import, and checks count approved roots only. Approving a restored root resolves its stored path again and refuses a path that is missing, is no directory, or now resolves somewhere else. Before anything is written, a restore preview lists the roots, repositories, checks, and work items the backup would add.
 
 ### A decision on a state the reviewer did not see
 
@@ -76,13 +92,13 @@ Checks run in VeriDone's own checkout: each run fetches the bound commit into a 
 
 **Threat:** a test or build modifies tracked or untracked files, making its own result ambiguous.
 
-**Control:** after the run, VeriDone names the checkout's repository and work tree explicitly, requires its HEAD to still be the bound commit, compares the work tree with a fresh index read from that commit, and lists new files that the work tree's own `.gitignore` files do not cover. A moved HEAD, any changed or new file, or a comparison that cannot run marks the evidence mutated and keeps it from satisfying a gate. The operator's repository is only read.
+**Control:** after the run, VeriDone names the checkout's repository and work tree explicitly, requires its HEAD to still be the bound commit, compares the work tree with a fresh index read from that commit, and lists new files that the work tree's own `.gitignore` files do not cover. A moved HEAD, any changed or new file, or a comparison that cannot run marks the evidence mutated and keeps it from satisfying a gate. A setup step runs in the same checkout before the check, so its writes count too; a dependency install that writes to ignored paths such as `node_modules` leaves the comparison clean. The operator's repository is only read.
 
 ### Denial of service
 
 **Threat:** large receipts/workspace JSON, output floods, hanging processes, or huge repository scans exhaust resources.
 
-**Control:** receipt and streaming request-body limits, bounded concurrency, timeouts, output caps, cancellation, bounded discovery depth/count, and explicit errors instead of partial silent imports.
+**Control:** receipt and streaming request-body limits, bounded concurrency, timeouts, output caps, cancellation, and bounded discovery depth/count; an import that reaches a limit fails with an explicit error and commits nothing. Check output comes from the commit under review, so the redaction and test-summary patterns that read it take linear time on any input, and tests time them on hostile output.
 
 ## Limits of these controls
 
@@ -91,7 +107,15 @@ Checks run in VeriDone's own checkout: each run fetches the bound commit into a 
 - The tool file is hashed immediately before it starts and again after the run; a file replaced and restored within the run goes unnoticed.
 - The checkout holds committed files only: submodules are not checked out, Git LFS content stays as pointer files, and a check installs any dependencies it needs.
 - The repository fingerprint reports uncommitted state as Git sees it. The repository's own comparison settings, such as an excludes file, and index flags such as assume-unchanged and skip-worktree can keep uncommitted changes out of it. Checks and verdicts bind to the commit, which these settings do not change.
-- Workspace backups and packets are unsigned.
+- A setup step that installs dependencies fetches packages from the network and, depending on the package manager, may run their install scripts, with the operator's permissions.
+- A packet's signature shows which key signed it. Tying that key to a person or an organization is up to the operator, through the channel that publishes the public key. Anyone who can read the workspace database can sign with its key and recompute its pseudonyms.
+- Packets from one workspace share pseudonyms, so a reader can tell that two packets concern the same repository or state.
+- Path redaction recognizes drive and UNC paths, home-relative paths, and POSIX paths under `/Users`, `/home`, `/var`, `/tmp`, `/opt`, `/etc`, `/mnt`, `/srv`, `/root`, `/Volumes`, `/private`, and `/media`. A POSIX path elsewhere, such as `/work/clients/acme`, stays in the text, quoted or not.
+- Redaction reads one level of quoting. Deeper nesting, such as JSON that holds a shell command whose file names carry escaped quotes, or a backslash inside shell single quotes followed by more quoted parts, can leave part of a secret or a path in the text.
+- Outside quotes, a path ends at its first space unless another separator follows, so the words after the first space of a last part that holds one, as in `C:\Users\Bob Smith`, stay in the text. A quoted path is redacted up to its closing quote, reading backslash escapes inside double quotes and none inside single quotes, as the shell does, so a quoted string that starts with a private path is redacted whole, its message included. Privacy comes before the prose around a path: words between a path and a later slash on the same line, as in `/home/page and verify pass/fail`, are redacted with it.
+- A packet's test counts come from the summary line in the check's own output, which code in the commit under review can print as it likes. The exit code and the post-run comparison decide the result; the counts describe it.
+- Workspace backups are unsigned.
+- Every process on this machine can reach the loopback API. The Host, Origin, and anti-CSRF controls defend against web pages.
 
 ## Security defaults
 

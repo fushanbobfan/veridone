@@ -3,6 +3,8 @@ export interface ApprovedRootDto {
   path: string;
   label: string;
   createdAt: string;
+  /** `pending` for a root restored from a backup until the operator approves it. */
+  status: 'approved' | 'pending';
 }
 
 export interface RepositoryDto {
@@ -96,6 +98,8 @@ export interface CheckDto {
   executableSha256: string | null;
   definitionHash: string;
   approvedAt: string;
+  setupArgs: string[];
+  setupTimeoutMs: number;
 }
 
 export interface EvidenceDto {
@@ -153,6 +157,27 @@ export interface BootstrapDto {
   checks: CheckDto[];
   evidence: EvidenceDto[];
   verdicts: VerdictDto[];
+  /** The key this workspace signs packets with; its public half downloads from the signing-key route. */
+  signingKey: { keyId: string };
+  /** Each work item's readiness as the service's verdict gate computes it, keyed by work item id. */
+  readiness: Record<string, ReadinessDto>;
+}
+
+export interface ReadinessDto {
+  ready: boolean;
+  bound: boolean;
+  bindingFresh: boolean;
+  degraded: boolean;
+  checkCount: number;
+  passingCount: number;
+  evidenceIds: string[];
+  scopeDeclared: boolean;
+  scopeDriftPaths: string[];
+  checks: Array<{
+    checkId: string;
+    state: 'passed' | 'failed' | 'stale' | 'missing';
+    evidenceId: string | null;
+  }>;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -237,6 +262,8 @@ export interface NewCheckInput {
   kind: string;
   executable: string;
   args: string[];
+  /** Arguments the same tool runs in the checkout before the check; empty for no setup. */
+  setupArgs: string[];
   versionArgs: string[];
   scopePaths: string[];
   cwdRelative: string;
@@ -265,6 +292,11 @@ export async function pinCheckTool(
   csrfToken: string,
 ): Promise<void> {
   await mutate(`/api/v1/checks/${checkId}/pin`, csrfToken, { expected });
+}
+
+/** Approves a root restored from a backup; the service checks the directory again first. */
+export async function approveRoot(rootId: string, csrfToken: string): Promise<void> {
+  await mutate(`/api/v1/roots/${rootId}/approve`, csrfToken, {});
 }
 
 export async function runCheck(
@@ -296,9 +328,29 @@ export async function createVerdict(
   });
 }
 
+/** What a restore adds or found already present, and the added records the operator reviews by name. */
+export interface RestoreResultDto {
+  imported: Record<string, number>;
+  unchanged: Record<string, number>;
+  added: {
+    roots: Array<{ path: string; label: string }>;
+    repositories: Array<{ name: string; path: string }>;
+    checks: Array<{ label: string; executable: string }>;
+    workItems: Array<{ title: string }>;
+  };
+}
+
+/** Runs a restore and rolls it back, so the operator sees what it would add before confirming. */
+export async function previewWorkspaceDocument(
+  document: unknown,
+  csrfToken: string,
+): Promise<RestoreResultDto> {
+  return mutate('/api/v1/workspace/preview', csrfToken, document);
+}
+
 export async function importWorkspaceDocument(
   document: unknown,
   csrfToken: string,
-): Promise<{ imported: Record<string, number>; unchanged: Record<string, number> }> {
+): Promise<RestoreResultDto> {
   return mutate('/api/v1/workspace/import', csrfToken, document);
 }

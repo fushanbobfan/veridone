@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -209,6 +209,36 @@ const migrationEight = `
   ALTER TABLE verdicts ADD COLUMN claim_hash TEXT;
 `;
 
+// Key material this workspace keeps for itself, created on first use; workspace backups leave it out.
+const migrationNine = `
+  CREATE TABLE workspace_keys (
+    purpose TEXT PRIMARY KEY,
+    material TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+`;
+
+// A root restored from a backup waits for the operator; only approved roots bound what VeriDone reads.
+const migrationTen = `
+  ALTER TABLE approved_roots ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'
+    CHECK (status IN ('approved', 'pending'));
+`;
+
+// The same pinned tool can prepare the checkout, for example with a frozen dependency install, before the check.
+const migrationEleven = `
+  ALTER TABLE checks ADD COLUMN setup_args_json TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE checks ADD COLUMN setup_timeout_ms INTEGER NOT NULL DEFAULT 600000;
+`;
+
+export type WorkspaceKeyPurpose = 'packet-pseudonyms' | 'packet-signing';
+
+const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
+  'packet-pseudonyms': () => randomBytes(32).toString('hex'),
+  // An Ed25519 private key in PKCS #8 PEM; packets carry its public half.
+  'packet-signing': () =>
+    generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+};
+
 /** SHA-256 of the title and claim a reviewer reads before deciding. */
 export function claimHash(workItem: { title: string; claim: string }): string {
   return createHash('sha256')
@@ -240,6 +270,28 @@ export interface ApprovedRootRecord {
   path: string;
   label: string;
   createdAt: string;
+  /** `pending` for a root restored from a backup until the operator approves it on this machine. */
+  status: 'approved' | 'pending';
+}
+
+interface RootRow {
+  id: string;
+  canonical_path: string;
+  label: string;
+  created_at: string;
+  status: string;
+}
+
+const rootColumns = 'id, canonical_path, label, created_at, status';
+
+function rootFromRow(row: RootRow): ApprovedRootRecord {
+  return {
+    id: row.id,
+    path: row.canonical_path,
+    label: row.label,
+    createdAt: row.created_at,
+    status: row.status === 'pending' ? 'pending' : 'approved',
+  };
 }
 
 export interface RepositoryRecord {
@@ -299,6 +351,9 @@ export interface CheckRecord {
   executableSha256: string | null;
   definitionHash: string;
   approvedAt: string;
+  /** Arguments the pinned tool runs in the checkout before the check; empty for no setup. */
+  setupArgs: string[];
+  setupTimeoutMs: number;
 }
 
 export interface EvidenceRecord {
@@ -374,6 +429,9 @@ export class VeriDoneDatabase {
       { version: 6, sql: migrationSix },
       { version: 7, sql: migrationSeven },
       { version: 8, sql: migrationEight },
+      { version: 9, sql: migrationNine },
+      { version: 10, sql: migrationTen },
+      { version: 11, sql: migrationEleven },
     ];
 
     for (const migration of migrations) {
@@ -411,58 +469,69 @@ export class VeriDoneDatabase {
     this.connection.close();
   }
 
-  addApprovedRoot(canonicalPath: string, label = path.basename(canonicalPath)): ApprovedRootRecord {
-    const record: ApprovedRootRecord = {
-      id: randomUUID(),
-      path: canonicalPath,
-      label: label || canonicalPath,
-      createdAt: new Date().toISOString(),
-    };
+  /** This workspace's key material for one purpose, created on first use. */
+  workspaceKey(purpose: WorkspaceKeyPurpose): string {
+    const select = this.connection.prepare('SELECT material FROM workspace_keys WHERE purpose = ?');
+    const existing = select.get(purpose) as { material: string } | undefined;
+    if (existing) return existing.material;
     this.connection
       .prepare(
-        `INSERT INTO approved_roots (id, canonical_path, label, created_at)
-         VALUES (@id, @path, @label, @createdAt)
-         ON CONFLICT(canonical_path) DO UPDATE SET label = excluded.label`,
+        'INSERT OR IGNORE INTO workspace_keys (purpose, material, created_at) VALUES (?, ?, ?)',
       )
-      .run(record);
-    const existing = this.connection
-      .prepare(
-        'SELECT id, canonical_path, label, created_at FROM approved_roots WHERE canonical_path = ?',
-      )
-      .get(canonicalPath) as
-      { id: string; canonical_path: string; label: string; created_at: string } | undefined;
-    if (!existing) throw new Error('The approved root could not be persisted.');
-    return {
-      id: existing.id,
-      path: existing.canonical_path,
-      label: existing.label,
-      createdAt: existing.created_at,
-    };
+      .run(purpose, createKeyMaterial[purpose](), new Date().toISOString());
+    return (select.get(purpose) as { material: string }).material;
   }
 
+  /** Adds a root the operator chose; adding a restored root's path again approves it. */
+  addApprovedRoot(canonicalPath: string, label = path.basename(canonicalPath)): ApprovedRootRecord {
+    this.connection
+      .prepare(
+        `INSERT INTO approved_roots (id, canonical_path, label, created_at, status)
+         VALUES (@id, @path, @label, @createdAt, 'approved')
+         ON CONFLICT(canonical_path) DO UPDATE SET label = excluded.label, status = 'approved'`,
+      )
+      .run({
+        id: randomUUID(),
+        path: canonicalPath,
+        label: label || canonicalPath,
+        createdAt: new Date().toISOString(),
+      });
+    const existing = this.connection
+      .prepare(`SELECT ${rootColumns} FROM approved_roots WHERE canonical_path = ?`)
+      .get(canonicalPath) as RootRow | undefined;
+    if (!existing) throw new Error('The approved root could not be persisted.');
+    return rootFromRow(existing);
+  }
+
+  /** The roots that bound what VeriDone reads. */
   listApprovedRoots(): ApprovedRootRecord[] {
+    return this.listRoots().filter((root) => root.status === 'approved');
+  }
+
+  /** Every root, restored ones still waiting for approval included. */
+  listRoots(): ApprovedRootRecord[] {
     return (
       this.connection
-        .prepare(
-          'SELECT id, canonical_path, label, created_at FROM approved_roots ORDER BY label COLLATE NOCASE',
-        )
-        .all() as Array<{ id: string; canonical_path: string; label: string; created_at: string }>
-    ).map((row) => ({
-      id: row.id,
-      path: row.canonical_path,
-      label: row.label,
-      createdAt: row.created_at,
-    }));
+        .prepare(`SELECT ${rootColumns} FROM approved_roots ORDER BY label COLLATE NOCASE`)
+        .all() as RootRow[]
+    ).map(rootFromRow);
+  }
+
+  getRoot(id: string): ApprovedRootRecord | null {
+    const row = this.connection
+      .prepare(`SELECT ${rootColumns} FROM approved_roots WHERE id = ?`)
+      .get(id) as RootRow | undefined;
+    return row ? rootFromRow(row) : null;
   }
 
   getApprovedRoot(id: string): ApprovedRootRecord | null {
-    const row = this.connection
-      .prepare('SELECT id, canonical_path, label, created_at FROM approved_roots WHERE id = ?')
-      .get(id) as
-      { id: string; canonical_path: string; label: string; created_at: string } | undefined;
-    return row
-      ? { id: row.id, path: row.canonical_path, label: row.label, createdAt: row.created_at }
-      : null;
+    const root = this.getRoot(id);
+    return root?.status === 'approved' ? root : null;
+  }
+
+  approveRoot(id: string): ApprovedRootRecord | null {
+    this.connection.prepare("UPDATE approved_roots SET status = 'approved' WHERE id = ?").run(id);
+    return this.getRoot(id);
   }
 
   upsertRepository(canonicalPath: string, snapshot: RepositorySnapshot): RepositoryRecord {
@@ -732,11 +801,13 @@ export class VeriDoneDatabase {
         `INSERT INTO checks (
           id, repository_id, label, kind, executable, args_json, cwd_relative,
           timeout_ms, max_output_bytes, definition_hash, approved_at,
-          version_args_json, scope_paths_json, resolved_executable, executable_sha256
+          version_args_json, scope_paths_json, resolved_executable, executable_sha256,
+          setup_args_json, setup_timeout_ms
         ) VALUES (
           @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
           @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
-          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256
+          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256,
+          @setupArgsJson, @setupTimeoutMs
         )`,
       )
       .run({
@@ -744,6 +815,7 @@ export class VeriDoneDatabase {
         argsJson: JSON.stringify(record.args),
         versionArgsJson: JSON.stringify(record.versionArgs),
         scopePathsJson: JSON.stringify(record.scopePaths),
+        setupArgsJson: JSON.stringify(record.setupArgs),
       });
     return record;
   }
@@ -788,6 +860,8 @@ export class VeriDoneDatabase {
       executableSha256: row.executable_sha256 === null ? null : String(row.executable_sha256),
       definitionHash: String(row.definition_hash),
       approvedAt: String(row.approved_at),
+      setupArgs: JSON.parse(String(row.setup_args_json)) as string[],
+      setupTimeoutMs: Number(row.setup_timeout_ms),
     }));
   }
 

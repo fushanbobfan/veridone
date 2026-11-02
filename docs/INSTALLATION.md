@@ -55,7 +55,7 @@ Remote binding, TLS termination, and multi-user authentication are deliberately 
 
 ## Troubleshooting
 
-- **Local service unavailable:** confirm both ports are free and `pnpm dev` still runs. The UI deliberately falls back to visibly synthetic data instead of pretending it read local evidence.
+- **Local service unavailable:** confirm both ports are free and `pnpm dev` still runs. The UI deliberately falls back to visibly synthetic data.
 - **Repository rejected:** add its canonical parent as an approved root first. Symlinks resolving outside that root are rejected.
 - **Check cannot run:** commit the work, then rebind the work item; checks run on a clean checkout of the bound commit and refuse a work tree with uncommitted changes. If the message says the pinned tool changed or is missing, review the tool and choose **Pin tool again** under **Checks**. A check starts from the committed files alone, so it must install any dependencies it needs.
 - **Native SQLite install fails:** install the platform compiler toolchain or use a supported Node 22 build with a prebuilt binary.

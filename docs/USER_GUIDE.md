@@ -4,7 +4,7 @@
 
 Open **Add source** and approve a directory before connecting anything inside it. An approved root grants read access for repository discovery and receipt parsing; it never grants permission to execute imported text.
 
-Connect a repository to capture its current Git state. You can discover repositories inside an approved root instead of typing paths. Preview and then import one agent receipt—or an atomic directory batch—to create reviewable work items. VeriDone accepts the local harness format and the portable format in [DATA_FORMAT.md](DATA_FORMAT.md).
+Connect a repository to capture its current Git state. You can also discover the repositories inside an approved root and choose one from the list. Preview and then import one agent receipt—or an atomic directory batch—to create reviewable work items. VeriDone accepts the local harness format and the portable format in [DATA_FORMAT.md](DATA_FORMAT.md).
 
 ## 2. Bind a claim
 
@@ -22,13 +22,16 @@ Choose **Approve a check** and enter:
 - an executable and literal JSON argument array;
 - the working directory relative to the repository;
 - a literal version-argument array such as `["--version"]`;
+- an optional setup-argument array that the same tool runs before the check;
 - optional repository-relative path prefixes that define allowed change scope.
 
 The entire definition is versioned. Editing policy means approving a new definition and invalidates evidence produced for the old check set.
 
 Name the executable by an absolute path or by a command name on `PATH`. Approval pins it: VeriDone resolves it once to a file outside the repository and records that file's SHA-256 in the definition. On Windows the file must be an `.exe` or `.com`; run scripts through an interpreter, such as `node scripts/test.mjs`. **Checks** in the navigation lists every check with its pinned tool, arguments, and hash. When a tool is updated, the next run refuses to start. Choose **Pin tool again** to see the file and SHA-256 that would be pinned, check them, and choose **Pin this file**; if a different file resolves by then, VeriDone refuses and you review again. Pinning a different file is a new definition, so evidence from the old tool stops counting.
 
-Each run happens in a fresh checkout of the bound commit that VeriDone creates in a temporary directory and removes afterwards. The checkout holds the committed files only: no uncommitted changes, ignored files, build output, installed dependencies, or submodules. A check that needs dependencies installs them itself, for example with a package manager command that installs from the lockfile and then runs the tests.
+Each run happens in a fresh checkout of the bound commit that VeriDone creates in a temporary directory and removes afterwards. The checkout holds the committed files only: no uncommitted changes, ignored files, build output, installed dependencies, or submodules. A check that needs dependencies names setup arguments: VeriDone runs them first with the same pinned tool, in the same working directory and environment, with a ten-minute timeout. For a pnpm repository, approve `node` as the executable and `["<path to pnpm.cjs>", "install", "--frozen-lockfile"]` as the setup arguments. A setup that fails ends the run, and its exit code and output become the evidence. The evidence keeps the setup's output under a header before the check's, and cuts the setup's part first when the two together pass the output limit. Files the setup writes count in the comparison after the run, so a setup should write to ignored paths such as `node_modules`.
+
+On Windows the check's environment has no `LOCALAPPDATA`, so pnpm keeps a separate store under your home folder and the first setup downloads every package again. Add `"--store-dir"` and the path that `pnpm store path` prints in your own shell to the setup arguments to reuse your store.
 
 Checks run without a shell, receive a minimal environment, and are bounded by a two-minute default timeout and 1 MB output cap. Two checks may run concurrently per service process. A running check exposes a cancel action. Cancellation, timeout, spawn error, output cap, ordinary failure, and a check that changes files in its checkout remain distinct evidence states.
 
@@ -43,7 +46,7 @@ The review surface distinguishes:
 - sensitive-path attention flags;
 - the human verdict.
 
-Acceptance is locked until required checks are fresh and passing and any declared scope is satisfied. **Override lock** remains available for accountable exceptions and requires both a decision note and an override reason.
+Acceptance is locked until the binding matches the repository's current state, every approved check has fresh passing evidence, the agent's receipt reports no failed or incomplete stage, and any declared scope is satisfied. The service decides this, and the review shows its result. **Override lock** remains available for accountable exceptions and requires both a decision note and an override reason.
 
 ## 5. Decide
 
@@ -55,9 +58,11 @@ VeriDone never records an automated verdict. Even a fully green work item waits 
 
 ## 6. Export or move the workspace
 
-Use **Export packet** for a strict-privacy standalone HTML record. The workspace explorer offers HTML, Markdown, and JSON formats for decided items. JSON packets can be verified with `pnpm verify:packet`.
+Use **Export packet** for a strict-privacy standalone HTML record. The workspace explorer offers HTML, Markdown, and JSON formats for decided items. Every packet is signed with an Ed25519 key that the workspace creates. **Download the packet signing key**, under backup and restore, saves its public half; publish that file where your readers can find it, and they verify a JSON packet with `pnpm verify:packet <packet.json> --key <public-key.pem>`.
 
-The settings button opens workspace backup and restore. Backups include approved roots, local paths, checks, evidence, and verdicts. Restore validates the schema and SHA-256 integrity first, then adds the records the workspace lacks in one transaction. Records that already exist stay as they are, recorded verdicts and evidence keep their content, and a backup that conflicts with them is refused as a whole. Restored evidence stays visible as history but passes no gate, so run the checks again, and pin the tools of restored checks before they run. The checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
+The settings button opens workspace backup and restore. Backups include approved roots, local paths, checks, evidence, and verdicts, and leave the packet keys out. Choosing a backup first shows what it would add: the roots, repositories, checks, and work items by name, and how many evidence records and verdicts join the history. Nothing is written until you choose **Restore these records**. Restore validates the schema and SHA-256 integrity first, then adds the records the workspace lacks in one transaction. Records that already exist stay as they are, recorded verdicts and evidence keep their content, and a backup that conflicts with them is refused as a whole. Restored evidence stays visible as history but passes no gate, so run the checks again, and pin the tools of restored checks before they run.
+
+Restored roots wait for your approval. VeriDone reads nothing under one until you choose **Approve** for it under **Roots** in the workspace explorer, and it refuses a root whose directory is missing on this machine or now resolves to another place. The backup checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
 
 ## Keyboard and mobile use
 

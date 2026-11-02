@@ -59,7 +59,7 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 1. **Approved checks have the local user's OS permissions.** VeriDone prevents imported-command execution and shell interpolation; it is not a VM or malware sandbox. Use a container/VM for hostile build tools.
 2. **Workspace backups are private.** They intentionally contain approved paths, redacted process output, and executable definitions. Acceptance packets—not workspace backups—are the strict-privacy sharing format.
-3. **Regex redaction is defense in depth, not a general DLP system.** Raw output is excluded from packets, and users must still review exports before sharing.
+3. **Regex redaction is one layer of defense in depth and catches only the credential and path forms it knows.** Raw output is excluded from packets, and users must still review exports before sharing.
 
 ## Automated evidence
 

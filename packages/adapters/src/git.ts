@@ -123,7 +123,9 @@ export async function captureGitSnapshot(
   const canonicalTopLevel = await resolveWithinApprovedRoots(topLevel, options.approvedRoots);
 
   if (canonicalTopLevel !== repositoryPath) {
-    throw new GitAdapterError('Select the repository root rather than a nested directory.');
+    throw new GitAdapterError(
+      'Select the repository root; this directory sits inside a repository.',
+    );
   }
 
   // Submodule work trees are compared by commit only, so no command runs inside a submodule,

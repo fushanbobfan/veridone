@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { canonicalJson, sha256Hex } from '@veridone/core';
@@ -350,4 +350,123 @@ describe('receipt times in backups', () => {
     );
     await expect(exportWorkspace(database)).rejects.toThrow(/legacy-unreadable/u);
   });
+});
+
+describe('restored roots wait for the operator', () => {
+  it('keeps a restored root out of reach until the operator approves it', async () => {
+    const source = await boundWorkspace();
+    cleanups.push(source.cleanup);
+    const sourceRoot = source.database.listApprovedRoots()[0];
+    if (!sourceRoot) throw new Error('The source fixture approved no root.');
+    const target = await boundWorkspace({ runId: 'target-run' });
+    cleanups.push(target.cleanup);
+
+    await importWorkspace(target.database, await exportWorkspace(source.database));
+
+    const restored = target.database.listRoots().find((root) => root.path === sourceRoot.path);
+    expect(restored?.status).toBe('pending');
+    expect(target.database.listApprovedRoots().map((root) => root.path)).not.toContain(
+      sourceRoot.path,
+    );
+    const refused = await target.post('/api/v1/repositories/discover', { rootId: restored?.id });
+    expect(refused).toMatchObject({ status: 409, body: { error: 'root_pending_approval' } });
+
+    const approved = await target.post<{ root: { status: string } }>(
+      `/api/v1/roots/${restored?.id}/approve`,
+      {},
+    );
+    expect(approved).toMatchObject({ status: 200, body: { root: { status: 'approved' } } });
+    const discovered = await target.post<{ repositories: string[] }>(
+      '/api/v1/repositories/discover',
+      { rootId: restored?.id },
+    );
+    expect(discovered.status).toBe(200);
+    expect(discovered.body.repositories.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('refuses to approve a restored root whose directory is not on this machine', async () => {
+    const target = await boundWorkspace();
+    cleanups.push(target.cleanup);
+    const backup = (await exportWorkspace(emptyDatabase())) as unknown as Backup & {
+      data: { approvedRoots: Array<Record<string, unknown>> };
+    };
+    backup.data.approvedRoots.push({
+      id: randomUUID(),
+      path: path.join(target.directory, 'no-such-directory'),
+      label: 'Elsewhere',
+      createdAt: '2026-10-22T10:00:00.000Z',
+    });
+
+    await importWorkspace(target.database, await resealed(backup));
+
+    const restored = target.database.listRoots().find((root) => root.label === 'Elsewhere');
+    const response = await target.post(`/api/v1/roots/${restored?.id}/approve`, {});
+    expect(response.status).toBe(400);
+    expect(target.database.listRoots().find((root) => root.label === 'Elsewhere')?.status).toBe(
+      'pending',
+    );
+  }, 30_000);
+
+  it('refuses to approve a restored root whose path now leads to another directory', async () => {
+    const target = await boundWorkspace();
+    cleanups.push(target.cleanup);
+    const elsewhere = path.join(target.directory, 'elsewhere');
+    const link = path.join(target.directory, 'link');
+    await mkdir(elsewhere);
+    // A junction on Windows, a symbolic link elsewhere; either way the stored path resolves to another directory.
+    await symlink(elsewhere, link, 'junction');
+    const backup = (await exportWorkspace(emptyDatabase())) as unknown as Backup & {
+      data: { approvedRoots: Array<Record<string, unknown>> };
+    };
+    backup.data.approvedRoots.push({
+      id: randomUUID(),
+      path: link,
+      label: 'Linked',
+      createdAt: '2026-10-22T10:00:00.000Z',
+    });
+
+    await importWorkspace(target.database, await resealed(backup));
+
+    const restored = target.database.listRoots().find((root) => root.label === 'Linked');
+    const response = await target.post(`/api/v1/roots/${restored?.id}/approve`, {});
+    expect(response).toMatchObject({ status: 409, body: { error: 'root_moved' } });
+    expect(target.database.listRoots().find((root) => root.label === 'Linked')?.status).toBe(
+      'pending',
+    );
+  }, 30_000);
+});
+
+describe('restore preview', () => {
+  it('lists what a restore would add and writes nothing', async () => {
+    const { backup, database: source } = await decidedWorkspace();
+    const target = emptyDatabase();
+
+    const preview = await importWorkspace(target, backup, { dryRun: true });
+
+    expect(target.listRoots()).toEqual([]);
+    expect(target.listWorkItems()).toEqual([]);
+    expect(target.listVerdicts()).toEqual([]);
+    expect(target.listEvidence()).toEqual([]);
+    expect(preview.added.roots.map((root) => root.path)).toEqual(
+      source.listRoots().map((root) => root.path),
+    );
+    expect(preview.added.workItems.map((item) => item.title)).toEqual(['Fix the importer']);
+    expect(preview.added.checks.map((check) => check.label)).toEqual(['Deterministic check']);
+    expect(preview.imported.verdicts).toBe(2);
+
+    const restored = await importWorkspace(target, backup);
+    expect(restored.imported).toEqual(preview.imported);
+    expect(target.listVerdicts()).toHaveLength(2);
+  }, 30_000);
+
+  it('reports a conflicting backup before anything is restored', async () => {
+    const { backup, database } = await decidedWorkspace();
+    const rewritten = structuredClone(backup);
+    const verdict = rewritten.data.verdicts[0];
+    if (verdict) verdict.decision = 'rejected';
+
+    await expect(
+      importWorkspace(database, await resealed(rewritten), { dryRun: true }),
+    ).rejects.toBeInstanceOf(WorkspaceConflictError);
+  }, 30_000);
 });

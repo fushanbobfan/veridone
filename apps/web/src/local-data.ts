@@ -1,6 +1,6 @@
-import { assessDeclaredScope, pathFromStatusEntry } from '@veridone/core';
+import { pathFromStatusEntry } from '@veridone/core';
 
-import type { BootstrapDto, VerdictDto, WorkItemDto } from './api.js';
+import type { BootstrapDto, ReadinessDto, VerdictDto, WorkItemDto } from './api.js';
 import type { ReviewItem } from './data.js';
 
 const verdictNames: Record<VerdictDto['decision'], string> = {
@@ -29,41 +29,42 @@ function relativeTime(iso: string): string {
   return `${Math.round(hours / 24)} d ago`;
 }
 
+const unreported: ReadinessDto = {
+  ready: false,
+  bound: false,
+  bindingFresh: false,
+  degraded: false,
+  checkCount: 0,
+  passingCount: 0,
+  evidenceIds: [],
+  scopeDeclared: false,
+  scopeDriftPaths: [],
+  checks: [],
+};
+
 export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): ReviewItem {
   const repository = bootstrap.repositories.find((candidate) => candidate.id === item.repositoryId);
   const receipt = bootstrap.receipts.find((candidate) =>
     item.sourceRef.endsWith(`:${candidate.runId}`),
   );
-  const isBound = Boolean(repository && item.snapshotFingerprint);
-  const bindingFresh = Boolean(
-    repository && item.snapshotFingerprint === repository.snapshot.fingerprint,
-  );
-  const isDegraded = receipt?.degraded ?? false;
+  // Readiness is the service's, computed as its verdict gate computes it; this view only presents it.
+  const readiness = bootstrap.readiness[item.id] ?? unreported;
+  const isBound = readiness.bound;
+  const bindingFresh = readiness.bindingFresh;
+  const isDegraded = readiness.degraded;
   const checks = bootstrap.checks.filter((check) => check.repositoryId === item.repositoryId);
   const checkAssessments = checks.map((check) => {
-    // Restored evidence stays visible as history, but only this workspace's runs can pass a gate.
-    const runs = bootstrap.evidence.filter(
-      (candidate) => candidate.workItemId === item.id && candidate.checkId === check.id,
-    );
-    const evidence = runs.find((candidate) => candidate.origin === 'local') ?? runs[0];
-    // The same conditions the server's acceptance readiness applies.
-    const fresh =
-      evidence?.origin === 'local' &&
-      evidence.result === 'passed' &&
-      evidence.isolation === 'clean-checkout' &&
-      evidence.snapshotFingerprint === repository?.snapshot.fingerprint &&
-      evidence.contractVersion === repository.snapshot.contractVersion &&
-      evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
-      evidence.invalidReason === null;
-    return { check, evidence, fresh };
+    const gate = readiness.checks.find((candidate) => candidate.checkId === check.id);
+    const evidence = bootstrap.evidence.find((candidate) => candidate.id === gate?.evidenceId);
+    return { check, evidence, state: gate?.state ?? ('missing' as const) };
   });
-  const passingChecks = checkAssessments.filter((assessment) => assessment.fresh).length;
-  const scope = assessDeclaredScope(
-    repository?.snapshot.statusEntries ?? [],
-    checks.flatMap((check) => check.scopePaths),
-  );
-  const checksReady = checks.length > 0 && passingChecks === checks.length && scope.satisfied;
-  const gatesReady = !isDegraded && bindingFresh && checksReady;
+  const passingChecks = readiness.passingCount;
+  const scope = {
+    declared: readiness.scopeDeclared,
+    satisfied: readiness.scopeDriftPaths.length === 0,
+    outsidePaths: readiness.scopeDriftPaths,
+  };
+  const gatesReady = readiness.ready;
   // A verdict decides the repository state it was recorded on; once that state changes, the
   // verdict stays in the history and the item opens again.
   const verdict = latestVerdict(bootstrap.verdicts, item.id);
@@ -74,9 +75,13 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
     verdict && !verdictCurrent
       ? `An earlier ${verdictNames[verdict.decision]} was recorded on a previous repository state and is superseded. `
       : '';
+  // The receipt counts as a gate like the others: a run that reports a failing stage fails it.
   const requiredTotal = 2 + Math.max(checks.length, 1) + (scope.declared ? 1 : 0);
   const requiredSatisfied =
-    1 + (bindingFresh ? 1 : 0) + passingChecks + (scope.declared && scope.satisfied ? 1 : 0);
+    (isDegraded ? 0 : 1) +
+    (bindingFresh ? 1 : 0) +
+    passingChecks +
+    (scope.declared && scope.satisfied ? 1 : 0);
   const riskPaths =
     repository?.snapshot.statusEntries
       .map(pathFromStatusEntry)
@@ -141,7 +146,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
         detail: receipt
           ? `${receipt.stageCount} stage(s) · ${receipt.status} · imported locally`
           : 'Local source metadata is available',
-        state: 'passed',
+        state: isDegraded ? 'failed' : 'passed',
         evidenceLabel: 'Import validation',
       },
       {
@@ -163,7 +168,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
               evidenceLabel: 'Independent checks',
             },
           ]
-        : checkAssessments.map(({ check, evidence, fresh }) => ({
+        : checkAssessments.map(({ check, evidence, state }) => ({
             id: check.id,
             title: check.label,
             detail: !check.executableSha256
@@ -173,13 +178,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
                 : evidence
                   ? `${evidence.result} · ${evidence.durationMs} ms · ${evidence.head.slice(0, 8)}${evidence.toolSha256 ? ` · tool ${evidence.toolSha256.slice(0, 8)}` : ''}`
                   : 'Approved; run it for this work item to record evidence',
-            state: fresh
-              ? ('passed' as const)
-              : evidence?.result === 'failed' || evidence?.result === 'mutated'
-                ? ('failed' as const)
-                : evidence
-                  ? ('stale' as const)
-                  : ('missing' as const),
+            state,
             evidenceLabel: check.kind,
           }))),
       ...(scope.declared
@@ -188,7 +187,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
               id: 'declared-scope',
               title: 'Changed files remain inside declared scope',
               detail: scope.satisfied
-                ? `${scope.changedPaths.length} changed path(s) match approved prefixes`
+                ? 'Every changed path matches an approved prefix'
                 : `${scope.outsidePaths.length} outside: ${scope.outsidePaths.slice(0, 3).join(', ')}`,
               state: scope.satisfied ? ('passed' as const) : ('failed' as const),
               evidenceLabel: 'Scope inspection',

@@ -81,6 +81,13 @@ const checkSchema = z.object({
   executableSha256: sha256.nullable().default(null),
   definitionHash: sha256,
   approvedAt: isoDate,
+  setupArgs: z.array(z.string().max(4_096)).max(100).default([]),
+  setupTimeoutMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(60 * 60_000)
+    .default(10 * 60_000),
 });
 
 const evidenceSchema = z.object({
@@ -167,6 +174,23 @@ export type WorkspaceDocument = z.infer<typeof workspaceDocumentSchema>;
 type WorkspaceData = WorkspaceDocument['data'];
 export type WorkspaceCounts = Record<keyof WorkspaceData, number>;
 
+/** The records a restore adds that the operator reviews by name before confirming it. */
+export interface RestoreAdditions {
+  roots: Array<{ path: string; label: string }>;
+  repositories: Array<{ name: string; path: string }>;
+  checks: Array<{ label: string; executable: string }>;
+  workItems: Array<{ title: string }>;
+}
+
+export interface RestoreResult {
+  imported: WorkspaceCounts;
+  unchanged: WorkspaceCounts;
+  added: RestoreAdditions;
+}
+
+/** Ends a preview's transaction so that everything it inserted rolls back. */
+class RestorePreviewed extends Error {}
+
 /**
  * Receipts imported before import normalized their times may hold a local time without an offset;
  * the backup carries it as an ISO 8601 timestamp.
@@ -194,7 +218,8 @@ export async function exportWorkspace(database: VeriDoneDatabase): Promise<Works
     application: 'veridone',
     exportedAt: new Date().toISOString(),
     data: {
-      approvedRoots: database.listApprovedRoots(),
+      // Every root goes into the backup; a restore marks each one pending again.
+      approvedRoots: database.listRoots().map(({ status: _status, ...root }) => root),
       repositories: database.listRepositories(),
       receipts: database.listReceipts().map(exportableReceipt),
       workItems: database.listWorkItems(),
@@ -314,10 +339,15 @@ function sameVerdict(
  * so a backup can only extend a history. Restored evidence is marked imported and satisfies no
  * gate, and restored checks must have their tools pinned before they run.
  */
+/**
+ * Restores a backup, adding only what this workspace lacks. With `dryRun`, it runs every check and insert a
+ * restore makes and rolls them back, so a preview reports exactly what the restore would add.
+ */
 export async function importWorkspace(
   database: VeriDoneDatabase,
   input: unknown,
-): Promise<{ imported: WorkspaceCounts; unchanged: WorkspaceCounts }> {
+  options: { dryRun?: boolean } = {},
+): Promise<RestoreResult> {
   // The checksum covers the payload exactly as the file carries it, before defaults fill gaps.
   const { integrity, ...rawPayload } = z.looseObject({ integrity: integritySchema }).parse(input);
   if ((await sha256Hex(canonicalJson(rawPayload))) !== integrity.payloadHash) {
@@ -343,6 +373,8 @@ export async function importWorkspace(
           cwdRelative: record.cwdRelative,
           timeoutMs: record.timeoutMs,
           maxOutputBytes: record.maxOutputBytes,
+          setupArgs: record.setupArgs,
+          setupTimeoutMs: record.setupTimeoutMs,
         }),
         // A backup cannot vouch for a tool file on this machine; the operator pins it again.
         resolvedExecutable: null,
@@ -362,21 +394,27 @@ export async function importWorkspace(
   const tally = (kind: keyof WorkspaceData, added: boolean) => {
     if (added) imported[kind] += 1;
     else unchanged[kind] += 1;
+    return added;
   };
+  const added: RestoreAdditions = { roots: [], repositories: [], checks: [], workItems: [] };
   const connection = database.connection;
 
-  connection
-    .transaction(() => {
-      const insertRoot = connection.prepare(`
-        INSERT INTO approved_roots (id, canonical_path, label, created_at)
-        VALUES (@id, @path, @label, @createdAt)
+  try {
+    connection
+      .transaction(() => {
+        // A backup cannot vouch for a directory on this machine; a restored root waits for the operator.
+        const insertRoot = connection.prepare(`
+        INSERT INTO approved_roots (id, canonical_path, label, created_at, status)
+        VALUES (@id, @path, @label, @createdAt, 'pending')
         ON CONFLICT DO NOTHING
       `);
-      for (const record of data.approvedRoots) {
-        tally('approvedRoots', insertRoot.run(record).changes === 1);
-      }
+        for (const record of data.approvedRoots) {
+          if (tally('approvedRoots', insertRoot.run(record).changes === 1)) {
+            added.roots.push({ path: record.path, label: record.label });
+          }
+        }
 
-      const insertRepository = connection.prepare(`
+        const insertRepository = connection.prepare(`
         INSERT INTO repositories (
           id, canonical_path, name, branch, head, fingerprint, status_entries_json,
           submodule_entries_json, worktree_hash, diff_stats_json, contract_version,
@@ -387,19 +425,21 @@ export async function importWorkspace(
           @checkDefinitionVersion, @capturedAt, @updatedAt
         ) ON CONFLICT DO NOTHING
       `);
-      for (const record of data.repositories) {
-        const result = insertRepository.run({
-          ...record,
-          ...record.snapshot,
-          statusEntries: JSON.stringify(record.snapshot.statusEntries),
-          submoduleEntries: JSON.stringify(record.snapshot.submoduleEntries),
-          worktreeHash: record.snapshot.worktreeHash,
-          diffStats: JSON.stringify(record.snapshot.diffStats),
-        });
-        tally('repositories', result.changes === 1);
-      }
+        for (const record of data.repositories) {
+          const result = insertRepository.run({
+            ...record,
+            ...record.snapshot,
+            statusEntries: JSON.stringify(record.snapshot.statusEntries),
+            submoduleEntries: JSON.stringify(record.snapshot.submoduleEntries),
+            worktreeHash: record.snapshot.worktreeHash,
+            diffStats: JSON.stringify(record.snapshot.diffStats),
+          });
+          if (tally('repositories', result.changes === 1)) {
+            added.repositories.push({ name: record.name, path: record.path });
+          }
+        }
 
-      const insertReceipt = connection.prepare(`
+        const insertReceipt = connection.prepare(`
         INSERT INTO receipts (
           id, run_id, source_path, task_type, status, started_at, completed_at,
           stage_count, degraded, imported_at
@@ -408,17 +448,17 @@ export async function importWorkspace(
           @stageCount, @degraded, @importedAt
         ) ON CONFLICT DO NOTHING
       `);
-      for (const record of data.receipts) {
-        tally(
-          'receipts',
-          insertReceipt.run({ ...record, degraded: record.degraded ? 1 : 0 }).changes === 1,
-        );
-      }
+        for (const record of data.receipts) {
+          tally(
+            'receipts',
+            insertReceipt.run({ ...record, degraded: record.degraded ? 1 : 0 }).changes === 1,
+          );
+        }
 
-      const sameSource = connection.prepare(
-        'SELECT id FROM work_items WHERE source_ref = ? AND id <> ?',
-      );
-      const insertWorkItem = connection.prepare(`
+        const sameSource = connection.prepare(
+          'SELECT id FROM work_items WHERE source_ref = ? AND id <> ?',
+        );
+        const insertWorkItem = connection.prepare(`
         INSERT INTO work_items (
           id, repository_id, source_type, source_ref, title, claim, source_label,
           updated_at, snapshot_fingerprint, human_verdict
@@ -427,97 +467,108 @@ export async function importWorkspace(
           @updatedAt, @snapshotFingerprint, NULL
         ) ON CONFLICT(id) DO NOTHING
       `);
-      for (const record of data.workItems) {
-        if (sameSource.get(record.sourceRef, record.id)) {
-          throw new WorkspaceConflictError(
-            `The backup's work item "${record.title}" has a different ID than the local work item imported from the same source. Restore into a workspace that has not imported that receipt.`,
-          );
+        for (const record of data.workItems) {
+          if (sameSource.get(record.sourceRef, record.id)) {
+            throw new WorkspaceConflictError(
+              `The backup's work item "${record.title}" has a different ID than the local work item imported from the same source. Restore into a workspace that has not imported that receipt.`,
+            );
+          }
+          if (tally('workItems', insertWorkItem.run(record).changes === 1)) {
+            added.workItems.push({ title: record.title });
+          }
         }
-        tally('workItems', insertWorkItem.run(record).changes === 1);
-      }
 
-      const insertContract = connection.prepare(`
+        const insertContract = connection.prepare(`
         INSERT INTO acceptance_contracts (id, version, title, criteria_json, created_at)
         VALUES (@id, @version, @title, @criteriaJson, @createdAt)
         ON CONFLICT DO NOTHING
       `);
-      for (const record of data.contracts) {
-        const result = insertContract.run({
-          ...record,
-          criteriaJson: JSON.stringify(record.criteria),
-        });
-        tally('contracts', result.changes === 1);
-      }
+        for (const record of data.contracts) {
+          const result = insertContract.run({
+            ...record,
+            criteriaJson: JSON.stringify(record.criteria),
+          });
+          tally('contracts', result.changes === 1);
+        }
 
-      const insertCheck = connection.prepare(`
+        const insertCheck = connection.prepare(`
         INSERT INTO checks (
           id, repository_id, label, kind, executable, args_json, cwd_relative,
           timeout_ms, max_output_bytes, definition_hash, approved_at,
-          version_args_json, scope_paths_json, resolved_executable, executable_sha256
+          version_args_json, scope_paths_json, resolved_executable, executable_sha256,
+          setup_args_json, setup_timeout_ms
         ) VALUES (
           @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
           @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
-          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256
+          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256,
+          @setupArgsJson, @setupTimeoutMs
         ) ON CONFLICT(id) DO NOTHING
       `);
-      for (const record of checks) {
-        const result = insertCheck.run({
-          ...record,
-          argsJson: JSON.stringify(record.args),
-          versionArgsJson: JSON.stringify(record.versionArgs),
-          scopePathsJson: JSON.stringify(record.scopePaths),
-        });
-        tally('checks', result.changes === 1);
-      }
+        for (const record of checks) {
+          const result = insertCheck.run({
+            ...record,
+            argsJson: JSON.stringify(record.args),
+            versionArgsJson: JSON.stringify(record.versionArgs),
+            scopePathsJson: JSON.stringify(record.scopePaths),
+            setupArgsJson: JSON.stringify(record.setupArgs),
+          });
+          if (tally('checks', result.changes === 1)) {
+            added.checks.push({ label: record.label, executable: record.executable });
+          }
+        }
 
-      for (const { origin: _origin, ...record } of data.evidence) {
-        const local = database.getEvidence(record.id);
-        if (local) {
-          if (!sameEvidence(local, record, document.schemaVersion !== 1)) {
+        for (const { origin: _origin, ...record } of data.evidence) {
+          const local = database.getEvidence(record.id);
+          if (local) {
+            if (!sameEvidence(local, record, document.schemaVersion !== 1)) {
+              throw new WorkspaceConflictError(
+                `The backup's evidence ${record.id} differs from the local record with the same ID. Recorded evidence is never replaced.`,
+              );
+            }
+            tally('evidence', false);
+            continue;
+          }
+          database.recordImportedEvidence(record);
+          tally('evidence', true);
+        }
+
+        for (const verdict of verdicts) {
+          const local = database.getVerdict(verdict.id);
+          if (local) {
+            if (!sameVerdict(local, verdict, document.schemaVersion !== 1)) {
+              throw new WorkspaceConflictError(
+                `The backup's verdict ${verdict.id} differs from the local verdict with the same ID. Recorded verdicts are never replaced.`,
+              );
+            }
+            tally('verdicts', false);
+            continue;
+          }
+          const head = database.latestVerdict(verdict.workItemId);
+          if (
+            (head?.id ?? null) !== verdict.previousVerdictId ||
+            (head?.sequence ?? 0) + 1 !== verdict.sequence
+          ) {
             throw new WorkspaceConflictError(
-              `The backup's evidence ${record.id} differs from the local record with the same ID. Recorded evidence is never replaced.`,
+              `The backup's verdict history for work item ${verdict.workItemId} diverges from the local history. A restore can only extend it.`,
             );
           }
-          tally('evidence', false);
-          continue;
-        }
-        database.recordImportedEvidence(record);
-        tally('evidence', true);
-      }
-
-      for (const verdict of verdicts) {
-        const local = database.getVerdict(verdict.id);
-        if (local) {
-          if (!sameVerdict(local, verdict, document.schemaVersion !== 1)) {
+          // A verdict belongs to the claim it judged; the local work item may show another one.
+          const workItem = database.getWorkItem(verdict.workItemId);
+          const judged = verdict.claimHash ?? backupClaims.get(verdict.workItemId) ?? null;
+          if (workItem && judged !== null && judged !== workItem.claimHash) {
             throw new WorkspaceConflictError(
-              `The backup's verdict ${verdict.id} differs from the local verdict with the same ID. Recorded verdicts are never replaced.`,
+              `The backup's verdict ${verdict.id} judged a different claim than the local work item "${workItem.title}" shows. A verdict stays with the claim it judged.`,
             );
           }
-          tally('verdicts', false);
-          continue;
+          database.appendVerdict(verdict);
+          tally('verdicts', true);
         }
-        const head = database.latestVerdict(verdict.workItemId);
-        if (
-          (head?.id ?? null) !== verdict.previousVerdictId ||
-          (head?.sequence ?? 0) + 1 !== verdict.sequence
-        ) {
-          throw new WorkspaceConflictError(
-            `The backup's verdict history for work item ${verdict.workItemId} diverges from the local history. A restore can only extend it.`,
-          );
-        }
-        // A verdict belongs to the claim it judged; the local work item may show another one.
-        const workItem = database.getWorkItem(verdict.workItemId);
-        const judged = verdict.claimHash ?? backupClaims.get(verdict.workItemId) ?? null;
-        if (workItem && judged !== null && judged !== workItem.claimHash) {
-          throw new WorkspaceConflictError(
-            `The backup's verdict ${verdict.id} judged a different claim than the local work item "${workItem.title}" shows. A verdict stays with the claim it judged.`,
-          );
-        }
-        database.appendVerdict(verdict);
-        tally('verdicts', true);
-      }
-    })
-    .immediate();
+        if (options.dryRun) throw new RestorePreviewed();
+      })
+      .immediate();
+  } catch (error) {
+    if (!(error instanceof RestorePreviewed)) throw error;
+  }
 
-  return { imported, unchanged };
+  return { imported, unchanged, added };
 }

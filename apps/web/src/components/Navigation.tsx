@@ -2,6 +2,7 @@ import {
   Archive,
   FileCheck2,
   FolderGit2,
+  FolderTree,
   Inbox,
   ListChecks,
   Moon,
@@ -9,7 +10,7 @@ import {
   Sun,
 } from 'lucide-react';
 
-export type WorkspaceSection = 'repositories' | 'checks' | 'contracts' | 'exports';
+export type WorkspaceSection = 'roots' | 'repositories' | 'checks' | 'contracts' | 'exports';
 
 export function Navigation({
   theme,
@@ -43,6 +44,15 @@ export function Navigation({
           Review inbox
           <span className="nav-count">{reviewCount}</span>
         </a>
+        <button
+          className="nav-item"
+          type="button"
+          onClick={() => onOpenSection?.('roots')}
+          disabled={!onOpenSection}
+        >
+          <FolderTree aria-hidden="true" size={17} />
+          Roots
+        </button>
         <button
           className="nav-item"
           type="button"

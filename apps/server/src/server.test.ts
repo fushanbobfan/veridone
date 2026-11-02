@@ -44,7 +44,7 @@ afterEach(async () => {
 describe('local API security and persistence', () => {
   it('rejects untrusted browser origins', async () => {
     const { app } = await fixture();
-    const response = await app.request('/api/v1/bootstrap', {
+    const response = await app.request('http://127.0.0.1:4317/api/v1/bootstrap', {
       headers: { Origin: 'https://hostile.example' },
     });
     expect(response.status).toBe(403);
@@ -52,9 +52,26 @@ describe('local API security and persistence', () => {
     expect(response.headers.get('strict-transport-security')).toBeNull();
   });
 
+  it('answers only requests addressed to its own loopback names', async () => {
+    const { app } = await fixture();
+    for (const host of ['127.0.0.1:4317', 'localhost:4317', '[::1]:4317', '127.0.0.1:4173']) {
+      expect((await app.request(`http://${host}/api/v1/health`)).status, host).toBe(200);
+    }
+    for (const host of ['rebound.example:4317', '127.0.0.1:9999', 'localhost']) {
+      const response = await app.request(`http://${host}/api/v1/health`);
+      expect(response.status, host).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: 'host_not_allowed' });
+    }
+    // A page that rebinds its own name to 127.0.0.1 still sends that name as the Host.
+    const rebound = await app.request('http://127.0.0.1:4317/api/v1/bootstrap', {
+      headers: { Host: 'rebound.example:4317' },
+    });
+    expect(rebound.status).toBe(403);
+  });
+
   it('rejects oversized workspace bodies before parsing', async () => {
     const { app, csrfToken } = await fixture();
-    const response = await app.request('/api/v1/workspace/import', {
+    const response = await app.request('http://127.0.0.1:4317/api/v1/workspace/import', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -70,7 +87,7 @@ describe('local API security and persistence', () => {
 
   it('requires a per-process token for mutations', async () => {
     const { app, directory } = await fixture();
-    const response = await app.request('/api/v1/roots', {
+    const response = await app.request('http://127.0.0.1:4317/api/v1/roots', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:4173' },
       body: JSON.stringify({ path: directory }),
@@ -80,7 +97,7 @@ describe('local API security and persistence', () => {
 
   it('persists an approved root and returns it from bootstrap', async () => {
     const { app, directory, csrfToken } = await fixture();
-    const created = await app.request('/api/v1/roots', {
+    const created = await app.request('http://127.0.0.1:4317/api/v1/roots', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -91,7 +108,7 @@ describe('local API security and persistence', () => {
     });
     expect(created.status).toBe(201);
 
-    const bootstrap = await app.request('/api/v1/bootstrap', {
+    const bootstrap = await app.request('http://127.0.0.1:4317/api/v1/bootstrap', {
       headers: { Origin: 'http://127.0.0.1:4173' },
     });
     const body = (await bootstrap.json()) as { roots: Array<{ label: string }> };
@@ -122,20 +139,20 @@ describe('local API security and persistence', () => {
       'X-VeriDone-CSRF': csrfToken,
       Origin: 'http://127.0.0.1:4173',
     };
-    await app.request('/api/v1/roots', {
+    await app.request('http://127.0.0.1:4317/api/v1/roots', {
       method: 'POST',
       headers,
       body: JSON.stringify({ path: directory, label: 'Batch fixture' }),
     });
 
-    const rejected = await app.request('/api/v1/receipts/import', {
+    const rejected = await app.request('http://127.0.0.1:4317/api/v1/receipts/import', {
       method: 'POST',
       headers,
       body: JSON.stringify({ path: receiptDirectory }),
     });
     expect(rejected.status).toBe(400);
     let bootstrap = (await (
-      await app.request('/api/v1/bootstrap', {
+      await app.request('http://127.0.0.1:4317/api/v1/bootstrap', {
         headers: { Origin: 'http://127.0.0.1:4173' },
       })
     ).json()) as { receipts: unknown[]; workItems: unknown[] };
@@ -154,7 +171,7 @@ describe('local API security and persistence', () => {
         started_at: '2026-07-21T20:01:00.000Z',
       }),
     );
-    const imported = await app.request('/api/v1/receipts/import', {
+    const imported = await app.request('http://127.0.0.1:4317/api/v1/receipts/import', {
       method: 'POST',
       headers,
       body: JSON.stringify({ path: receiptDirectory }),
@@ -162,7 +179,7 @@ describe('local API security and persistence', () => {
     expect(imported.status).toBe(201);
     await expect(imported.json()).resolves.toMatchObject({ imported: [{}, {}] });
     bootstrap = (await (
-      await app.request('/api/v1/bootstrap', {
+      await app.request('http://127.0.0.1:4317/api/v1/bootstrap', {
         headers: { Origin: 'http://127.0.0.1:4173' },
       })
     ).json()) as { receipts: unknown[]; workItems: unknown[] };
@@ -203,22 +220,22 @@ describe('local API security and persistence', () => {
       Origin: 'http://127.0.0.1:4173',
     };
 
-    await app.request('/api/v1/roots', {
+    await app.request('http://127.0.0.1:4317/api/v1/roots', {
       method: 'POST',
       headers,
       body: JSON.stringify({ path: directory, label: 'Fixture' }),
     });
-    await app.request('/api/v1/repositories', {
+    await app.request('http://127.0.0.1:4317/api/v1/repositories', {
       method: 'POST',
       headers,
       body: JSON.stringify({ path: repositoryPath }),
     });
-    await app.request('/api/v1/receipts/import', {
+    await app.request('http://127.0.0.1:4317/api/v1/receipts/import', {
       method: 'POST',
       headers,
       body: JSON.stringify({ path: receiptPath }),
     });
-    const bootstrapResponse = await app.request('/api/v1/bootstrap', {
+    const bootstrapResponse = await app.request('http://127.0.0.1:4317/api/v1/bootstrap', {
       headers: { Origin: 'http://127.0.0.1:4173' },
     });
     const bootstrap = (await bootstrapResponse.json()) as {
@@ -230,12 +247,12 @@ describe('local API security and persistence', () => {
     expect(repositoryId).toBeTruthy();
     expect(workItemId).toBeTruthy();
 
-    await app.request(`/api/v1/work-items/${workItemId}/link`, {
+    await app.request(`http://127.0.0.1:4317/api/v1/work-items/${workItemId}/link`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ repositoryId }),
     });
-    const checkResponse = await app.request('/api/v1/checks', {
+    const checkResponse = await app.request('http://127.0.0.1:4317/api/v1/checks', {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -254,7 +271,9 @@ describe('local API security and persistence', () => {
     /** The state the review view shows, which every verdict request expects. */
     const expected = async () => {
       const current = (await (
-        await app.request('/api/v1/bootstrap', { headers: { Origin: 'http://127.0.0.1:4173' } })
+        await app.request('http://127.0.0.1:4317/api/v1/bootstrap', {
+          headers: { Origin: 'http://127.0.0.1:4173' },
+        })
       ).json()) as {
         repositories: Array<{ snapshot: { fingerprint: string } }>;
         workItems: Array<{ id: string; claimHash: string }>;
@@ -267,44 +286,56 @@ describe('local API security and persistence', () => {
         claimHash: current.workItems.find((item) => item.id === workItemId)?.claimHash ?? '',
       };
     };
-    const lockedAcceptance = await app.request(`/api/v1/work-items/${workItemId}/verdicts`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        decision: 'accepted',
-        note: 'Attempted without passing evidence.',
-        expected: await expected(),
-      }),
-    });
-    expect(lockedAcceptance.status).toBe(409);
-    const overrideAcceptance = await app.request(`/api/v1/work-items/${workItemId}/verdicts`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        decision: 'accepted',
-        note: 'Fixture override decision.',
-        overrideReason: 'Explicitly testing the audited override path.',
-        expected: await expected(),
-      }),
-    });
-    expect(overrideAcceptance.status).toBe(201);
-    for (const decision of ['changes-requested', 'rejected'] as const) {
-      const response = await app.request(`/api/v1/work-items/${workItemId}/verdicts`, {
+    const lockedAcceptance = await app.request(
+      `http://127.0.0.1:4317/api/v1/work-items/${workItemId}/verdicts`,
+      {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          decision,
-          note: `Fixture ${decision} decision.`,
+          decision: 'accepted',
+          note: 'Attempted without passing evidence.',
           expected: await expected(),
         }),
-      });
+      },
+    );
+    expect(lockedAcceptance.status).toBe(409);
+    const overrideAcceptance = await app.request(
+      `http://127.0.0.1:4317/api/v1/work-items/${workItemId}/verdicts`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          decision: 'accepted',
+          note: 'Fixture override decision.',
+          overrideReason: 'Explicitly testing the audited override path.',
+          expected: await expected(),
+        }),
+      },
+    );
+    expect(overrideAcceptance.status).toBe(201);
+    for (const decision of ['changes-requested', 'rejected'] as const) {
+      const response = await app.request(
+        `http://127.0.0.1:4317/api/v1/work-items/${workItemId}/verdicts`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            decision,
+            note: `Fixture ${decision} decision.`,
+            expected: await expected(),
+          }),
+        },
+      );
       expect(response.status).toBe(201);
     }
-    const runResponse = await app.request(`/api/v1/checks/${check.check.id}/run`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ workItemId }),
-    });
+    const runResponse = await app.request(
+      `http://127.0.0.1:4317/api/v1/checks/${check.check.id}/run`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ workItemId }),
+      },
+    );
     const run = (await runResponse.json()) as {
       evidence: {
         result: string;
@@ -324,19 +355,25 @@ describe('local API security and persistence', () => {
       readiness: { ready: true },
     });
 
-    const verdictResponse = await app.request(`/api/v1/work-items/${workItemId}/verdicts`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        decision: 'accepted',
-        note: `Reviewed at ${directory}; password=hunter2.`,
-        expected: await expected(),
-      }),
-    });
+    const verdictResponse = await app.request(
+      `http://127.0.0.1:4317/api/v1/work-items/${workItemId}/verdicts`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          decision: 'accepted',
+          note: `Reviewed at ${directory}; password=hunter2.`,
+          expected: await expected(),
+        }),
+      },
+    );
     expect(verdictResponse.status).toBe(201);
-    const packetResponse = await app.request(`/api/v1/work-items/${workItemId}/packet/json`, {
-      headers: { Origin: 'http://127.0.0.1:4173' },
-    });
+    const packetResponse = await app.request(
+      `http://127.0.0.1:4317/api/v1/work-items/${workItemId}/packet/json`,
+      {
+        headers: { Origin: 'http://127.0.0.1:4173' },
+      },
+    );
     const packet = (await packetResponse.json()) as {
       manifest: { algorithm: string; payloadHash: string };
       verdicts: Array<{ decision: string }>;
@@ -356,9 +393,12 @@ describe('local API security and persistence', () => {
     });
 
     for (const format of ['md', 'html'] as const) {
-      const response = await app.request(`/api/v1/work-items/${workItemId}/packet/${format}`, {
-        headers: { Origin: 'http://127.0.0.1:4173' },
-      });
+      const response = await app.request(
+        `http://127.0.0.1:4317/api/v1/work-items/${workItemId}/packet/${format}`,
+        {
+          headers: { Origin: 'http://127.0.0.1:4173' },
+        },
+      );
       const exported = await response.text();
       expect(exported).toContain('Deterministic smoke check');
       expect(exported).toContain('accepted');
@@ -367,24 +407,30 @@ describe('local API security and persistence', () => {
       expect(exported).not.toContain('hunter2');
     }
 
-    const workspaceResponse = await app.request('/api/v1/workspace/export', {
+    const workspaceResponse = await app.request('http://127.0.0.1:4317/api/v1/workspace/export', {
       headers: { Origin: 'http://127.0.0.1:4173' },
     });
     const workspace = (await workspaceResponse.json()) as Record<string, unknown>;
     const restored = await fixture();
-    const restoreResponse = await restored.app.request('/api/v1/workspace/import', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-VeriDone-CSRF': restored.csrfToken,
-        Origin: 'http://127.0.0.1:4173',
+    const restoreResponse = await restored.app.request(
+      'http://127.0.0.1:4317/api/v1/workspace/import',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-VeriDone-CSRF': restored.csrfToken,
+          Origin: 'http://127.0.0.1:4173',
+        },
+        body: JSON.stringify(workspace),
       },
-      body: JSON.stringify(workspace),
-    });
+    );
     expect(restoreResponse.status).toBe(201);
-    const restoredBootstrapResponse = await restored.app.request('/api/v1/bootstrap', {
-      headers: { Origin: 'http://127.0.0.1:4173' },
-    });
+    const restoredBootstrapResponse = await restored.app.request(
+      'http://127.0.0.1:4317/api/v1/bootstrap',
+      {
+        headers: { Origin: 'http://127.0.0.1:4173' },
+      },
+    );
     const restoredBootstrap = (await restoredBootstrapResponse.json()) as {
       roots: unknown[];
       repositories: unknown[];
@@ -406,15 +452,18 @@ describe('local API security and persistence', () => {
       data: { workItems: Array<{ title: string }> };
     };
     if (tampered.data.workItems[0]) tampered.data.workItems[0].title = 'Tampered title';
-    const tamperedResponse = await restored.app.request('/api/v1/workspace/import', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-VeriDone-CSRF': restored.csrfToken,
-        Origin: 'http://127.0.0.1:4173',
+    const tamperedResponse = await restored.app.request(
+      'http://127.0.0.1:4317/api/v1/workspace/import',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-VeriDone-CSRF': restored.csrfToken,
+          Origin: 'http://127.0.0.1:4173',
+        },
+        body: JSON.stringify(tampered),
       },
-      body: JSON.stringify(tampered),
-    });
+    );
     expect(tamperedResponse.status).toBe(400);
   }, 60_000);
 });

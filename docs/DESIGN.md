@@ -24,8 +24,8 @@ The app opens directly on the operational surface. No marketing hero appears ins
 
 ## Interaction thesis
 
-- Selecting a work item uses a shared-layout transition so the inbox and inspector feel like one desk, not separate pages.
-- The evidence rail reveals in sequence from claim to check to human verdict; stale state interrupts the line rather than merely changing a badge.
+- Selecting a work item uses a shared-layout transition so the inbox and inspector feel like one desk.
+- The evidence rail reveals in sequence from claim to check to human verdict; stale state interrupts the line itself.
 - When repository state changes, affected evidence visibly “unseals” and explains why. The motion is brief and disabled under reduced-motion preference.
 
 ## Interface rules

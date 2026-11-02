@@ -24,6 +24,7 @@ export function CheckDialog({
   const [kind, setKind] = useState('test');
   const [executable, setExecutable] = useState('node');
   const [args, setArgs] = useState('["--test"]');
+  const [setupArgs, setSetupArgs] = useState('');
   const [versionArgs, setVersionArgs] = useState('["--version"]');
   const [scopePaths, setScopePaths] = useState('');
   const [cwdRelative, setCwdRelative] = useState('.');
@@ -50,6 +51,13 @@ export function CheckDialog({
       ) {
         throw new Error('Version arguments must be a JSON array of strings.');
       }
+      const parsedSetupArgs = setupArgs.trim() ? (JSON.parse(setupArgs) as unknown) : [];
+      if (
+        !Array.isArray(parsedSetupArgs) ||
+        !parsedSetupArgs.every((value) => typeof value === 'string')
+      ) {
+        throw new Error('Setup arguments must be a JSON array of strings.');
+      }
       await createCheck(
         {
           repositoryId,
@@ -57,6 +65,7 @@ export function CheckDialog({
           kind,
           executable,
           args: parsedArgs,
+          setupArgs: parsedSetupArgs,
           versionArgs: parsedVersionArgs,
           scopePaths: scopePaths
             .split(/\r?\n/u)
@@ -149,6 +158,15 @@ export function CheckDialog({
             />
           </label>
           <label>
+            <span className="field-label">Setup argument array (optional)</span>
+            <textarea
+              className="text-field compact-code-field mono"
+              value={setupArgs}
+              onChange={(event) => setSetupArgs(event.currentTarget.value)}
+              placeholder={'["path/to/pnpm.cjs", "install", "--frozen-lockfile"]'}
+            />
+          </label>
+          <label>
             <span className="field-label">Working directory inside repository</span>
             <input
               className="text-field mono"
@@ -180,7 +198,9 @@ export function CheckDialog({
           <div className="safety-callout">
             <CheckCircle2 aria-hidden="true" size={16} />
             <span>
-              Runs without shell interpolation, with a 2-minute timeout and 1 MB output cap.
+              Runs without shell interpolation, with a 2-minute timeout and 1 MB output cap. Setup
+              arguments, when given, run first with the same tool in the checkout, for up to 10
+              minutes.
             </span>
           </div>
           <div className="dialog-message" aria-live="polite">

@@ -19,7 +19,7 @@ export interface ApiResponse<T> {
  * bound to it. Every request goes through the real API.
  */
 export async function boundWorkspace(
-  options: { files?: Record<string, string>; runId?: string } = {},
+  options: { files?: Record<string, string>; runId?: string; status?: string } = {},
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), 'veridone-fixture-'));
   const database = new VeriDoneDatabase(':memory:');
@@ -36,8 +36,10 @@ export async function boundWorkspace(
       demoMode: false,
     },
   });
+  // Requests are addressed to the server's own loopback name, as a browser on this machine sends them.
+  const local = (url: string) => new URL(url, 'http://127.0.0.1:4317').href;
   const post = async <T>(url: string, body: unknown): Promise<ApiResponse<T>> => {
-    const response = await app.request(url, {
+    const response = await app.request(local(url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-VeriDone-CSRF': csrfToken },
       body: JSON.stringify(body),
@@ -45,7 +47,7 @@ export async function boundWorkspace(
     return { status: response.status, body: (await response.json()) as T };
   };
   const get = async <T>(url: string): Promise<ApiResponse<T>> => {
-    const response = await app.request(url);
+    const response = await app.request(local(url));
     return { status: response.status, body: (await response.json()) as T };
   };
 
@@ -62,16 +64,16 @@ export async function boundWorkspace(
   await git('commit', '-m', 'fixture');
   const receiptPath = path.join(directory, 'receipt.json');
   /** Writes the agent's receipt; importing it again reports the claim under the same run. */
-  const writeReceipt = (claim = 'The importer is fixed.') =>
+  const writeReceipt = (claim = 'The importer is fixed.', title = 'Fix the importer') =>
     writeFile(
       receiptPath,
       JSON.stringify({
         schema_version: 1,
         run_id: options.runId ?? 'fixture-run',
         source: 'codex',
-        title: 'Fix the importer',
+        title,
         claim,
-        status: 'complete',
+        status: options.status ?? 'complete',
         started_at: '2026-10-22T10:00:00.000Z',
       }),
     );

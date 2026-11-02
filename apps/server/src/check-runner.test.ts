@@ -3,6 +3,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { sha256File } from '@veridone/adapters';
+import { canonicalJson, sha256Hex } from '@veridone/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { checkDefinitionHash } from './check-policy.js';
@@ -220,6 +221,8 @@ describe('check tools are pinned', () => {
       maxOutputBytes: 1_024,
       resolvedExecutable: '/usr/bin/node',
       executableSha256: 'a'.repeat(64),
+      setupArgs: [],
+      setupTimeoutMs: 600_000,
     };
 
     expect(await checkDefinitionHash(definition)).not.toBe(
@@ -267,6 +270,8 @@ describe('check tools are pinned', () => {
       resolvedExecutable: null,
       executableSha256: null,
       definitionHash: 'a'.repeat(64),
+      setupArgs: [],
+      setupTimeoutMs: 600_000,
     });
     await fixture.get('/api/v1/bootstrap');
 
@@ -336,4 +341,266 @@ describe('check tools are pinned', () => {
     expect(response.status).toBe(400);
     expect(response.body.message).toMatch(/relative paths are not pinned/u);
   }, 30_000);
+});
+
+describe('acceptance readiness', () => {
+  it('reports each approved check with its state and the run it comes from', async () => {
+    const fixture = await workspace();
+    const passing = await fixture.approveCheck('process.exit(0)', 'Passing check');
+    const pending = await fixture.approveCheck('process.exit(0)', 'Pending check');
+    const run = await fixture.post<{ evidence: { id: string } }>(`/api/v1/checks/${passing}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    const readiness = acceptanceReadiness(fixture.database, fixture.workItemId);
+
+    expect(readiness).toMatchObject({
+      ready: false,
+      bound: true,
+      bindingFresh: true,
+      degraded: false,
+      passingCount: 1,
+    });
+    expect(readiness.checks).toEqual(
+      expect.arrayContaining([
+        { checkId: passing, state: 'passed', evidenceId: run.body.evidence.id },
+        { checkId: pending, state: 'missing', evidenceId: null },
+      ]),
+    );
+  }, 60_000);
+
+  it('leaves earlier evidence stale once another check is approved', async () => {
+    const fixture = await workspace();
+    const first = await fixture.approveCheck('process.exit(0)', 'First check');
+    await fixture.post(`/api/v1/checks/${first}/run`, { workItemId: fixture.workItemId });
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(true);
+
+    await fixture.approveCheck('process.exit(0)', 'Second check');
+
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId).checks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkId: first, state: 'stale' })]),
+    );
+  }, 60_000);
+
+  it('holds acceptance for a degraded receipt until an override explains it', async () => {
+    const fixture = await boundWorkspace({ status: 'failed' });
+    cleanups.push(fixture.cleanup);
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId)).toMatchObject({
+      ready: false,
+      degraded: true,
+      passingCount: 1,
+    });
+    await expect(fixture.decide('accepted', 'Looks fine.')).resolves.toMatchObject({
+      status: 409,
+      body: { error: 'required_gates_open' },
+    });
+  }, 60_000);
+
+  it("ignores a degraded receipt whose run id only ends like this item's", async () => {
+    const fixture = await boundWorkspace({ runId: 'parent:child' });
+    cleanups.push(fixture.cleanup);
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+    const unrelated = path.join(fixture.directory, 'unrelated-receipt.json');
+    await writeFile(
+      unrelated,
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'child',
+        source: 'codex',
+        title: 'Another run',
+        claim: 'Something else.',
+        status: 'failed',
+        started_at: '2026-10-22T10:00:00.000Z',
+      }),
+    );
+    expect((await fixture.post('/api/v1/receipts/import', { path: unrelated })).status).toBe(201);
+
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId)).toMatchObject({
+      ready: true,
+      degraded: false,
+    });
+  }, 60_000);
+
+  it('sends each work item readiness with the bootstrap, as the verdict gate computes it', async () => {
+    const fixture = await workspace();
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+
+    const bootstrap = await fixture.get<{ readiness: Record<string, unknown> }>(
+      '/api/v1/bootstrap',
+    );
+
+    expect(bootstrap.body.readiness[fixture.workItemId]).toEqual(
+      acceptanceReadiness(fixture.database, fixture.workItemId),
+    );
+  }, 60_000);
+});
+
+describe('setup before a check', () => {
+  const approve = (
+    fixture: Awaited<ReturnType<typeof workspace>>,
+    setupArgs: string[],
+    args: string[],
+  ) =>
+    fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Needs dependencies',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs,
+      args,
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+    });
+
+  it('runs the setup arguments with the pinned tool in the checkout first', async () => {
+    const fixture = await workspace({ 'README.md': '# Fixture\n', '.gitignore': 'deps/\n' });
+    const approved = await approve(
+      fixture,
+      [
+        '-e',
+        "const fs = require('node:fs'); fs.mkdirSync('deps'); fs.writeFileSync('deps/ready.txt', 'ok')",
+      ],
+      ['-e', "process.exit(require('node:fs').existsSync('deps/ready.txt') ? 0 : 7)"],
+    );
+    expect(approved.status).toBe(201);
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence).toMatchObject({ result: 'passed', invalidReason: null });
+  }, 60_000);
+
+  it('counts a file the setup writes outside ignored paths as a change to the checkout', async () => {
+    const fixture = await workspace({ 'README.md': '# Fixture\n', '.gitignore': 'deps/\n' });
+    const approved = await approve(
+      fixture,
+      ['-e', "require('node:fs').writeFileSync('generated.txt', 'left by the setup')"],
+      ['-e', 'process.exit(0)'],
+    );
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('mutated');
+    expect(run.body.evidence.invalidReason).toContain('generated.txt');
+  }, 60_000);
+
+  // A backup refuses an evidence text longer than the largest output limit, and evidence cannot change afterwards.
+  it("keeps the evidence within the check's output limit, cutting the setup's part first", async () => {
+    const fixture = await workspace();
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Noisy install',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs: ['-e', 'process.stdout.write("s".repeat(2000))'],
+      args: ['-e', 'process.stdout.write("c".repeat(2000))'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 2_048,
+    });
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('passed');
+    expect(Buffer.byteLength(run.body.evidence.stdout)).toBeLessThanOrEqual(2_048);
+    expect(run.body.evidence.stdout).toContain('c'.repeat(2000));
+  }, 60_000);
+
+  it('counts the output limit in UTF-8 bytes', async () => {
+    const fixture = await workspace();
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Accented install',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs: ['-e', 'process.stdout.write("é".repeat(512))'],
+      args: ['-e', 'process.stdout.write("é".repeat(512))'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_024,
+    });
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(Buffer.byteLength(run.body.evidence.stdout)).toBeLessThanOrEqual(1_024);
+    expect(run.body.evidence.stdout).not.toContain('�');
+  }, 60_000);
+
+  it('keeps redacted output within the limit, where markers lengthen it', async () => {
+    const fixture = await workspace();
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Prints settings',
+      kind: 'test',
+      executable: process.execPath,
+      args: ['-e', 'process.stdout.write("token=x\\n".repeat(250))'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 2_048,
+    });
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('passed');
+    expect(Buffer.byteLength(run.body.evidence.stdout)).toBeLessThanOrEqual(2_048);
+    expect(run.body.evidence.stdout).toMatch(/^token=\[REDACTED\]\n/u);
+  }, 60_000);
+
+  it('records a failed setup and leaves the check unrun', async () => {
+    const fixture = await workspace();
+    const approved = await approve(
+      fixture,
+      ['-e', 'process.stderr.write("cannot install"); process.exit(3)'],
+      ['-e', 'process.stdout.write("check ran")'],
+    );
+
+    const run = await fixture.post<RunResponse & { evidence: { exitCode: number | null } }>(
+      `/api/v1/checks/${approved.body.check.id}/run`,
+      { workItemId: fixture.workItemId },
+    );
+
+    expect(run.body.evidence).toMatchObject({ result: 'failed', exitCode: 3 });
+    expect(run.body.evidence.stdout).not.toContain('check ran');
+    expect(run.body.evidence.stdout).toContain('setup exited with 3');
+  }, 60_000);
+
+  it('keeps the definition hash a check without setup had before setup existed', async () => {
+    const definition = {
+      repositoryId: 'repo',
+      label: 'Unit tests',
+      kind: 'test',
+      executable: 'node',
+      args: ['--test'],
+      versionArgs: ['--version'],
+      scopePaths: [],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+      resolvedExecutable: '/usr/bin/node',
+      executableSha256: 'a'.repeat(64),
+    };
+    const before = await sha256Hex(canonicalJson(definition));
+
+    expect(
+      await checkDefinitionHash({ ...definition, setupArgs: [], setupTimeoutMs: 600_000 }),
+    ).toBe(before);
+    expect(
+      await checkDefinitionHash({ ...definition, setupArgs: ['install'], setupTimeoutMs: 600_000 }),
+    ).not.toBe(before);
+  });
 });

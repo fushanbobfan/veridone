@@ -12,6 +12,7 @@ import {
 import { assessDeclaredScope, canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
 
 import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
+import { redactSecrets } from './redaction.js';
 
 function minimalEnvironment(): Record<string, string> {
   const names =
@@ -27,6 +28,16 @@ function minimalEnvironment(): Record<string, string> {
   env.PATH = absolutePathEntries(env.PATH).join(path.delimiter);
   if (process.platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
   return env;
+}
+
+/** The longest start of `text` that fits in `limit` UTF-8 bytes, cut where a character begins. */
+function capBytes(text: string, limit: number): string {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= limit) return text;
+  let end = Math.max(0, limit);
+  // A byte of the form 10xxxxxx continues a character, so the cut moves back to where that character starts.
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
 }
 
 /** Hashes the pinned tool file and refuses to continue unless it is the file the operator approved. */
@@ -50,15 +61,6 @@ async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha
     );
   }
   return { path: check.resolvedExecutable, sha256 };
-}
-
-function redact(value: string): string {
-  return value
-    .replace(
-      /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*[:=]\s*[^\s]+/giu,
-      '$1=[REDACTED]',
-    )
-    .replace(/\b(gh[oprsu]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b/gu, '[REDACTED]');
 }
 
 export async function aggregateCheckVersion(checks: CheckRecord[]): Promise<string> {
@@ -118,6 +120,7 @@ export async function runApprovedCheck(
   let completedAt: string;
   let toolVersion: string | null;
   let result: Awaited<ReturnType<typeof runBoundedProcess>>;
+  let setup: Awaited<ReturnType<typeof runBoundedProcess>> | null = null;
   let comparison: CheckoutComparison | { error: string };
   let tool: { path: string; sha256: string };
   let toolUnchanged: boolean;
@@ -142,20 +145,36 @@ export async function runApprovedCheck(
             ...(signal ? { signal } : {}),
           });
     toolVersion = versionResult
-      ? (redact(`${versionResult.stdout}\n${versionResult.stderr}`)
+      ? (redactSecrets(`${versionResult.stdout}\n${versionResult.stderr}`)
           .trim()
           .split(/\r?\n/u)[0]
           ?.slice(0, 4_096) ?? null)
       : null;
-    result = await runBoundedProcess({
-      executable: tool.path,
-      args: check.args,
-      cwd: workingDirectory,
-      timeoutMs: check.timeoutMs,
-      maxOutputBytes: check.maxOutputBytes,
-      env: minimalEnvironment(),
-      ...(signal ? { signal } : {}),
-    });
+    // Setup runs the same pinned tool in the checkout first, for example to install dependencies from the
+    // lockfile; a setup that fails ends the run, and its exit code and output become the evidence.
+    if (check.setupArgs.length > 0) {
+      setup = await runBoundedProcess({
+        executable: tool.path,
+        args: check.setupArgs,
+        cwd: workingDirectory,
+        timeoutMs: check.setupTimeoutMs,
+        maxOutputBytes: check.maxOutputBytes,
+        env: minimalEnvironment(),
+        ...(signal ? { signal } : {}),
+      });
+    }
+    result =
+      setup && !(setup.state === 'completed' && setup.exitCode === 0)
+        ? setup
+        : await runBoundedProcess({
+            executable: tool.path,
+            args: check.args,
+            cwd: workingDirectory,
+            timeoutMs: check.timeoutMs,
+            maxOutputBytes: check.maxOutputBytes,
+            env: minimalEnvironment(),
+            ...(signal ? { signal } : {}),
+          });
     completedAt = new Date().toISOString();
     toolUnchanged = (await sha256File(tool.path).catch(() => null)) === tool.sha256;
     // A checkout the check left unreadable counts as changed; the run is still recorded.
@@ -189,8 +208,30 @@ export async function runApprovedCheck(
     checkResult = 'mutated';
     invalidReason = invalidReason.slice(0, 2_000);
   }
-  const stdout = redact(result.stdout);
-  const stderr = redact(result.stderr);
+  // With a setup, the output carries both steps under headers; when the setup failed, it is the setup's alone.
+  // Each text stays within the check's output limit in UTF-8 bytes, since a backup refuses a longer one and evidence
+  // never changes: the setup's part is cut first, and the cap applies again after redaction, whose markers can be
+  // longer than what they replace.
+  const checkRan = setup !== result;
+  const limit = check.maxOutputBytes;
+  const joined = (setupText: string, head: string, tail: string) =>
+    `${head}${capBytes(setupText, limit - Buffer.byteLength(head) - Buffer.byteLength(tail))}${tail}`;
+  const stdout = capBytes(
+    redactSecrets(
+      setup
+        ? joined(
+            setup.stdout,
+            `--- setup exited with ${setup.exitCode ?? setup.state} ---\n`,
+            checkRan ? `\n--- check ---\n${result.stdout}` : '',
+          )
+        : result.stdout,
+    ),
+    limit,
+  );
+  const stderr = capBytes(
+    redactSecrets(setup ? joined(setup.stderr, '', checkRan ? result.stderr : '') : result.stderr),
+    limit,
+  );
   const artifactHash = await sha256Hex(
     canonicalJson({
       checkId,
@@ -217,7 +258,7 @@ export async function runApprovedCheck(
     checkDefinitionVersion,
     startedAt,
     completedAt,
-    durationMs: result.durationMs,
+    durationMs: result.durationMs + (setup && checkRan ? setup.durationMs : 0),
     toolVersion,
     exitCode: result.exitCode,
     stdout,
@@ -231,58 +272,107 @@ export async function runApprovedCheck(
   });
 }
 
-export function acceptanceReadiness(
-  database: VeriDoneDatabase,
-  workItemId: string,
-): {
+/** One approved check's gate: its state and the run that state comes from. */
+export interface CheckReadiness {
+  checkId: string;
+  state: 'passed' | 'failed' | 'stale' | 'missing';
+  /** The latest run this workspace produced, or a restored one when this workspace has none. */
+  evidenceId: string | null;
+}
+
+/** Whether a work item may be accepted without an override, and why; the web shows exactly this. */
+export interface AcceptanceReadiness {
   ready: boolean;
+  /** The work item is bound to a repository snapshot. */
+  bound: boolean;
+  /** The bound snapshot is the repository's current state. */
+  bindingFresh: boolean;
+  /** The agent's receipt reports a failing or incomplete stage. */
+  degraded: boolean;
   checkCount: number;
   passingCount: number;
   evidenceIds: string[];
   scopeDeclared: boolean;
   scopeDriftPaths: string[];
-} {
-  const empty = {
-    ready: false,
-    checkCount: 0,
-    passingCount: 0,
-    evidenceIds: [],
-    scopeDeclared: false,
-    scopeDriftPaths: [],
-  };
+  checks: CheckReadiness[];
+}
+
+export function acceptanceReadiness(
+  database: VeriDoneDatabase,
+  workItemId: string,
+): AcceptanceReadiness {
   const workItem = database.getWorkItem(workItemId);
-  if (!workItem?.repositoryId) {
-    return empty;
+  // A receipt's work item has the source reference `<source type>:<run id>`, and no source type holds a colon, so
+  // the run id is all that follows the first colon. Run ids may hold colons themselves: a suffix match would let the
+  // degraded run `child` hold up the work item of the run `parent:child`.
+  const runId = workItem?.sourceRef.slice(workItem.sourceRef.indexOf(':') + 1);
+  const degraded = database
+    .listReceipts()
+    .some((receipt) => receipt.degraded && receipt.runId === runId);
+  const repository = workItem?.repositoryId ? database.getRepository(workItem.repositoryId) : null;
+  if (!workItem || !repository) {
+    return {
+      ready: false,
+      bound: false,
+      bindingFresh: false,
+      degraded,
+      checkCount: 0,
+      passingCount: 0,
+      evidenceIds: [],
+      scopeDeclared: false,
+      scopeDriftPaths: [],
+      checks: [],
+    };
   }
-  const repository = database.getRepository(workItem.repositoryId);
-  if (!repository) return empty;
+  const bindingFresh = workItem.snapshotFingerprint === repository.snapshot.fingerprint;
   const checks = database.listChecks().filter((check) => check.repositoryId === repository.id);
   const scope = assessDeclaredScope(
     repository.snapshot.statusEntries,
     checks.flatMap((check) => check.scopePaths),
   );
-  // Only evidence this workspace produced counts; restored evidence stays history.
-  const allEvidence = database
-    .listEvidence(workItemId)
-    .filter((evidence) => evidence.origin === 'local');
-  const latest = checks
-    .map((check) => allEvidence.find((evidence) => evidence.checkId === check.id))
-    .filter((evidence): evidence is EvidenceRecord => Boolean(evidence));
-  const passing = latest.filter(
-    (evidence) =>
-      evidence.result === 'passed' &&
-      evidence.isolation === 'clean-checkout' &&
-      evidence.snapshotFingerprint === repository.snapshot.fingerprint &&
-      evidence.contractVersion === repository.snapshot.contractVersion &&
-      evidence.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
-      evidence.invalidReason === null,
-  );
+  const evidence = database.listEvidence(workItemId);
+  const isFresh = (run: EvidenceRecord) =>
+    // Only evidence this workspace produced counts; restored evidence stays history.
+    run.origin === 'local' &&
+    run.result === 'passed' &&
+    run.isolation === 'clean-checkout' &&
+    run.snapshotFingerprint === repository.snapshot.fingerprint &&
+    run.contractVersion === repository.snapshot.contractVersion &&
+    run.checkDefinitionVersion === repository.snapshot.checkDefinitionVersion &&
+    run.invalidReason === null;
+  const checkStates = checks.map((check): CheckReadiness & { fresh: boolean } => {
+    const runs = evidence.filter((run) => run.checkId === check.id);
+    const latest = runs.find((run) => run.origin === 'local') ?? runs[0];
+    const fresh = latest ? isFresh(latest) : false;
+    return {
+      checkId: check.id,
+      state: fresh
+        ? 'passed'
+        : latest?.result === 'failed' || latest?.result === 'mutated'
+          ? 'failed'
+          : latest
+            ? 'stale'
+            : 'missing',
+      evidenceId: latest?.id ?? null,
+      fresh,
+    };
+  });
+  const passing = checkStates.filter((check) => check.fresh);
   return {
-    ready: checks.length > 0 && passing.length === checks.length && scope.satisfied,
+    ready:
+      !degraded &&
+      bindingFresh &&
+      checks.length > 0 &&
+      passing.length === checks.length &&
+      scope.satisfied,
+    bound: workItem.snapshotFingerprint !== null,
+    bindingFresh,
+    degraded,
     checkCount: checks.length,
     passingCount: passing.length,
-    evidenceIds: passing.map((evidence) => evidence.id),
+    evidenceIds: passing.flatMap((check) => (check.evidenceId ? [check.evidenceId] : [])),
     scopeDeclared: scope.declared,
     scopeDriftPaths: scope.outsidePaths,
+    checks: checkStates.map(({ fresh: _fresh, ...check }) => check),
   };
 }

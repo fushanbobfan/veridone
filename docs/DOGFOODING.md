@@ -29,7 +29,7 @@ The run produced four fresh passing evidence records across 340 tests, four dist
 
 ## Product finding
 
-The exercise exposed a provenance hazard in the original multi-repository flow: an unbound claim's primary action targeted the first connected repository instead of requiring an explicit choice. That behavior was tolerable in the single-repository end-to-end fixture but unsafe and confusing in a real four-repository workspace.
+The exercise exposed a provenance hazard in the original multi-repository flow: an unbound claim's primary action targeted the first connected repository without asking for an explicit choice. That behavior was tolerable in the single-repository end-to-end fixture but unsafe and confusing in a real four-repository workspace.
 
 The v1.1 change adds a repository-binding dialog that:
 

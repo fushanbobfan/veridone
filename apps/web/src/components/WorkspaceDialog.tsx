@@ -1,8 +1,34 @@
-import { ArchiveRestore, Download, ShieldCheck, Upload, X } from 'lucide-react';
+import { ArchiveRestore, Download, KeyRound, ShieldCheck, Upload, X } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 
-import { importWorkspaceDocument, type BootstrapDto } from '../api.js';
+import {
+  importWorkspaceDocument,
+  previewWorkspaceDocument,
+  type BootstrapDto,
+  type RestoreResultDto,
+} from '../api.js';
 import { useDialogFocus } from './useDialogFocus.js';
+
+const total = (counts: Record<string, number>) =>
+  Object.values(counts).reduce((sum, value) => sum + value, 0);
+
+/** Up to five names of one kind of record a restore adds, with a count of the rest. */
+function PreviewList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <span className="field-label">{title}</span>
+      <ul>
+        {items.slice(0, 5).map((item, index) => (
+          <li key={`${index}:${item}`}>
+            <span className="mono">{item}</span>
+          </li>
+        ))}
+      </ul>
+      {items.length > 5 && <small>+ {items.length - 5} more</small>}
+    </div>
+  );
+}
 
 export function WorkspaceDialog({
   open,
@@ -22,32 +48,52 @@ export function WorkspaceDialog({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A chosen backup and what restoring it would add; nothing is written until the operator confirms.
+  const [pending, setPending] = useState<{ document: unknown; preview: RestoreResultDto } | null>(
+    null,
+  );
 
   useDialogFocus(open, onClose, dialog, closeButton);
 
   if (!open) return null;
 
-  const importFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const chooseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
     if (!file) return;
     setBusy(true);
     setMessage(null);
     setError(null);
+    setPending(null);
     try {
       if (file.size > 25_000_000) throw new Error('Workspace backups must be smaller than 25 MB.');
       const document = JSON.parse(await file.text()) as unknown;
-      const result = await importWorkspaceDocument(document, bootstrap.csrfToken);
+      setPending({
+        document,
+        preview: await previewWorkspaceDocument(document, bootstrap.csrfToken),
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The workspace could not be read.');
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  };
+
+  const restore = async () => {
+    if (!pending) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await importWorkspaceDocument(pending.document, bootstrap.csrfToken);
+      setPending(null);
       await onImported();
-      const total = (counts: Record<string, number>) =>
-        Object.values(counts).reduce((sum, value) => sum + value, 0);
       setMessage(
-        `Added ${total(result.imported)} records; ${total(result.unchanged)} were already here. Restored evidence is history and passes no gate; pin restored checks before they run.`,
+        `Added ${total(result.imported)} records; ${total(result.unchanged)} were already here. Restored evidence is history and passes no gate; approve restored roots under Roots and pin restored checks before they run.`,
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The workspace could not be imported.');
     } finally {
       setBusy(false);
-      if (fileInput.current) fileInput.current.value = '';
     }
   };
 
@@ -125,9 +171,70 @@ export function WorkspaceDialog({
             type="file"
             accept="application/json,.json"
             aria-label="Choose a VeriDone workspace JSON backup"
-            onChange={importFile}
+            // Disabled with the button that opens it: a second backup chosen while one is read would race it.
+            disabled={busy}
+            onChange={chooseFile}
           />
+          <a className="workspace-action" href="/api/v1/workspace/signing-key" download>
+            <KeyRound aria-hidden="true" size={18} />
+            <span>
+              <strong>Download the packet signing key</strong>
+              <small>
+                Key {bootstrap.signingKey.keyId.slice(0, 12)}… signs every packet. Publish this
+                public key so readers can check packets with it; backups leave the key out.
+              </small>
+            </span>
+          </a>
         </div>
+
+        {pending && (
+          <section className="receipt-preview" aria-label="Restore preview">
+            <strong>
+              {total(pending.preview.imported) === 0
+                ? 'This backup adds nothing this workspace lacks.'
+                : `This backup adds ${total(pending.preview.imported)} records`}
+            </strong>
+            <small>
+              {pending.preview.imported.evidence ?? 0} evidence records and{' '}
+              {pending.preview.imported.verdicts ?? 0} verdicts join the history; restored evidence
+              passes no gate.
+            </small>
+            <PreviewList
+              title="Roots, which wait for your approval"
+              items={pending.preview.added.roots.map((root) => root.path)}
+            />
+            <PreviewList
+              title="Repositories"
+              items={pending.preview.added.repositories.map((repository) => repository.name)}
+            />
+            <PreviewList
+              title="Checks, to pin before they run"
+              items={pending.preview.added.checks.map((check) => check.label)}
+            />
+            <PreviewList
+              title="Work items"
+              items={pending.preview.added.workItems.map((item) => item.title)}
+            />
+            <div className="pin-actions">
+              <button
+                className="primary-action"
+                type="button"
+                onClick={() => void restore()}
+                disabled={busy}
+              >
+                {busy ? 'Restoring…' : 'Restore these records'}
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => setPending(null)}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+            </div>
+          </section>
+        )}
 
         <div className="safety-callout">
           <ShieldCheck aria-hidden="true" size={16} />
