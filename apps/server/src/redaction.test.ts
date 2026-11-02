@@ -490,6 +490,51 @@ describe('known local paths', () => {
     }
   });
 
+  it('removes no less after a known path than the general patterns do, on generated paths', () => {
+    // A seeded generator puts a marker in a path below a known path, written with characters a name may hold.
+    let seed = 11;
+    const random = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed / 2_147_483_648;
+    };
+    function pick<T>(items: readonly T[]): T {
+      return items[Math.floor(random() * items.length)] as T;
+    }
+    const knownPaths = ['/home/bob', '/Users/bob', String.raw`C:\Users\Bob Smith`];
+    const sanitizers = knownPaths.map((known) =>
+      createPacketSanitizer([known], { caseInsensitive: true }),
+    );
+    const characters = [..."aZ7 ':|?*`()&;,=#%-._~!@$+[]{}^é客"];
+    const escapes = [String.raw`\ `, String.raw`\(`, String.raw`\'`];
+    const contexts: Array<[string, string]> = [
+      ['', ''],
+      ['cd ', ' && ls'],
+      ['"', '"'],
+      ["'", "'"],
+      ['(', ')'],
+      ['', ':12:5'],
+      ['x=', ' y'],
+    ];
+    let checked = 0;
+    for (let round = 0; round < 2_000; round += 1) {
+      const index = Math.floor(random() * knownPaths.length);
+      const separator = index === 2 ? pick(['\\', '/']) : '/';
+      const parts = Array.from({ length: 1 + Math.floor(random() * 3) }, () =>
+        Array.from({ length: 1 + Math.floor(random() * 5) }, () =>
+          random() < 0.15 ? pick(escapes) : pick(characters),
+        ).join(''),
+      );
+      const at = Math.floor(random() * parts.length);
+      parts[at] = `${parts[at] ?? ''}MARKER`;
+      const [before, after] = pick(contexts);
+      const text = `${before}${knownPaths[index] ?? ''}${separator}${parts.join(separator)}${after}`;
+      if (sanitizeForPacket(text).includes('MARKER')) continue;
+      checked += 1;
+      expect(sanitizers[index]?.(text), text).not.toContain('MARKER');
+    }
+    expect(checked).toBeGreaterThan(1_000);
+  });
+
   it('matches whole path segments only', () => {
     expect(sanitize('see /work/clients/acme/importer-v2 here')).toBe(
       'see /work/clients/acme/importer-v2 here',
