@@ -374,6 +374,7 @@ interface PacketViewInput {
     label: string;
     executable: string;
     args: string[];
+    setupArgs: string[];
     cwdRelative: string;
     toolSha256: string | null;
   }>;
@@ -423,6 +424,10 @@ function packetView(packet: PacketViewInput) {
     checks: packet.checks.map((check) => ({
       label: check.label,
       command: commandLine(check),
+      setup:
+        check.setupArgs.length > 0
+          ? commandLine({ executable: check.executable, args: check.setupArgs })
+          : null,
       cwd: check.cwdRelative,
       tool: check.toolSha256 ?? 'not pinned',
     })),
@@ -481,7 +486,7 @@ ${list(
 ${list(
   view.checks.map(
     (check) =>
-      `- **${escapeMarkdown(check.label)}** — \`${escapeMarkdown(check.command)}\` in \`${escapeMarkdown(check.cwd)}\`; tool SHA-256 ${check.tool}`,
+      `- **${escapeMarkdown(check.label)}** — \`${escapeMarkdown(check.command)}\` in \`${escapeMarkdown(check.cwd)}\`${check.setup ? `, after setup \`${escapeMarkdown(check.setup)}\`` : ''}; tool SHA-256 ${check.tool}`,
   ),
   '_No approved checks._',
 )}
@@ -534,7 +539,7 @@ function renderHtml(view: PacketView): string {
 <h2>Checks</h2>${list(
     view.checks.map(
       (check) =>
-        `<li><strong>${escapeHtml(check.label)}</strong> — <code>${escapeHtml(check.command)}</code> in <code>${escapeHtml(check.cwd)}</code><br><small>Tool SHA-256: ${escapeHtml(check.tool)}</small></li>`,
+        `<li><strong>${escapeHtml(check.label)}</strong> — <code>${escapeHtml(check.command)}</code> in <code>${escapeHtml(check.cwd)}</code>${check.setup ? `, after setup <code>${escapeHtml(check.setup)}</code>` : ''}<br><small>Tool SHA-256: ${escapeHtml(check.tool)}</small></li>`,
     ),
     'No approved checks.',
   )}

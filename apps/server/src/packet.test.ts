@@ -188,6 +188,34 @@ describe('acceptance packets', () => {
     }
   }, 30_000);
 
+  it('shows the setup command a check runs first in its readable formats', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const approved = await fixture.post('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Tests after install',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs: ['install', '--frozen-lockfile'],
+      args: ['--test'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+    });
+    expect(approved.status).toBe(201);
+
+    const { packet, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+
+    expect(packet.checks[0]?.setupArgs).toEqual(['install', '--frozen-lockfile']);
+    for (const text of [markdown, html]) {
+      expect(text).toContain(`after setup`);
+      expect(text).toContain(`${path.basename(process.execPath)} install --frozen-lockfile`);
+    }
+  }, 30_000);
+
   it('embeds the contract its evidence and verdicts were recorded under', async () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);
