@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
-    "@playwright/test": "1.61.1",
+    "@playwright/test": "1.64.1",
     "@types/node": "26.1.1",
     "concurrently": "10.0.6",
     "oxlint": "1.75.0",
