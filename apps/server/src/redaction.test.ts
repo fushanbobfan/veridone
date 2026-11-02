@@ -610,16 +610,24 @@ describe('known local paths', () => {
     const many = createPacketSanitizer(
       Array.from({ length: 200 }, (_, index) => `/work/client-${index}/repository`),
     );
+    const home = createPacketSanitizer(['~/projects'], { caseInsensitive: false });
     for (const hostile of [
       `/work/clients/acme/importer${'/a b'.repeat(40_000)}`,
       `${'/work/client-1/'.repeat(30_000)}`,
       `${'/work/clients/acme/importe'.repeat(10_000)}`,
       '/'.repeat(200_000),
       `"${'\\'.repeat(200_000)}`,
+      // Many places where a root may start, with no space or slash between them: looking back for a URL's host
+      // stops at the one before.
+      '%'.repeat(200_000),
+      '-~'.repeat(100_000),
+      'a-\\'.repeat(100_000),
+      '~\\$HOME\\%USERPROFILE%\\'.repeat(20_000),
     ]) {
       const started = performance.now();
       sanitize(hostile);
       many(hostile);
+      home(hostile);
       expect(performance.now() - started).toBeLessThan(500);
     }
   });
@@ -649,8 +657,12 @@ describe('known local paths', () => {
     // A shell writes an escaped backslash as two, so the quote after them opens a quoted part of the value.
     expect(known(String.raw`TOKEN=/work/acme\\'x SECRET'`)).toBe('TOKEN=[REDACTED]');
     // A known path that ends in the word a bearer value follows keeps it, so the value still goes.
-    const bearer = createPacketSanitizer(['/work/Bearer'], { caseInsensitive: false });
+    const bearer = createPacketSanitizer(['/work/Bearer', '/home/Bearer'], {
+      caseInsensitive: false,
+    });
     expect(bearer('/work/Bearer abcdefgh')).toBe('[LOCAL_PATH] [REDACTED]');
+    // With no bearer value after it, the kept word is read as part of the path that goes on.
+    expect(bearer('see /home/Bearer my notes/secret.txt now')).toBe('see [LOCAL_PATH] now');
   });
 
   it("reads on where the text continues a known path's last segment", () => {
@@ -728,6 +740,10 @@ describe('known local paths', () => {
     );
     // A bracket that closes a log prefix, unlike one that closes a URL's IPv6 host, comes before a path.
     expect(known('[INFO]/work/acme/secret.txt')).toBe('[INFO][LOCAL_PATH]');
+    // A URL's host ends at a quote, so a path in the next field is found.
+    expect(known('{"url":"https://example.com","root":"/work/acme/secret.txt"}')).toBe(
+      '{"url":"https://example.com","root":"[LOCAL_PATH]"}',
+    );
   });
 
   it('withholds a text longer than a million characters', () => {

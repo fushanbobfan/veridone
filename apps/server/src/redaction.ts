@@ -93,8 +93,9 @@ const treeMaxLength = 100_000;
 const treeMaxSeparators = 1_000;
 const separatorRun = String.raw`[\\/]+`;
 // The lookbehinds run only where a root's first character follows, so each reads back over one word at most once. A
-// URL's host, `//` and what follows up to the path, comes before a remote path, a Unicode or bracketed IPv6 one too.
-const rootStart = String.raw`(?:(?<![\w.\\/@])(?<!\/\/[^\s\/]+)|(?<=(?<![\w.\\/-])-{1,2}[A-Za-z][\w-]*)|(?<=file:\/\/localhost|vscode:\/\/file|\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?\/@fs))`;
+// URL's host, `//` and the letters, digits and `-.:@[]_` up to the path, comes before a remote path, a Unicode or
+// bracketed IPv6 one too; a root's first character falls outside that class, so the look back stops at the root before.
+const rootStart = String.raw`(?:(?<![\w.\\/@])(?<!\/\/[\p{L}\p{N}\-.:@\[\]_]+)|(?<=(?<![\w.\\/-])-{1,2}[A-Za-z][\w-]*)|(?<=file:\/\/localhost|vscode:\/\/file|\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?\/@fs))`;
 const posixRoot = String.raw`(?=[\\/])${rootStart}${separatorRun}`;
 const homeRoot = String.raw`(?=[~$%])${rootStart}(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE)${separatorRun}`;
 const knownPathEnd = String.raw`(?![\p{Script=Latin}\p{M}\p{Nd}_-]|[.%][\p{L}\p{N}])`;
@@ -174,10 +175,13 @@ const bearerAfterMarks = new RegExp(
   'gu',
 );
 // A name the first pass kept after a mark starts and ends with a word character. Nothing else after a mark starts with
-// one, since a word character there would have continued the known path's name.
+// one, since a word character there would have continued the known path's name. A credential's name ends the path at
+// its assignment; `Bearer` is read as part of the path, which goes on when no bearer value took what follows.
 const keptName = String.raw`\w(?:[\w.-]*\w)?`;
+const markedRest = (windows: boolean) =>
+  String.raw`(?:${keptName}(?=["']?\s*[:=])|(?:${keptName})?${restPattern(windows)})`;
 const markedPath = new RegExp(
-  String.raw`((?<!\\)"|'|\\")?(?:${posixMark}(?:${keptName}|${restPattern(false)})|${windowsMark}(?:${keptName}|${restPattern(true)}))`,
+  String.raw`((?<!\\)"|'|\\")?(?:${posixMark}${markedRest(false)}|${windowsMark}${markedRest(true)})`,
   'gu',
 );
 const secretNameEnd = new RegExp(`(?:${secretWord})$`, 'iu');
