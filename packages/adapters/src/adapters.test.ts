@@ -21,6 +21,7 @@ import {
   parseConfigList,
   readHarnessReceipt,
   readReceiptCollection,
+  receiptFieldSchemas,
   repositorySettings,
   resolveWithinApprovedRoots,
   runBoundedProcess,
@@ -507,11 +508,20 @@ describe('real adapters', () => {
     await expect(read({ started_at: '2026-07-21 13:00:00' })).resolves.toMatchObject({
       startedAt: new Date(2026, 6, 21, 13, 0, 0).toISOString(),
     });
+    await expect(read({ started_at: '2026-07-21T13:00Z' })).resolves.toMatchObject({
+      startedAt: '2026-07-21T13:00:00Z',
+    });
+    await expect(read({ started_at: '2026-07-21T13:00+02:00' })).resolves.toMatchObject({
+      startedAt: '2026-07-21T13:00:00+02:00',
+    });
     for (const startedAt of ['yesterday', '2026-02-30 10:00:00', '1']) {
       await expect(read({ started_at: startedAt })).rejects.toThrow(/started_at: Use an ISO 8601/u);
     }
     await expect(read({ run_id: 'r'.repeat(513) })).rejects.toThrow(/run_id/u);
     expect(normalizeReceiptTimestamp('2026-07-21T20:00:00Z')).toBe('2026-07-21T20:00:00Z');
+    // The backup's field rules accept a time given to the minute, as earlier versions stored it.
+    expect(receiptFieldSchemas.timestamp.safeParse('2026-07-21T13:00Z').success).toBe(true);
+    expect(receiptFieldSchemas.timestamp.safeParse('2026-07-21T13:00').success).toBe(false);
   });
 
   it('rejects receipt collections that exceed their byte budget before parsing', async () => {

@@ -25,7 +25,7 @@ Save a UTF-8 JSON file smaller than 2 MB inside an approved root:
 
 Required fields are `schema_version`, `run_id`, `title`, `claim`, `status`, and `started_at`. `source` is one of `codex`, `claude-code`, `ci`, `generic`, or `manual` and defaults to `generic`. `completed_at` and up to 100 stage summaries are optional. Unknown fields are preserved by parsing but are not upgraded into evidence.
 
-`started_at` and `completed_at` are ISO 8601 timestamps. A time with a UTC offset is kept as written; a date and time without one, such as `2026-07-21 13:00:00`, is read as the importing machine's local time and stored with an offset. `run_id` holds at most 512 characters, `status` and `task.type` at most 200, `title` at most 300, and `claim` at most 20,000. The workspace backup checks the same rules, so a receipt that imports also exports.
+`started_at` and `completed_at` are ISO 8601 timestamps. A time with a UTC offset is kept as written, with `:00` seconds added when it stops at the minute, such as `2026-07-21T13:00Z`; a date and time without one, such as `2026-07-21 13:00:00`, is read as the importing machine's local time and stored with an offset. `run_id` holds at most 512 characters, `status` and `task.type` at most 200, `title` at most 300, and `claim` at most 20,000. The workspace backup checks the same rules, so a receipt that imports also exports.
 
 A top-level status or stage status outside `complete`, `completed`, `passed`, `success`, `succeeded`, and `ok` marks the import degraded. It does not execute or trust output fields.
 

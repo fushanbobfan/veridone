@@ -312,7 +312,7 @@ describe('receipt times in backups', () => {
     });
   }, 30_000);
 
-  it('exports receipts an earlier version stored with a local time', async () => {
+  it('exports receipts an earlier version stored with a local time or a time to the minute', async () => {
     const database = emptyDatabase();
     const insert = database.connection.prepare(
       `INSERT INTO receipts (id, run_id, source_path, task_type, status, started_at, completed_at,
@@ -330,6 +330,17 @@ describe('receipt times in backups', () => {
     expect(document.data.receipts[0]?.startedAt).toBe(
       new Date(2026, 6, 21, 13, 0, 0).toISOString(),
     );
+
+    insert.run(
+      randomUUID(),
+      'legacy-minute',
+      'D:/receipts/legacy-minute.json',
+      '2026-07-21T13:00Z',
+    );
+    const withMinute = await exportWorkspace(database);
+    expect(
+      withMinute.data.receipts.find((receipt) => receipt.runId === 'legacy-minute')?.startedAt,
+    ).toBe('2026-07-21T13:00:00Z');
 
     insert.run(
       randomUUID(),

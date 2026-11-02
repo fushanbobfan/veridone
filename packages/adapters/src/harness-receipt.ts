@@ -6,15 +6,20 @@ import { z } from 'zod';
 import { resolveWithinApprovedRoots } from './path-boundary.js';
 
 const isoTimestamp = z.string().datetime({ offset: true });
+// zod 4.5 and later require seconds; receipts and backups written before may give the time to the minute.
+const isoMinuteTimestamp = z.string().datetime({ offset: true, precision: -1 });
 // A date and time without a UTC offset, as some tools write them.
 const localTimestamp = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/u;
 
 /**
- * Returns a receipt time as an ISO 8601 timestamp: unchanged when it already has a UTC offset,
- * read as this machine's local time when it has none, and null when it is not a real time.
+ * Returns a receipt time as an ISO 8601 timestamp: unchanged when it already has a UTC offset
+ * (with `:00` seconds added when it stops at the minute), read as this machine's local time when
+ * it has none, and null when it is not a real time.
  */
 export function normalizeReceiptTimestamp(value: string): string | null {
   if (isoTimestamp.safeParse(value).success) return value;
+  if (isoMinuteTimestamp.safeParse(value).success)
+    return `${value.slice(0, 16)}:00${value.slice(16)}`;
   const parts = localTimestamp.exec(value);
   if (!parts) return null;
   const [year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0] = parts
@@ -40,7 +45,7 @@ export const receiptFieldSchemas = {
   taskType: z.string().min(1).max(200),
   title: z.string().min(1).max(300),
   claim: z.string().min(1).max(20_000),
-  timestamp: isoTimestamp,
+  timestamp: z.union([isoTimestamp, isoMinuteTimestamp]),
 };
 
 const receiptTimestamp = z.string().transform((value, context) => {

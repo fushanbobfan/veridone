@@ -14,6 +14,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - A declared scope of `./` means the whole repository and is stored as no scope.
 - A work item's verdicts are listed by their place in the chain, so a packet heads its verdict history with the latest verdict whatever the clocks recorded.
 - A repository capture skips `git submodule status` when the repository has no `.gitmodules` file; on Windows that script took about 1.7 seconds of every capture.
+- Updated `motion` to 12.43.0, `lucide-react` to 1.59.0, `@hono/node-server` to 2.1.5, `@playwright/test` to 1.64.1, and `jsdom` to 30.1.3. jsdom 30, which the unit tests use, supports Node.js 22.22.2 or a later 22.x, 24.15 or a later 24.x, and 26 or later.
 
 ### Fixed
 
@@ -22,6 +23,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - After the repository changes, an earlier verdict is marked superseded and the work item opens for a new decision. Accepting with every gate passing records a plain acceptance; the server stores an override reason only while required gates are open.
 - Light-theme status, kicker, and diff text use a darker accent that meets WCAG AA contrast.
 - A receipt whose time has no UTC offset, such as `2026-07-21 13:00:00`, imports as the machine's local time with an offset, and workspace export accepts receipts an earlier version stored that way. Receipt import and the workspace backup share one set of field rules, so a receipt that imports also exports; a time that is not a timestamp is refused at import.
+- A receipt time with a UTC offset that stops at the minute, such as `2026-07-21T13:00Z`, still imports, exports, and restores: zod 4.5 and later require seconds, so VeriDone adds `:00`.
 
 ### Security
 
@@ -31,6 +33,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Approved checks run in a checkout that VeriDone creates from the bound commit in its own temporary directory, so uncommitted changes, ignored files, build output, and Git configuration in the operator's repository cannot reach a check. Files are checked out as committed, without submodules or the operator's line-ending conversion, and a check that needs dependencies installs them itself. Checks refuse to start while the repository has uncommitted changes. After the run, VeriDone requires the checkout's HEAD to still be the bound commit and compares its work tree with a fresh index read from that commit, so a check that edits, commits, or hides a change in its checkout is recorded as mutated. Evidence recorded before this change no longer satisfies a gate. A SHA-256 repository gets a SHA-256 checkout.
 - VeriDone starts Git by an absolute path found on the absolute `PATH` entries (or set with `VERIDONE_GIT`), from a directory outside every repository, and gives it a fixed configuration. System and global Git configuration are ignored except for settings that decide how files compare, such as line endings; a repository's fsmonitor hook, filter commands, hooks, and external diff or textconv programs never run, and safe directories come only from the operator's own configuration. Git 2.32 or later is required.
 - Updated `hono` to 4.13.13, `vite` to 8.1.6, `vitest` to 4.1.12, and `concurrently` to 10.0.6, and pinned patched transitive `undici`, `postcss`, `nanoid`, and `source-map-js`; `pnpm audit --audit-level low` reports no known vulnerabilities.
+- Updated `zod` to 4.6.7 for GHSA-mrhx-c7xc-m3w5, in which validating an oversized constrained collection could exhaust memory.
 
 ### Documentation
 
