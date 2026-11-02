@@ -1,4 +1,4 @@
-import { ArchiveRestore, Download, ShieldCheck, Upload, X } from 'lucide-react';
+import { ArchiveRestore, Download, KeyRound, ShieldCheck, Upload, X } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 
 import { importWorkspaceDocument, type BootstrapDto } from '../api.js';
@@ -127,6 +127,16 @@ export function WorkspaceDialog({
             aria-label="Choose a VeriDone workspace JSON backup"
             onChange={importFile}
           />
+          <a className="workspace-action" href="/api/v1/workspace/signing-key" download>
+            <KeyRound aria-hidden="true" size={18} />
+            <span>
+              <strong>Download the packet signing key</strong>
+              <small>
+                Key {bootstrap.signingKey.keyId.slice(0, 12)}… signs every packet. Publish this
+                public key so readers can check packets with it; backups leave the key out.
+              </small>
+            </span>
+          </a>
         </div>
 
         <div className="safety-callout">

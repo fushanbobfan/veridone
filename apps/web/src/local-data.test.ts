@@ -123,6 +123,7 @@ function workspace(options: {
           },
         ]
       : [],
+    signingKey: { keyId: 'e'.repeat(64) },
   };
 }
 

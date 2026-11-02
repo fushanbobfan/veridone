@@ -1,11 +1,44 @@
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { VeriDoneDatabase } from './database.js';
-import { buildAcceptancePacket, verifyAcceptancePacket } from './packet.js';
+import {
+  buildAcceptancePacket,
+  packetCanonicalJson,
+  verifyAcceptancePacket,
+  workspaceSigningKey,
+} from './packet.js';
 import { boundWorkspace } from './test-fixtures.js';
 import { exportWorkspace } from './workspace.js';
+
+type Packet = Awaited<ReturnType<typeof buildAcceptancePacket>>['packet'];
+
+/**
+ * Changes a packet's title the way a careful forger would: the payload hash recomputed and, with `resign`, the
+ * payload signed again with a key of the forger's own, embedded in place of the workspace key.
+ */
+function forge(packet: Packet, resign = false): Packet {
+  const forged = structuredClone(packet);
+  forged.workItem.title = 'Forged title';
+  const { manifest: _manifest, ...payload } = forged;
+  const canonical = packetCanonicalJson(payload);
+  forged.manifest.payloadHash = createHash('sha256').update(canonical).digest('hex');
+  if (resign) {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    forged.manifest.signature = {
+      algorithm: 'ed25519',
+      keyId: createHash('sha256')
+        .update(publicKey.export({ type: 'spki', format: 'der' }))
+        .digest('hex'),
+      publicKey: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      value: sign(null, Buffer.from(canonical), privateKey).toString('base64'),
+    };
+  }
+  return forged;
+}
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -171,6 +204,108 @@ describe('acceptance packets', () => {
     expect(packet.contract?.version).toBe(packet.evidence[0]?.contractVersion);
   }, 30_000);
 
+  it('signs its payload with the workspace key', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const { packet, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+    const key = workspaceSigningKey(fixture.database);
+
+    expect(packet.manifest.signature).toMatchObject({
+      algorithm: 'ed25519',
+      keyId: key.keyId,
+      publicKey: key.publicKey,
+    });
+    for (const text of [markdown, html]) expect(text).toContain(key.keyId);
+    await expect(verifyAcceptancePacket(packet)).resolves.toMatchObject({
+      valid: true,
+      signed: true,
+      keyId: key.keyId,
+      trusted: null,
+    });
+    await expect(
+      verifyAcceptancePacket(packet, { trustedKeys: [key.publicKey] }),
+    ).resolves.toMatchObject({ valid: true, signed: true, trusted: true });
+  }, 30_000);
+
+  it('detects a changed payload even when its hashes are recomputed', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+
+    await expect(verifyAcceptancePacket(forge(packet))).resolves.toMatchObject({
+      valid: false,
+      signed: false,
+      issues: expect.arrayContaining(['The signature does not match the payload.']),
+    });
+  }, 30_000);
+
+  it('tells a packet re-signed with another key from one signed by a trusted key', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+    const resigned = forge(packet, true);
+    const key = workspaceSigningKey(fixture.database);
+
+    // The forger's own signature is sound; only a key the reader trusts tells the two apart.
+    await expect(verifyAcceptancePacket(resigned)).resolves.toMatchObject({
+      valid: true,
+      signed: true,
+      trusted: null,
+    });
+    await expect(
+      verifyAcceptancePacket(resigned, { trustedKeys: [key.publicKey] }),
+    ).resolves.toMatchObject({
+      valid: false,
+      trusted: false,
+      issues: expect.arrayContaining(['The packet is not signed by a trusted key.']),
+    });
+  }, 30_000);
+
+  it('refuses a schema-2 packet whose signature was removed', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+    const stripped = structuredClone(packet) as { manifest: Record<string, unknown> };
+    delete stripped.manifest.signature;
+
+    await expect(verifyAcceptancePacket(stripped)).resolves.toMatchObject({
+      valid: false,
+      signed: false,
+      issues: expect.arrayContaining(['The packet is not signed.']),
+    });
+  }, 30_000);
+
+  it('still verifies the published schema-1 packets, as unsigned', async () => {
+    const directory = path.resolve(import.meta.dirname, '../../../docs/evidence/dogfood');
+    const files = (await readdir(directory)).filter((name) => name.endsWith('.json'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const packet = JSON.parse(await readFile(path.join(directory, file), 'utf8')) as unknown;
+      await expect(verifyAcceptancePacket(packet)).resolves.toMatchObject({
+        valid: true,
+        signed: false,
+      });
+    }
+  });
+
+  it('hands out the public key of the workspace signing key', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const key = workspaceSigningKey(fixture.database);
+
+    const response = await fixture.app.request(
+      'http://127.0.0.1:4317/api/v1/workspace/signing-key',
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-VeriDone-Key-Id')).toBe(key.keyId);
+    expect(await response.text()).toBe(key.publicKey);
+    const bootstrap = await fixture.get<{ signingKey: { keyId: string } }>('/api/v1/bootstrap');
+    expect(bootstrap.body.signingKey).toEqual({ keyId: key.keyId });
+  }, 30_000);
+
   it('keeps its pseudonyms stable within a workspace and its key out of backups', async () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);
@@ -185,6 +320,11 @@ describe('acceptance packets', () => {
     } finally {
       other.close();
     }
-    expect(JSON.stringify(await exportWorkspace(fixture.database))).not.toContain(key);
+    const backup = JSON.stringify(await exportWorkspace(fixture.database));
+    expect(backup).not.toContain(key);
+    // The signing key's private half stays out as well.
+    const signingMaterial = fixture.database.workspaceKey('packet-signing');
+    expect(signingMaterial).toContain('PRIVATE KEY');
+    expect(backup).not.toContain(signingMaterial.split('\n')[1]);
   }, 30_000);
 });

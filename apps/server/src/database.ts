@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -218,10 +218,13 @@ const migrationNine = `
   );
 `;
 
-export type WorkspaceKeyPurpose = 'packet-pseudonyms';
+export type WorkspaceKeyPurpose = 'packet-pseudonyms' | 'packet-signing';
 
 const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
   'packet-pseudonyms': () => randomBytes(32).toString('hex'),
+  // An Ed25519 private key in PKCS #8 PEM; packets carry its public half.
+  'packet-signing': () =>
+    generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
 };
 
 /** SHA-256 of the title and claim a reviewer reads before deciding. */

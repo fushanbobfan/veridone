@@ -1,4 +1,14 @@
-import { createHmac } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  createPrivateKey,
+  createPublicKey,
+  sign,
+  verify,
+  type KeyObject,
+} from 'node:crypto';
+
+import { z } from 'zod';
 
 import { canonicalJson, sha256Hex } from '@veridone/core';
 
@@ -6,10 +16,54 @@ import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.j
 import { sanitizeForPacket } from './redaction.js';
 import { summarizeTestOutput, type TestCounts } from './test-summary.js';
 
-/** The packet schemas a verifier accepts; schema 2 carries pseudonymous identifiers. */
+/** The packet schemas a verifier accepts; schema 2 carries pseudonymous identifiers and a signature. */
 const packetSchemaVersions = new Set([1, 2]);
 
 type Pseudonym = (kind: string, value: string) => string;
+
+/**
+ * JSON with object keys in UTF-16 code-unit order, the order RFC 8785 uses, so a verifier on any machine derives
+ * the same bytes. Schema-1 packets used a locale-aware order, which they keep.
+ */
+export function packetCanonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => packetCanonicalJson(item === undefined ? null : item)).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${packetCanonicalJson(child)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** SHA-256 of a public key's SPKI encoding, the id a signature names its key by. */
+function keyIdOf(publicKey: KeyObject | string): string {
+  const key = typeof publicKey === 'string' ? createPublicKey(publicKey) : publicKey;
+  return createHash('sha256')
+    .update(key.export({ type: 'spki', format: 'der' }))
+    .digest('hex');
+}
+
+/** This workspace's packet signing key; its public half is what others verify packets against. */
+export function workspaceSigningKey(database: VeriDoneDatabase): {
+  privateKey: KeyObject;
+  publicKey: string;
+  keyId: string;
+} {
+  const material = database.workspaceKey('packet-signing');
+  // Given a private key in PEM, createPublicKey derives its public half.
+  const publicKey = createPublicKey(material).export({ type: 'spki', format: 'pem' }).toString();
+  return { privateKey: createPrivateKey(material), publicKey, keyId: keyIdOf(publicKey) };
+}
+
+const signatureSchema = z.object({
+  algorithm: z.literal('ed25519'),
+  keyId: z.string().regex(/^[0-9a-f]{64}$/u),
+  publicKey: z.string().max(10_000),
+  value: z.string().max(1_000),
+});
 
 function escapeHtml(value: string): string {
   return sanitizeForPacket(value)
@@ -68,32 +122,47 @@ export interface PacketVerification {
   issues: string[];
   expectedPayloadHash: string | null;
   actualPayloadHash: string | null;
+  /** True when the packet carries an Ed25519 signature that matches its payload. */
+  signed: boolean;
+  /** The id of the key the signature names, whether or not the signature holds. */
+  keyId: string | null;
+  /** Whether the signing key is one the caller trusts; null when the caller named no trusted key. */
+  trusted: boolean | null;
 }
 
-export async function verifyAcceptancePacket(input: unknown): Promise<PacketVerification> {
+export interface VerificationOptions {
+  /** Public keys, in PEM, whose signatures the caller trusts. */
+  trustedKeys?: string[];
+}
+
+export async function verifyAcceptancePacket(
+  input: unknown,
+  options: VerificationOptions = {},
+): Promise<PacketVerification> {
+  const unreadable = (issue: string): PacketVerification => ({
+    valid: false,
+    issues: [issue],
+    expectedPayloadHash: null,
+    actualPayloadHash: null,
+    signed: false,
+    keyId: null,
+    trusted: options.trustedKeys ? false : null,
+  });
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return {
-      valid: false,
-      issues: ['Packet must be a JSON object.'],
-      expectedPayloadHash: null,
-      actualPayloadHash: null,
-    };
+    return unreadable('Packet must be a JSON object.');
   }
   const packet = input as Record<string, unknown>;
   const manifest = packet.manifest;
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
-    return {
-      valid: false,
-      issues: ['Packet manifest is missing.'],
-      expectedPayloadHash: null,
-      actualPayloadHash: null,
-    };
+    return unreadable('Packet manifest is missing.');
   }
   const typedManifest = manifest as Record<string, unknown>;
   const expectedPayloadHash =
     typeof typedManifest.payloadHash === 'string' ? typedManifest.payloadHash : null;
   const { manifest: _manifest, ...payload } = packet;
-  const actualPayloadHash = await sha256Hex(canonicalJson(payload));
+  const canonical =
+    packet.schemaVersion === 1 ? canonicalJson(payload) : packetCanonicalJson(payload);
+  const actualPayloadHash = await sha256Hex(canonical);
   const issues: string[] = [];
   if (typedManifest.algorithm !== 'sha256') issues.push('Unsupported manifest algorithm.');
   if (!expectedPayloadHash || expectedPayloadHash !== actualPayloadHash) {
@@ -120,11 +189,60 @@ export async function verifyAcceptancePacket(input: unknown): Promise<PacketVeri
     issues.push('Packet identity or schema version is invalid.');
   }
 
+  // Schema-1 packets carry a checksum only; from schema 2 on a packet must be signed.
+  let signed = false;
+  let keyId: string | null = null;
+  if (typedManifest.signature !== undefined || packet.schemaVersion !== 1) {
+    const signature = signatureSchema.safeParse(typedManifest.signature);
+    if (typedManifest.signature === undefined) {
+      issues.push('The packet is not signed.');
+    } else if (!signature.success) {
+      issues.push('The packet signature is malformed.');
+    } else {
+      keyId = signature.data.keyId;
+      try {
+        const publicKey = createPublicKey(signature.data.publicKey);
+        if (keyIdOf(publicKey) !== keyId) {
+          issues.push('The signature names a key other than the one it carries.');
+        } else {
+          signed = verify(
+            null,
+            Buffer.from(canonical),
+            publicKey,
+            Buffer.from(signature.data.value, 'base64'),
+          );
+          if (!signed) issues.push('The signature does not match the payload.');
+        }
+      } catch {
+        issues.push('The packet signature is malformed.');
+      }
+    }
+  }
+
+  // A sound signature shows only that its key signed; whose key it is, the reader decides.
+  let trusted: boolean | null = null;
+  if (options.trustedKeys) {
+    const trustedIds = new Set(
+      options.trustedKeys.flatMap((key) => {
+        try {
+          return [keyIdOf(key)];
+        } catch {
+          return [];
+        }
+      }),
+    );
+    trusted = signed && keyId !== null && trustedIds.has(keyId);
+    if (!trusted) issues.push('The packet is not signed by a trusted key.');
+  }
+
   return {
     valid: issues.length === 0,
     issues,
     expectedPayloadHash,
     actualPayloadHash,
+    signed,
+    keyId,
+    trusted,
   };
 }
 
@@ -209,13 +327,23 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     evidence,
     verdicts,
   };
-  const payloadHash = await sha256Hex(canonicalJson(payload));
+  const canonical = packetCanonicalJson(payload);
+  const payloadHash = await sha256Hex(canonical);
+  // The signature lets a reader who holds this workspace's public key tell a changed packet from the one signed
+  // here; the checksum alone only catches accidental damage, since anyone can recompute it.
+  const signingKey = workspaceSigningKey(database);
   const packet = {
     ...payload,
     manifest: {
       algorithm: 'sha256',
       payloadHash,
       evidenceArtifacts: evidence.flatMap((item) => item.artifactHashes),
+      signature: {
+        algorithm: 'ed25519' as const,
+        keyId: signingKey.keyId,
+        publicKey: signingKey.publicKey,
+        value: sign(null, Buffer.from(canonical), signingKey.privateKey).toString('base64'),
+      },
     },
   };
   const json = JSON.stringify(packet, null, 2);
@@ -261,7 +389,7 @@ interface PacketViewInput {
     decidedAt: string;
     overrideReason: string | null;
   }>;
-  manifest: { payloadHash: string };
+  manifest: { payloadHash: string; signature: { keyId: string } };
 }
 
 /**
@@ -310,6 +438,7 @@ function packetView(packet: PacketViewInput) {
       overrideReason: item.overrideReason,
     })),
     payloadHash: packet.manifest.payloadHash,
+    keyId: packet.manifest.signature.keyId,
   };
 }
 
@@ -329,6 +458,7 @@ function renderMarkdown(view: PacketView): string {
 - Verdict: ${view.verdict}
 - Privacy mode: strict
 - Payload SHA-256: \`${view.payloadHash}\`
+- Signed with Ed25519 key: \`${view.keyId}\`
 
 ### Claim
 
@@ -382,7 +512,7 @@ function renderHtml(view: PacketView): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <title>VeriDone packet — ${escapeHtml(view.title)}</title>
-<style>body{max-width:780px;margin:48px auto;padding:0 24px;font:16px/1.55 system-ui;color:#171914;background:#f5f4ed}code{font-family:ui-monospace,monospace;word-break:break-all}.meta{padding:18px 0;border-block:1px solid #bbb}.status{font-weight:700}.hash{word-break:break-all;color:#555}li{margin:8px 0}small{color:#555}</style></head>
+<style>body{max-width:780px;margin:48px auto;padding:0 24px;font:16px/1.55 system-ui;color:#171914;background:#f5f4ed;overflow-wrap:anywhere}code{font-family:ui-monospace,monospace;word-break:break-all}.meta{padding:18px 0;border-block:1px solid #bbb}.status{font-weight:700}.hash{word-break:break-all;color:#555}li{margin:8px 0}small{color:#555}</style></head>
 <body><small>VERIDONE ACCEPTANCE PACKET · STRICT PRIVACY</small><h1>${escapeHtml(view.title)}</h1>
 <div class="meta"><p>Source: ${escapeHtml(view.source)}</p>
 <p>Repository: <strong>${escapeHtml(view.repository)}</strong> (branch ${escapeHtml(view.branch)})</p>
@@ -419,5 +549,6 @@ function renderHtml(view: PacketView): string {
     ),
     'No human verdict recorded.',
   )}
-<h2>Integrity</h2><p class="hash"><code>${view.payloadHash}</code></p></body></html>`;
+<h2>Integrity</h2><p>Payload SHA-256: <code class="hash">${view.payloadHash}</code></p>
+<p>Signed with Ed25519 key: <code class="hash">${view.keyId}</code></p></body></html>`;
 }

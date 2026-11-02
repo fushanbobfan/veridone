@@ -153,6 +153,8 @@ export interface BootstrapDto {
   checks: CheckDto[];
   evidence: EvidenceDto[];
   verdicts: VerdictDto[];
+  /** The key this workspace signs packets with; its public half downloads from the signing-key route. */
+  signingKey: { keyId: string };
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

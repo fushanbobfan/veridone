@@ -19,7 +19,7 @@ import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
 import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
 import { allowedHosts, type ServerConfig } from './config.js';
 import { VerdictConflictError, type RepositoryRecord, type VeriDoneDatabase } from './database.js';
-import { buildAcceptancePacket } from './packet.js';
+import { buildAcceptancePacket, workspaceSigningKey } from './packet.js';
 import { exportWorkspace, importWorkspace, WorkspaceConflictError } from './workspace.js';
 
 const rootRequestSchema = z.object({
@@ -180,7 +180,17 @@ export function createApp(options: AppOptions): Hono {
       checks: options.database.listChecks(),
       evidence: options.database.listEvidence(),
       verdicts: options.database.listVerdicts(),
+      signingKey: { keyId: workspaceSigningKey(options.database).keyId },
     });
+  });
+
+  // The public half of the key packets are signed with, for the operator to publish where readers can find it.
+  app.get('/api/v1/workspace/signing-key', (context) => {
+    const key = workspaceSigningKey(options.database);
+    context.header('Content-Type', 'application/x-pem-file; charset=utf-8');
+    context.header('Content-Disposition', 'attachment; filename="veridone-signing-key.pem"');
+    context.header('X-VeriDone-Key-Id', key.keyId);
+    return context.body(key.publicKey);
   });
 
   app.get('/api/v1/workspace/export', async (context) => {
