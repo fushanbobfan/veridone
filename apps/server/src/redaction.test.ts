@@ -1,0 +1,101 @@
+import { describe, expect, it } from 'vitest';
+
+import { redactSecrets, sanitizeForPacket } from './redaction.js';
+
+describe('secret redaction', () => {
+  const cases: Array<[string, string, string]> = [
+    ['an assignment', 'password=hunter2', 'password=[REDACTED]'],
+    ['a JSON field', '{"password": "hunter 2"}', '{"password": "[REDACTED]"}'],
+    ['a single-quoted value', "api_key: 'abc def'", "api_key: '[REDACTED]'"],
+    [
+      'an environment variable',
+      'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      'AWS_SECRET_ACCESS_KEY=[REDACTED]',
+    ],
+    ['a token variable', 'export NPM_TOKEN=abc123def456', 'export NPM_TOKEN=[REDACTED]'],
+    ['an AWS key id', 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE', 'AWS_ACCESS_KEY_ID=[REDACTED]'],
+    [
+      'a fine-grained GitHub token',
+      'github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyzABCDEFGH',
+      '[REDACTED]',
+    ],
+    ['a classic GitHub token', 'ghp_abcdefghijklmnopqrstuvwxyz0123', '[REDACTED]'],
+    [
+      'a bearer header',
+      'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl',
+      'Authorization: Bearer [REDACTED]',
+    ],
+    ['a Slack token', 'xoxb-1234567890-abcdefghij', '[REDACTED]'],
+    [
+      'a private key block',
+      '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n-----END OPENSSH PRIVATE KEY-----',
+      '[REDACTED PRIVATE KEY]',
+    ],
+  ];
+  for (const [name, input, expected] of cases) {
+    it(`redacts ${name}`, () => {
+      expect(redactSecrets(input)).toBe(expected);
+    });
+  }
+
+  it('redacts a private key that the output limit cut off', () => {
+    expect(redactSecrets('key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA')).toBe(
+      'key:\n[REDACTED PRIVATE KEY]',
+    );
+  });
+
+  // Check output comes from the commit under review; a pattern with quadratic cost would stall the server.
+  it('stays fast on hostile output', () => {
+    for (const hostile of [
+      'a-'.repeat(50_000),
+      '-----BEGIN PRIVATE KEY-----\n'.repeat(10_000),
+      'password: "'.repeat(20_000),
+    ]) {
+      const started = performance.now();
+      sanitizeForPacket(hostile);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+
+  for (const prose of [
+    'max_tokens = 4096',
+    'token_count: 12',
+    'the secret is out',
+    'Bearer tokens expire',
+    'Basic authentication is off',
+    'See https://example.com/docs/api_key for details.',
+  ]) {
+    it(`leaves "${prose}" alone`, () => {
+      expect(redactSecrets(prose)).toBe(prose);
+    });
+  }
+});
+
+describe('packet sanitizing', () => {
+  const paths: Array<[string, string]> = [
+    ['a Windows path', String.raw`C:\Users\bob\work\client\notes.md`],
+    ['a Windows path with forward slashes', 'C:/Users/bob/work/client/notes.md'],
+    ['a UNC path', String.raw`\\fileserver\share\clients\acme\notes.md`],
+    ['a mounted volume', '/mnt/data/clients/acme/notes.md'],
+    ['a macOS volume', '/Volumes/Backup/clients/acme'],
+    ['a server path', '/srv/clients/acme/report.txt'],
+    ['a root home path', '/root/.ssh/config'],
+    ['a home-relative path', '~/clients/acme/notes.md'],
+  ];
+  for (const [name, input] of paths) {
+    it(`replaces ${name}`, () => {
+      expect(sanitizeForPacket(`see ${input} here`)).toBe('see [LOCAL_PATH] here');
+    });
+  }
+
+  it('keeps URLs and repository-relative paths', () => {
+    const text = 'Fixed src/app.ts as https://example.com/issues/3 describes.';
+    expect(sanitizeForPacket(text)).toBe(text);
+  });
+
+  it('redacts secrets as well as paths', () => {
+    expect(sanitizeForPacket('token=abc123 in /home/bob/x')).toBe(
+      'token=[REDACTED] in [LOCAL_PATH]',
+    );
+  });
+});

@@ -12,6 +12,7 @@ import {
 import { assessDeclaredScope, canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
 
 import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
+import { redactSecrets } from './redaction.js';
 
 function minimalEnvironment(): Record<string, string> {
   const names =
@@ -50,15 +51,6 @@ async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha
     );
   }
   return { path: check.resolvedExecutable, sha256 };
-}
-
-function redact(value: string): string {
-  return value
-    .replace(
-      /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*[:=]\s*[^\s]+/giu,
-      '$1=[REDACTED]',
-    )
-    .replace(/\b(gh[oprsu]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b/gu, '[REDACTED]');
 }
 
 export async function aggregateCheckVersion(checks: CheckRecord[]): Promise<string> {
@@ -142,7 +134,7 @@ export async function runApprovedCheck(
             ...(signal ? { signal } : {}),
           });
     toolVersion = versionResult
-      ? (redact(`${versionResult.stdout}\n${versionResult.stderr}`)
+      ? (redactSecrets(`${versionResult.stdout}\n${versionResult.stderr}`)
           .trim()
           .split(/\r?\n/u)[0]
           ?.slice(0, 4_096) ?? null)
@@ -189,8 +181,8 @@ export async function runApprovedCheck(
     checkResult = 'mutated';
     invalidReason = invalidReason.slice(0, 2_000);
   }
-  const stdout = redact(result.stdout);
-  const stderr = redact(result.stderr);
+  const stdout = redactSecrets(result.stdout);
+  const stderr = redactSecrets(result.stderr);
   const artifactHash = await sha256Hex(
     canonicalJson({
       checkId,

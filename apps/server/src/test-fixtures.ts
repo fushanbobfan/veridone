@@ -64,14 +64,14 @@ export async function boundWorkspace(
   await git('commit', '-m', 'fixture');
   const receiptPath = path.join(directory, 'receipt.json');
   /** Writes the agent's receipt; importing it again reports the claim under the same run. */
-  const writeReceipt = (claim = 'The importer is fixed.') =>
+  const writeReceipt = (claim = 'The importer is fixed.', title = 'Fix the importer') =>
     writeFile(
       receiptPath,
       JSON.stringify({
         schema_version: 1,
         run_id: options.runId ?? 'fixture-run',
         source: 'codex',
-        title: 'Fix the importer',
+        title,
         claim,
         status: 'complete',
         started_at: '2026-10-22T10:00:00.000Z',

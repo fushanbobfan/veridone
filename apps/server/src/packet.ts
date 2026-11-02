@@ -1,20 +1,7 @@
 import { canonicalJson, sha256Hex } from '@veridone/core';
 
 import type { EvidenceRecord, VeriDoneDatabase } from './database.js';
-
-const secretAssignment =
-  /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*[:=]\s*[^\s,;]+/giu;
-const tokenValue = /\b(gh[oprsu]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b/gu;
-const windowsPath = /\b[A-Za-z]:\\(?:[^\\\s<>:"|?*]+\\)*[^\\\s<>:"|?*]*/gu;
-const privatePosixPath = /\/(?:Users|home|var|tmp|opt|etc)\/(?:[^\s<>'"]+)/gu;
-
-export function sanitizeForPacket(value: string): string {
-  return value
-    .replace(secretAssignment, '$1=[REDACTED]')
-    .replace(tokenValue, '[REDACTED]')
-    .replace(windowsPath, '[LOCAL_PATH]')
-    .replace(privatePosixPath, '[LOCAL_PATH]');
-}
+import { sanitizeForPacket } from './redaction.js';
 
 function escapeHtml(value: string): string {
   return sanitizeForPacket(value)
@@ -116,6 +103,7 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
   const contract = database.listContracts()[0] ?? null;
   const workItem = {
     ...rawWorkItem,
+    title: sanitizeForPacket(rawWorkItem.title),
     claim: sanitizeForPacket(rawWorkItem.claim),
     sourceLabel: sanitizeForPacket(rawWorkItem.sourceLabel),
     sourceRef: sanitizeForPacket(rawWorkItem.sourceRef),
@@ -136,7 +124,7 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
       ? {
           id: repository.id,
           name: sanitizeForPacket(repository.name),
-          branch: repository.snapshot.branch,
+          branch: repository.snapshot.branch ? sanitizeForPacket(repository.snapshot.branch) : null,
           head: repository.snapshot.head,
           fingerprint: repository.snapshot.fingerprint,
           worktreeHash: repository.snapshot.worktreeHash,
