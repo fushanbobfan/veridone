@@ -62,7 +62,7 @@ A hash of local data in a packet would let a reader confirm a guess: the reposit
 
 **Control:** bind evidence to repository and check-definition fingerprints, hash each check result, recompute packet and workspace checksums when they are verified or imported, classify source provenance, and never upgrade unbound imported claims into executable evidence. Evidence restored from a backup is marked imported and never satisfies a gate.
 
-Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. The verifier checks the signature against the public key the packet carries, and with `--key` it also requires that key to be one the reader trusts. The operator publishes the public key; a reader who checks against it can tell a changed packet from the one the workspace signed, even when the changer recomputed every hash and signed again with a key of their own. Workspace backup checksums stay unsigned and detect accidental changes only.
+Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. The verifier checks the signature against the public key the packet carries, and with `--key` it also requires that key to be one the reader trusts. The operator publishes the public key; a reader who checks against it can tell a changed packet from the one the workspace signed, even when the changer recomputed every hash and signed again with a key of their own. A packet rewritten as schema 1 without its signature verifies only as unsigned, and fails once the reader gives a key. Workspace backup checksums stay unsigned and detect accidental changes only.
 
 ### Acceptance on incomplete evidence
 
@@ -110,6 +110,7 @@ Packets are signed with an Ed25519 key that the workspace creates on first use a
 - A setup step that installs dependencies fetches packages from the network and, depending on the package manager, may run their install scripts, with the operator's permissions.
 - A packet's signature shows which key signed it. Tying that key to a person or an organization is up to the operator, through the channel that publishes the public key. Anyone who can read the workspace database can sign with its key and recompute its pseudonyms.
 - Packets from one workspace share pseudonyms, so a reader can tell that two packets concern the same repository or state.
+- A packet's test counts come from the summary line in the check's own output, which code in the commit under review can print as it likes. The exit code and the post-run comparison decide the result; the counts describe it.
 - Workspace backups are unsigned.
 - Every process on this machine can reach the loopback API. The Host, Origin, and anti-CSRF controls defend against web pages.
 
