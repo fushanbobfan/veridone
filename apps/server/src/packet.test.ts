@@ -127,6 +127,50 @@ describe('acceptance packets', () => {
     expect(json).not.toContain(JSON.stringify(process.execPath).slice(1, -1));
   }, 60_000);
 
+  it('renders the same facts in its readable formats as in its JSON', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const checkId = await fixture.approveCheck('process.stdout.write("verified")', 'Smoke check');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+    expect((await fixture.decide('accepted', 'Reviewed the smoke check.')).status).toBe(201);
+
+    const { packet, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+
+    const clauses = (packet.contract?.criteria ?? []) as Array<{ title: string }>;
+    expect(clauses.length).toBeGreaterThan(0);
+    for (const text of [markdown, html]) {
+      expect(text).toContain(packet.workItem.sourceLabel);
+      expect(text).toContain(packet.repository?.head ?? 'missing head');
+      expect(text).toContain(packet.repository?.fingerprint ?? 'missing fingerprint');
+      for (const clause of clauses) expect(text).toContain(clause.title);
+      expect(text).toContain('Smoke check');
+      expect(text).toContain(`${path.basename(process.execPath)} -e`);
+      expect(text).toContain('Reviewed the smoke check.');
+      expect(text).toContain(packet.manifest.payloadHash);
+    }
+  }, 30_000);
+
+  it('embeds the contract its evidence and verdicts were recorded under', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const checkId = await fixture.approveCheck('process.stdout.write("verified")');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+    // A contract restored from an older backup sorts first.
+    fixture.database.connection
+      .prepare(
+        `INSERT INTO acceptance_contracts (id, version, title, criteria_json, created_at)
+         VALUES ('restored', 'restored-v9', 'Restored contract', '[]', '2000-01-01T00:00:00.000Z')`,
+      )
+      .run();
+
+    const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+
+    expect(packet.contract?.version).toBe(packet.evidence[0]?.contractVersion);
+  }, 30_000);
+
   it('keeps its pseudonyms stable within a workspace and its key out of backups', async () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);

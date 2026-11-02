@@ -4,7 +4,7 @@ import { canonicalJson, sha256Hex } from '@veridone/core';
 
 import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
 import { sanitizeForPacket } from './redaction.js';
-import { summarizeTestOutput } from './test-summary.js';
+import { summarizeTestOutput, type TestCounts } from './test-summary.js';
 
 /** The packet schemas a verifier accepts; schema 2 carries pseudonymous identifiers. */
 const packetSchemaVersions = new Set([1, 2]);
@@ -138,7 +138,14 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
   const rawVerdicts = database.listVerdicts(workItemId);
   const generatedAt =
     rawVerdicts[0]?.decidedAt ?? rawEvidence[0]?.completedAt ?? rawWorkItem.updatedAt;
-  const contract = database.listContracts()[0] ?? null;
+  // The contract the latest verdict, evidence or snapshot was recorded under, which need not be the oldest one.
+  const contracts = database.listContracts();
+  const contractVersion =
+    rawVerdicts[0]?.contractVersion ??
+    rawEvidence[0]?.contractVersion ??
+    repository?.snapshot.contractVersion;
+  const contract =
+    contracts.find((candidate) => candidate.version === contractVersion) ?? contracts[0] ?? null;
   // The repository id hashes the local path, and the fingerprint, claim, definition and artifact hashes each mix
   // local data with fields a packet carries, so each could confirm a guessed path. They appear as HMACs under a key
   // only this workspace holds; equal values stay equal, so a packet's bindings can still be compared.
@@ -212,78 +219,205 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     },
   };
   const json = JSON.stringify(packet, null, 2);
-  const latestVerdict = verdicts[0];
-  const evidenceMarkdown =
-    evidence.length === 0
-      ? '_No executable evidence captured._'
-      : evidence
-          .map(
-            (item) =>
-              `- **${escapeMarkdown(item.label)}** — ${item.result}; exit ${item.exitCode ?? 'n/a'}; ${item.durationMs} ms; tool ${escapeMarkdown(item.toolVersion ?? 'not captured')}; artifacts ${item.artifactHashes.join(', ') || 'none'}`,
-          )
-          .join('\n');
-  const verdictMarkdown =
-    verdicts.length === 0
-      ? '_No human verdict recorded._'
-      : verdicts
-          .map(
-            (item) =>
-              `- **${item.decision}** — ${escapeMarkdown(item.note || 'No note')} (${item.decidedAt})${item.overrideReason ? `; override: ${escapeMarkdown(item.overrideReason)}` : ''}`,
-          )
-          .join('\n');
-  const markdown = `# VeriDone acceptance packet
+  const view = packetView(packet);
+  return { packet, json, markdown: renderMarkdown(view), html: renderHtml(view) };
+}
 
-## ${escapeMarkdown(workItem.title)}
+/** A check's command as a reader would type it, each argument quoted when it holds spaces or quotes. */
+function commandLine(check: { executable: string; args: string[] }): string {
+  const quoted = check.args.map((arg) => (/[\s"'\\]/u.test(arg) ? JSON.stringify(arg) : arg));
+  return [check.executable, ...quoted].join(' ');
+}
 
-- Source: ${escapeMarkdown(workItem.sourceLabel)}
-- Repository: ${escapeMarkdown(repository?.name ?? 'Unlinked')}
-- HEAD: ${repository?.snapshot.head ?? 'Unbound'}
-- Fingerprint: ${fingerprint ?? 'Unbound'}
-- Contract: ${escapeMarkdown(contract?.title ?? 'No contract')} (${contract?.version ?? 'n/a'})
-- Verdict: ${latestVerdict?.decision ?? 'No human verdict'}
-- Evidence items: ${evidence.length}
+/** The parts of a built packet that its readable formats show. */
+interface PacketViewInput {
+  workItem: { title: string; sourceLabel: string; claim: string };
+  repository: {
+    name: string;
+    branch: string | null;
+    head: string;
+    fingerprint: string | null;
+  } | null;
+  contract: { title: string; version: string; criteria: unknown[] } | null;
+  checks: Array<{
+    label: string;
+    executable: string;
+    args: string[];
+    cwdRelative: string;
+    toolSha256: string | null;
+  }>;
+  evidence: Array<{
+    label: string;
+    result: string;
+    exitCode: number | null;
+    durationMs: number;
+    toolVersion: string | null;
+    testCounts: TestCounts | null;
+    artifactHashes: string[];
+  }>;
+  verdicts: Array<{
+    decision: string;
+    note: string;
+    decidedAt: string;
+    overrideReason: string | null;
+  }>;
+  manifest: { payloadHash: string };
+}
+
+/**
+ * The facts the readable formats show, read from the JSON packet itself so that the three formats cannot drift
+ * apart. Every string in it is already sanitized.
+ */
+function packetView(packet: PacketViewInput) {
+  const clauses = (packet.contract?.criteria ?? []).map((clause) => {
+    const record = (clause ?? {}) as { title?: unknown; required?: unknown };
+    return {
+      title: sanitizeForPacket(typeof record.title === 'string' ? record.title : 'Untitled clause'),
+      required: record.required === true,
+    };
+  });
+  return {
+    title: packet.workItem.title,
+    source: packet.workItem.sourceLabel,
+    claim: packet.workItem.claim,
+    repository: packet.repository?.name ?? 'Unlinked',
+    branch: packet.repository?.branch ?? 'none',
+    head: packet.repository?.head ?? 'Unbound',
+    fingerprint: packet.repository?.fingerprint ?? 'Unbound',
+    contract: packet.contract
+      ? `${sanitizeForPacket(packet.contract.title)} (${packet.contract.version})`
+      : 'No contract',
+    clauses,
+    verdict: packet.verdicts[0]?.decision ?? 'No human verdict',
+    checks: packet.checks.map((check) => ({
+      label: check.label,
+      command: commandLine(check),
+      cwd: check.cwdRelative,
+      tool: check.toolSha256 ?? 'not pinned',
+    })),
+    evidence: packet.evidence.map((item) => ({
+      label: item.label,
+      summary: `${item.result}; exit ${item.exitCode ?? 'n/a'}; ${item.durationMs} ms; tool ${item.toolVersion ?? 'not captured'}`,
+      tests: item.testCounts
+        ? `${item.testCounts.passed} passed, ${item.testCounts.failed} failed, ${item.testCounts.skipped} skipped of ${item.testCounts.total} (${item.testCounts.runner})`
+        : null,
+      artifacts: item.artifactHashes.join(', ') || 'none',
+    })),
+    verdicts: packet.verdicts.map((item) => ({
+      decision: item.decision,
+      note: item.note || 'No note',
+      decidedAt: item.decidedAt,
+      overrideReason: item.overrideReason,
+    })),
+    payloadHash: packet.manifest.payloadHash,
+  };
+}
+
+type PacketView = ReturnType<typeof packetView>;
+
+function renderMarkdown(view: PacketView): string {
+  const list = (items: string[], empty: string) => (items.length ? items.join('\n') : empty);
+  return `# VeriDone acceptance packet
+
+## ${escapeMarkdown(view.title)}
+
+- Source: ${escapeMarkdown(view.source)}
+- Repository: ${escapeMarkdown(view.repository)} (branch ${escapeMarkdown(view.branch)})
+- HEAD: ${view.head}
+- Fingerprint: ${view.fingerprint}
+- Contract: ${escapeMarkdown(view.contract)}
+- Verdict: ${view.verdict}
 - Privacy mode: strict
-- Payload SHA-256: \`${payloadHash}\`
+- Payload SHA-256: \`${view.payloadHash}\`
 
 ### Claim
 
-${escapeMarkdown(workItem.claim)}
+${escapeMarkdown(view.claim)}
+
+### Contract clauses
+
+${list(
+  view.clauses.map(
+    (clause) => `- ${escapeMarkdown(clause.title)}${clause.required ? ' (required)' : ''}`,
+  ),
+  '_No clauses._',
+)}
+
+### Checks
+
+${list(
+  view.checks.map(
+    (check) =>
+      `- **${escapeMarkdown(check.label)}** — \`${escapeMarkdown(check.command)}\` in \`${escapeMarkdown(check.cwd)}\`; tool SHA-256 ${check.tool}`,
+  ),
+  '_No approved checks._',
+)}
 
 ### Evidence
 
-${evidenceMarkdown}
+${list(
+  view.evidence.map(
+    (item) =>
+      `- **${escapeMarkdown(item.label)}** — ${escapeMarkdown(item.summary)}${item.tests ? `; tests: ${item.tests}` : ''}; artifacts ${item.artifacts}`,
+  ),
+  '_No executable evidence captured._',
+)}
 
 ### Verdict history
 
-${verdictMarkdown}
+${list(
+  view.verdicts.map(
+    (item) =>
+      `- **${item.decision}** — ${escapeMarkdown(item.note)} (${item.decidedAt})${item.overrideReason ? `; override: ${escapeMarkdown(item.overrideReason)}` : ''}`,
+  ),
+  '_No human verdict recorded._',
+)}
 `;
-  const evidenceHtml =
-    evidence
-      .map(
-        (item) =>
-          `<li><strong>${escapeHtml(item.label)}</strong> — ${escapeHtml(item.result)}; exit ${item.exitCode ?? 'n/a'}; ${item.durationMs} ms; tool ${escapeHtml(item.toolVersion ?? 'not captured')}<br><small>Artifacts: ${escapeHtml(item.artifactHashes.join(', ') || 'none')}</small></li>`,
-      )
-      .join('') || '<li>No executable evidence captured.</li>';
-  const verdictHtml =
-    verdicts
-      .map(
-        (item) =>
-          `<li><strong>${escapeHtml(item.decision)}</strong> — ${escapeHtml(item.note || 'No note')} (${escapeHtml(item.decidedAt)})${item.overrideReason ? `<br><small>Override: ${escapeHtml(item.overrideReason)}</small>` : ''}</li>`,
-      )
-      .join('') || '<li>No human verdict recorded.</li>';
-  const html = `<!doctype html>
+}
+
+function renderHtml(view: PacketView): string {
+  const list = (items: string[], empty: string) =>
+    `<ul>${items.length ? items.join('') : `<li>${empty}</li>`}</ul>`;
+  return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-<title>VeriDone packet — ${escapeHtml(workItem.title)}</title>
-<style>body{max-width:780px;margin:48px auto;padding:0 24px;font:16px/1.55 system-ui;color:#171914;background:#f5f4ed}code{font-family:ui-monospace,monospace}.meta{padding:18px 0;border-block:1px solid #bbb}.status{font-weight:700}.hash{word-break:break-all;color:#555}li{margin:8px 0}small{color:#555}</style></head>
-<body><small>VERIDONE ACCEPTANCE PACKET · STRICT PRIVACY</small><h1>${escapeHtml(workItem.title)}</h1>
-<div class="meta"><p>Repository: <strong>${escapeHtml(repository?.name ?? 'Unlinked')}</strong></p>
-<p>HEAD: <code>${escapeHtml(repository?.snapshot.head ?? 'Unbound')}</code></p>
-<p>Contract: ${escapeHtml(contract?.title ?? 'No contract')} (${escapeHtml(contract?.version ?? 'n/a')})</p>
-<p>Verdict: <span class="status">${escapeHtml(latestVerdict?.decision ?? 'No human verdict')}</span></p></div>
-<h2>Claim</h2><p>${escapeHtml(workItem.claim)}</p><h2>Evidence</h2><ul>${evidenceHtml}</ul>
-<h2>Verdict history</h2><ul>${verdictHtml}</ul>
-<h2>Integrity</h2><p class="hash"><code>${payloadHash}</code></p></body></html>`;
-
-  return { packet, json, markdown, html };
+<title>VeriDone packet — ${escapeHtml(view.title)}</title>
+<style>body{max-width:780px;margin:48px auto;padding:0 24px;font:16px/1.55 system-ui;color:#171914;background:#f5f4ed}code{font-family:ui-monospace,monospace;word-break:break-all}.meta{padding:18px 0;border-block:1px solid #bbb}.status{font-weight:700}.hash{word-break:break-all;color:#555}li{margin:8px 0}small{color:#555}</style></head>
+<body><small>VERIDONE ACCEPTANCE PACKET · STRICT PRIVACY</small><h1>${escapeHtml(view.title)}</h1>
+<div class="meta"><p>Source: ${escapeHtml(view.source)}</p>
+<p>Repository: <strong>${escapeHtml(view.repository)}</strong> (branch ${escapeHtml(view.branch)})</p>
+<p>HEAD: <code>${escapeHtml(view.head)}</code></p>
+<p>Fingerprint: <code>${escapeHtml(view.fingerprint)}</code></p>
+<p>Contract: ${escapeHtml(view.contract)}</p>
+<p>Verdict: <span class="status">${escapeHtml(view.verdict)}</span></p></div>
+<h2>Claim</h2><p>${escapeHtml(view.claim)}</p>
+<h2>Contract clauses</h2>${list(
+    view.clauses.map(
+      (clause) =>
+        `<li>${escapeHtml(clause.title)}${clause.required ? ' <small>(required)</small>' : ''}</li>`,
+    ),
+    'No clauses.',
+  )}
+<h2>Checks</h2>${list(
+    view.checks.map(
+      (check) =>
+        `<li><strong>${escapeHtml(check.label)}</strong> — <code>${escapeHtml(check.command)}</code> in <code>${escapeHtml(check.cwd)}</code><br><small>Tool SHA-256: ${escapeHtml(check.tool)}</small></li>`,
+    ),
+    'No approved checks.',
+  )}
+<h2>Evidence</h2>${list(
+    view.evidence.map(
+      (item) =>
+        `<li><strong>${escapeHtml(item.label)}</strong> — ${escapeHtml(item.summary)}${item.tests ? `<br>Tests: ${escapeHtml(item.tests)}` : ''}<br><small>Artifacts: ${escapeHtml(item.artifacts)}</small></li>`,
+    ),
+    'No executable evidence captured.',
+  )}
+<h2>Verdict history</h2>${list(
+    view.verdicts.map(
+      (item) =>
+        `<li><strong>${escapeHtml(item.decision)}</strong> — ${escapeHtml(item.note)} (${escapeHtml(item.decidedAt)})${item.overrideReason ? `<br><small>Override: ${escapeHtml(item.overrideReason)}</small>` : ''}</li>`,
+    ),
+    'No human verdict recorded.',
+  )}
+<h2>Integrity</h2><p class="hash"><code>${view.payloadHash}</code></p></body></html>`;
 }
