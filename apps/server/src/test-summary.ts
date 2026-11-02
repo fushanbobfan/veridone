@@ -105,7 +105,12 @@ export function summarizeTestOutput(output: string): TestCounts | null {
       }
       continue;
     }
-    found = vitest(line) ?? jest(line) ?? pytest(line) ?? found;
+    const other = vitest(line) ?? jest(line) ?? pytest(line);
+    if (other) {
+      found = other;
+      // A node:test line after another runner's summary starts nothing: only a new `tests` line opens a block.
+      block = null;
+    }
   }
   return found;
 }

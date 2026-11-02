@@ -91,6 +91,17 @@ describe('test summaries', () => {
     });
   });
 
+  it('keeps a later summary when lines of an earlier node:test summary follow it', () => {
+    const output = [
+      '# tests 5',
+      '# pass 5',
+      '# fail 0',
+      'Tests  2 failed | 1 passed (3)',
+      '# todo 0',
+    ].join('\n');
+    expect(summarizeTestOutput(output)).toMatchObject({ runner: 'vitest', total: 3, failed: 2 });
+  });
+
   it('reads lines that end with a carriage return', () => {
     expect(summarizeTestOutput('collected 1 item\r\n===== 1 passed in 0.10s =====\r\n')).toEqual({
       runner: 'pytest',
