@@ -266,9 +266,10 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     repository?.snapshot.contractVersion;
   const contract =
     contracts.find((candidate) => candidate.version === contractVersion) ?? contracts[0] ?? null;
-  // The repository id hashes the local path, and the fingerprint, claim, definition and artifact hashes each mix
-  // local data with fields a packet carries, so each could confirm a guessed path. They appear as HMACs under a key
-  // only this workspace holds; equal values stay equal, so a packet's bindings can still be compared.
+  // The repository id hashes the local path, and the fingerprint, worktree, claim, definition and artifact hashes
+  // each mix local data with fields a packet carries, so each could confirm a guessed path or file. They appear as
+  // HMACs under a key only this workspace holds; equal values stay equal, so a packet's bindings can still be
+  // compared.
   const key = database.workspaceKey('packet-pseudonyms');
   const pseudonym: Pseudonym = (kind, value) =>
     createHmac('sha256', key).update(`${kind}:${value}`).digest('hex');
@@ -319,7 +320,7 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
           branch: repository.snapshot.branch ? sanitizeForPacket(repository.snapshot.branch) : null,
           head: repository.snapshot.head,
           fingerprint,
-          worktreeHash: repository.snapshot.worktreeHash,
+          worktreeHash: pseudonym('worktree', repository.snapshot.worktreeHash),
           diffStats: repository.snapshot.diffStats,
           statusEntries: repository.snapshot.statusEntries.map(sanitizeForPacket),
         }

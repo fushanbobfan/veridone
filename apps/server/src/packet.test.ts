@@ -66,8 +66,9 @@ describe('acceptance packets', () => {
     expect(json).not.toContain('client-acme');
   }, 30_000);
 
-  // The repository id hashes the local path, and every hash below takes it, or the claim before
-  // sanitizing, as one input among fields a packet carries; each one would confirm a guessed path.
+  // The repository id hashes the local path, and every hash below takes it, the claim or the status lines
+  // before sanitizing, or uncommitted file content as one input among fields a packet carries; each one would
+  // confirm a guessed path or file.
   it('leaves no identifier computed from local data in a packet', async () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);
@@ -81,6 +82,7 @@ describe('acceptance packets', () => {
     const localValues = [
       repository.id,
       repository.snapshot.fingerprint,
+      repository.snapshot.worktreeHash,
       workItem.claimHash,
       evidence.checkDefinitionVersion,
       ...evidence.artifactHashes,
