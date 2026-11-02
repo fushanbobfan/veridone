@@ -7,6 +7,11 @@ All notable changes are documented here. This project follows Semantic Versionin
 ### Added
 
 - **Checks** in the navigation lists each approved check with its pinned tool, arguments, and hash, and pins a tool again after the operator reviews it.
+- Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. **Download the packet signing key**, under backup and restore, saves the public key, and `pnpm verify:packet <packet.json> --key <public-key.pem>` checks that this key signed a packet. Packets written by VeriDone 1.1 and earlier still verify, as unsigned.
+- A check can name setup arguments that its pinned tool runs in the checkout before the check, with a ten-minute timeout, for example a frozen `pnpm install`. A setup that fails ends the run with its own exit code and output, files it writes outside ignored paths mark the evidence mutated, and a check without setup keeps its definition hash.
+- Restoring a backup first lists the roots, repositories, checks, and work items it would add, with the evidence and verdict counts, and writes nothing until the operator confirms; `POST /api/v1/workspace/preview` returns the same list.
+- **Roots** in the workspace explorer lists each root with its state and approves a root restored from a backup.
+- Packets name each check's command, setup command, working directory, and tool hash, and give the test counts from the summary that node:test, Vitest, Jest, or pytest printed.
 
 ### Changed
 
@@ -15,6 +20,9 @@ All notable changes are documented here. This project follows Semantic Versionin
 - A work item's verdicts are listed by their place in the chain, so a packet heads its verdict history with the latest verdict whatever the clocks recorded.
 - A repository capture skips `git submodule status` when the repository has no `.gitmodules` file; on Windows that script took about 1.7 seconds of every capture.
 - Updated `motion` to 12.43.0, `lucide-react` to 1.59.0, `@hono/node-server` to 2.1.5, `@playwright/test` to 1.64.1, and `jsdom` to 30.1.3. jsdom 30, which the unit tests use, supports Node.js 22.22.2 or a later 22.x, 24.15 or a later 24.x, and 26 or later.
+- Acceptance packets are schema version 2: identifiers are pseudonyms, a `checks` section and per-evidence `testCounts` are added, the payload hash covers keys in UTF-16 code-unit order (the RFC 8785 order), and the manifest carries the signature. Markdown and HTML render from one view of the JSON packet, so the HTML packet now carries the source, fingerprint, contract clauses, checks, and test counts as the Markdown packet does.
+- The service computes each work item's readiness and sends it with the bootstrap, and the verdict gate and the review view use that one result. In the review score, the receipt of a degraded run counts as a failed gate.
+- `packages/core` keeps the domain types, fingerprints, and declared-scope checks; the criterion, freshness, and triage evaluators and six schemas that only their own tests used are removed.
 
 ### Fixed
 
@@ -24,6 +32,8 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Light-theme status, kicker, and diff text use a darker accent that meets WCAG AA contrast.
 - A receipt whose time has no UTC offset, such as `2026-07-21 13:00:00`, imports as the machine's local time with an offset, and workspace export accepts receipts an earlier version stored that way. Receipt import and the workspace backup share one set of field rules, so a receipt that imports also exports; a time that is not a timestamp is refused at import.
 - A receipt time with a UTC offset that stops at the minute, such as `2026-07-21T13:00Z`, still imports, exports, and restores: zod 4.5 and later require seconds, so VeriDone adds `:00`.
+- The source dialog kept the previous discovery list while a new discovery ran, so a repository chosen from it could be replaced by the first repository of the new answer, and the dialog connected a repository other than the one chosen. Discovery now hides the previous list until it answers, drops an answer that a newer discovery replaced, and keeps a chosen repository that the new list still contains.
+- The source dialog opens idle after an add closed it during a discovery; the button used to read "Discovering…" until it was pressed again.
 
 ### Security
 
@@ -34,11 +44,17 @@ All notable changes are documented here. This project follows Semantic Versionin
 - VeriDone starts Git by an absolute path found on the absolute `PATH` entries (or set with `VERIDONE_GIT`), from a directory outside every repository, and gives it a fixed configuration. System and global Git configuration are ignored except for settings that decide how files compare, such as line endings; a repository's fsmonitor hook, filter commands, hooks, and external diff or textconv programs never run, and safe directories come only from the operator's own configuration. Git 2.32 or later is required.
 - Updated `hono` to 4.13.13, `vite` to 8.1.6, `vitest` to 4.1.12, and `concurrently` to 10.0.6, and pinned patched transitive `undici`, `postcss`, `nanoid`, and `source-map-js`; `pnpm audit --audit-level low` reports no known vulnerabilities.
 - Updated `zod` to 4.6.7 for GHSA-mrhx-c7xc-m3w5, in which validating an oversized constrained collection could exhaust memory.
+- The API answers 403 to a request whose `Host` header, or the host of an absolute request URL, names anything other than its loopback names on its port or the host of an allowed origin. A web page that points its own domain name at 127.0.0.1 reads nothing from the API, the anti-CSRF token included.
+- Redaction covers secret names that end an identifier, such as `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY`, quoted values that hold spaces, fine-grained GitHub, GitLab, Slack, and npm tokens, AWS key ids, JWTs, bearer values, and private key blocks, including one that the output cap cut off. Packet text also loses Windows paths written with forward slashes, UNC paths, home-relative paths, and paths under `/mnt`, `/srv`, `/root`, `/Volumes`, `/private`, and `/media`. Each pattern takes linear time on hostile check output.
+- Packets carry the repository id, fingerprint, worktree hash, claim hash, check-definition hashes, and artifact hashes as HMAC-SHA256 pseudonyms under a workspace key that backups leave out. The repository id hashes the local path and the others take local data as inputs, so each raw value would let a reader confirm a guessed path or file.
+- A root restored from a backup stays pending until the operator approves it: discovery refuses it, and nothing under it counts as approved. Approval resolves the path again and refuses one that is missing or now resolves somewhere else.
+- Accepting a work item whose receipt reports a failed or incomplete stage requires an override reason; the server used to record such an acceptance as a plain one.
 
 ### Documentation
 
-- Packet and workspace checksums are described as unsigned integrity checks; verdict history, fingerprint coverage, and the default contract are described as implemented; `docs/ACCEPTANCE.md` maps each criterion to its test or manual evidence.
+- Workspace checksums are described as unsigned integrity checks; verdict history, fingerprint coverage, and the default contract are described as implemented; `docs/ACCEPTANCE.md` maps each criterion to its test or manual evidence.
 - The architecture, security model, data formats, installation notes, and user guide describe the clean checkout, tool pinning, Git invocation, compare-and-swap verdicts, and append-only restore, with the limits of each; `docs/ACCEPTANCE.md` adds VER-07 to VER-09, DEC-04, and EXP-05 with their tests.
+- The README, security model, architecture, data formats, and user guide describe the Host allowlist, redaction, pseudonyms, packet signatures and what they prove, the restore preview, pending roots, setup steps, and server-computed readiness; `docs/ACCEPTANCE.md` adds ONB-07 and VER-10 with their tests.
 
 ## [1.1.0] - 2026-07-22
 
