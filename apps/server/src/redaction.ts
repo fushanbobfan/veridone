@@ -1,12 +1,14 @@
 // A name that ends in a secret word, written as an assignment, a header or a JSON field. The word must end the
 // name, so `max_tokens` and `token_count` stay readable while `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY` lose their
 // values. A quoted value is replaced up to its closing quote, past escaped quotes and escaped line breaks, or to the
-// end of the line when the output was cut off before the quote closed. The name's prefix is bounded: check output
-// comes from the commit under review, and an unbounded prefix takes quadratic time on input such as `a-a-a-…`.
+// end of the line when the output was cut off before the quote closed. A value may join adjacent parts, as shell
+// quoting does in `'alpha'"beta"` or `alpha\ beta`, and ends at whitespace or at punctuation that closes a structure.
+// The name's prefix is bounded: check output comes from the commit under review, and an unbounded prefix takes
+// quadratic time on input such as `a-a-a-…`. Each part of a value starts with a different character, so it is read once.
 const secretWord =
   'password|passwd|secret|secret[_-]?key|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?';
 const secretAssignment = new RegExp(
-  String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:"(?:[^"\\\n]|\\\r\n|\\[\s\S])*"?|'(?:[^'\\\n]|\\\r\n|\\[\s\S])*'?|[^\s"',;]+)`,
+  String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:"(?:[^"\\\n]|\\\r\n|\\[\s\S])*"?|'(?:[^'\\\n]|\\\r\n|\\[\s\S])*'?|[^\s"',;\\)\]}>]|\\\r\n|\\[\s\S])+`,
   'giu',
 );
 // An option such as `--token` whose value is the next argument.
@@ -28,11 +30,13 @@ const bearerValue = /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gu;
 const keyBegin = /-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----/gu;
 const keyEnd = /-----END [A-Z ]{0,40}PRIVATE KEY-----/gu;
 
-// A path inside quotes runs to the closing quote, spaces, escaped quotes and the other kind of quote included, as JSON
-// and shell quoting write it; these go first. An escaped quote starts no match, so each run is read once.
+// A path inside quotes runs to its closing quote, whatever it holds; these patterns go first. Double quotes take
+// backslash escapes, as JSON and JavaScript write them; single quotes take none, as in the shell; quotes that are
+// themselves escaped, as JSON written inside a JSON string has them, close at the next escaped quote. A run stops at
+// the first quote of its kind, so each one is read once.
 const pathStart = String.raw`(?:[A-Za-z]:[\\/]|\\{2,}[^\s\\<>:"|?*]|\/(?:Users|home|var|tmp|opt|etc|mnt|srv|root|Volumes|private|media)\/|~\/)`;
 const quotedPath = new RegExp(
-  String.raw`(?<!\\)(?:"${pathStart}(?:[^"\\\n<>|?*]|\\[\s\S])*"|'${pathStart}(?:[^'\\\n<>|?*]|\\[\s\S])*')`,
+  String.raw`(?<!\\)"${pathStart}(?:[^"\\\n]|\\[\s\S])*"|'${pathStart}[^'\n]*'|\\"${pathStart}(?:[^"\\\n]|\\(?!")[\s\S])*\\"`,
   'gu',
 );
 // Outside quotes, separators may repeat, as in JSON-escaped Windows paths (`C:\\Users\\…`). A segment holds spaces
@@ -84,7 +88,9 @@ export function redactSecrets(value: string): string {
 /** Text that may leave the machine in a strict-privacy packet: no credentials and no local paths. */
 export function sanitizeForPacket(value: string): string {
   return redactSecrets(value)
-    .replace(quotedPath, (match) => `${match[0]}[LOCAL_PATH]${match[0]}`)
+    .replace(quotedPath, (match) =>
+      match.startsWith('\\"') ? '\\"[LOCAL_PATH]\\"' : `${match[0]}[LOCAL_PATH]${match[0]}`,
+    )
     .replace(uncPath, '[LOCAL_PATH]')
     .replace(windowsPath, '[LOCAL_PATH]')
     .replace(privatePosixPath, '[LOCAL_PATH]')

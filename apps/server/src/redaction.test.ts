@@ -31,6 +31,8 @@ describe('secret redaction', () => {
       'password="a\\\r\nstill-secret"',
       'password="[REDACTED]"',
     ],
+    ['a value with a shell-escaped space', 'password=alpha\\ beta', 'password=[REDACTED]'],
+    ['a value made of adjacent quoted parts', `password='alpha'"beta"`, "password='[REDACTED]'"],
     [
       'an environment variable',
       'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
@@ -158,6 +160,25 @@ describe('packet sanitizing', () => {
     );
   });
 
+  it('replaces a path in escaped quotes, as JSON inside a JSON string writes it', () => {
+    expect(sanitizeForPacket(String.raw`open \"/home/bob/private notes.md\" now`)).toBe(
+      String.raw`open \"[LOCAL_PATH]\" now`,
+    );
+  });
+
+  // In shell single quotes a backslash is an ordinary character, so the next single quote closes the path.
+  it('replaces a path in shell single quotes that ends with a backslash', () => {
+    expect(sanitizeForPacket(String.raw`open '/home/bob/private notes\' now`)).toBe(
+      "open '[LOCAL_PATH]' now",
+    );
+  });
+
+  it('replaces a quoted POSIX path holding characters Windows forbids', () => {
+    expect(sanitizeForPacket('open "/home/bob/a|private notes.txt" now')).toBe(
+      'open "[LOCAL_PATH]" now',
+    );
+  });
+
   it('stays fast on hostile paths', () => {
     for (const hostile of [
       `C:\\${'a '.repeat(50_000)}`,
@@ -170,6 +191,11 @@ describe('packet sanitizing', () => {
       `${'"C:\\a '.repeat(20_000)}`,
       `${'"C:\\a\\"'.repeat(20_000)}`,
       `"/home/${'a\\"'.repeat(40_000)}`,
+      `\\"/home/${'a '.repeat(50_000)}`,
+      `${'\\"C:\\a '.repeat(20_000)}`,
+      `'/home/${'a "'.repeat(40_000)}`,
+      `password=${'\\ '.repeat(50_000)}`,
+      `password=${`'a'"b"`.repeat(20_000)}`,
     ]) {
       const started = performance.now();
       sanitizeForPacket(hostile);
