@@ -2,13 +2,19 @@
 // name, so `max_tokens` and `token_count` stay readable while `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY` lose their
 // values. A quoted value is replaced up to its closing quote, past escaped quotes and escaped line breaks, or to the
 // end of the line when the output was cut off before the quote closed. A value may join adjacent parts, as shell
-// quoting does in `'alpha'"beta"` or `alpha\ beta`, and ends at whitespace or at punctuation that closes a structure.
-// The name's prefix is bounded: check output comes from the commit under review, and an unbounded prefix takes
-// quadratic time on input such as `a-a-a-…`. Each part of a value starts with a different character, so it is read once.
+// quoting does in `'alpha'"beta"` or `alpha\ beta`, and ends at whitespace. A value that starts unquoted keeps the
+// characters a shell word may hold, `}` included; after a quoted start, `} ] ) >` close a structure and `& |` start a
+// shell operator, so they end the value, as in `{"password": "x"}` or `'x'&&echo`. The name's prefix is bounded: check
+// output comes from the commit under review, and an unbounded prefix takes quadratic time on input such as `a-a-a-…`.
+// Each part of a value starts with a different character, so it is read once.
 const secretWord =
   'password|passwd|secret|secret[_-]?key|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?';
+const doubleQuoted = String.raw`"(?:[^"\\\n]|\\\r\n|\\[\s\S])*"?`;
+const singleQuoted = String.raw`'(?:[^'\\\n]|\\\r\n|\\[\s\S])*'?`;
+const escaped = String.raw`\\\r\n|\\[\s\S]`;
+const secretValue = String.raw`(?:[^\s"',;\\]|${escaped})(?:${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\])*|(?:${doubleQuoted}|${singleQuoted})(?:${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\)\]}>&|])*`;
 const secretAssignment = new RegExp(
-  String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:"(?:[^"\\\n]|\\\r\n|\\[\s\S])*"?|'(?:[^'\\\n]|\\\r\n|\\[\s\S])*'?|[^\s"',;\\)\]}>]|\\\r\n|\\[\s\S])+`,
+  String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:${secretValue})`,
   'giu',
 );
 // An option such as `--token` whose value is the next argument.

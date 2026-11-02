@@ -33,6 +33,13 @@ describe('secret redaction', () => {
     ],
     ['a value with a shell-escaped space', 'password=alpha\\ beta', 'password=[REDACTED]'],
     ['a value made of adjacent quoted parts', `password='alpha'"beta"`, "password='[REDACTED]'"],
+    ['an unquoted value holding a closing brace', 'password=alpha}bravo', 'password=[REDACTED]'],
+    [
+      'a quoted value followed by a shell operator',
+      `password='alpha'&&echo ready`,
+      `password='[REDACTED]'&&echo ready`,
+    ],
+    ['a quoted value piped on', `password='alpha'|wc -c`, `password='[REDACTED]'|wc -c`],
     [
       'an environment variable',
       'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
