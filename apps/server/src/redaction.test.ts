@@ -488,7 +488,7 @@ describe('known local paths', () => {
     expect(
       sanitizeForPacket(String.raw`PATH=C:\tools\bin;E:\Private Stuff\Bob Smith\tools;C:\Windows`),
     ).toBe('PATH=[LOCAL_PATH];[LOCAL_PATH];[LOCAL_PATH]');
-    // After a known path, the rest of the list goes with it, since a POSIX name may hold `;`.
+    // After a known path, the rest of the list goes with it, since a name may hold `;`.
     expect(
       sanitize(String.raw`PATH=D:\clients\acme repo\bin;E:\Private Stuff\Bob Smith\tools`),
     ).toBe('PATH=[LOCAL_PATH]');
@@ -501,6 +501,28 @@ describe('known local paths', () => {
       ['/Users/bob', '/Users/bob/,;^MARKER/:!?/& )'],
       ['/home/bob', 'see /home/bob/x:12)MARKER here'],
       ['/tmp/run', String.raw`"/tmp/run/[{;@/_MARKER?\(`],
+      // A backslash separates on Windows and is a character or an escape in a POSIX name.
+      [
+        String.raw`C:\Users\Bob Smith`,
+        String.raw`file://C:\Users\Bob Smith\(_ 客MARKER'\'~客) done`,
+      ],
+      [String.raw`C:\Users\Bob Smith`, String.raw`{"p":"C:\Users\Bob Smith\7^= '\'MARKER)`],
+      [
+        String.raw`C:\Users\Bob Smith`,
+        String.raw`file://C:\Users\Bob Smith\^+é7!$\[é ,MARKER\ * and more`,
+      ],
+      [String.raw`D:\work\acme`, String.raw`x=D:\work\acme\+] '\{~\MARKER!:Z#'`],
+      ['/tmp/run', String.raw`see /tmp/run/{aé \MARKER)|/x`],
+      ['/home/bob', String.raw`x=/home/bob/-) \MARKER &/;/\'{}?\)'`],
+      ['/tmp/run', 'file:///tmp/run/:7 7/_^$MARKER]^)'],
+      [String.raw`C:\Users\Bob Smith`, String.raw`Bearer C:\Users\Bob Smith/a7bZ/b$(.MARKER`],
+      // In a credential value, the value's own rules read a quote after a Windows path's segments, and a backslash
+      // after its last one.
+      [String.raw`D:\work\acme`, String.raw`--token=D:\work\acme\'[\ b\MARKER.+,`],
+      [String.raw`D:\work\acme`, String.raw`TOKEN=D:\work\acme\ MARKER]*\Zb%\[7( done`],
+      [String.raw`D:\work\acme`, String.raw`password: D:\work\acme/:'/=# '&MARKER{.`],
+      // A Windows name may hold `;` and `?` here, so a path written right after one goes with it.
+      [String.raw`C:\Users\Bob Smith`, String.raw`cd C:\Users\Bob Smith/}a;~/b?&MARKER`],
     ];
     for (const [known, text] of cases) {
       expect(sanitizeForPacket(text)).not.toContain('MARKER');
@@ -510,10 +532,13 @@ describe('known local paths', () => {
 
   it('removes no less after a known path than the general patterns do, on generated paths', () => {
     // A seeded generator puts a marker in a path below a known path, written with characters a name may hold.
-    let seed = 11;
+    // A 32-bit generator (mulberry32): products stay exact in integer arithmetic, so the cases do not repeat.
+    let state = 11;
     const random = () => {
-      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
-      return seed / 2_147_483_648;
+      state = (state + 0x6d2b79f5) >>> 0;
+      let mixed = Math.imul(state ^ (state >>> 15), state | 1);
+      mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+      return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
     };
     function pick<T>(items: readonly T[]): T {
       return items[Math.floor(random() * items.length)] as T;
@@ -603,5 +628,70 @@ describe('known local paths', () => {
     const started = performance.now();
     spaced(`see /x${String.raw`/\ a`.repeat(150)}/enX here`);
     expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it('keeps a credential whole when its line or its name goes on inside a known path', () => {
+    const [backslash, newline, tab] = [92, 10, 9].map((code) => String.fromCharCode(code));
+    const known = createPacketSanitizer(['/home/bob', '/work/token', '/work/acme'], {
+      caseInsensitive: false,
+    });
+    // A backslash before a line break or a tab escapes it, so the value goes on.
+    expect(known(`TOKEN=/home/bob/${backslash}${newline}secret`)).toBe('TOKEN=[REDACTED]');
+    expect(known(`TOKEN=/home/bob/${backslash}${tab}secret`)).toBe('TOKEN=[REDACTED]');
+    // The known path ends in the assignment's own name, or sits inside a bearer value.
+    expect(known('/work/token=supersecret')).toBe('[LOCAL_PATH]=[REDACTED]');
+    expect(known('Bearer abc-/work/acme/secret')).toBe('Bearer [REDACTED]');
+  });
+
+  it('reads private-use characters as text and noncharacters as U+FFFD', () => {
+    const [glyph, posixMark, windowsMark, replacement] = [0xe000, 0xfdd0, 0xfdd1, 0xfffd].map(
+      (code) => String.fromCharCode(code),
+    );
+    const known = createPacketSanitizer(['/home/bob'], { caseInsensitive: false });
+    expect(known(`normal ${glyph} prose`)).toBe(`normal ${glyph} prose`);
+    expect(known(`see /home/bob/${glyph}secret.txt now`)).toBe('see [LOCAL_PATH] now');
+    expect(known(`a ${posixMark} b ${windowsMark} c`)).toBe(`a ${replacement} b ${replacement} c`);
+    expect(known(`see /home/bob/${windowsMark}secret.txt now`)).toBe('see [LOCAL_PATH] now');
+  });
+
+  it('reads what follows a known path by the rules of the system its root is written for', () => {
+    const known = createPacketSanitizer(
+      [String.raw`C:\Users\Bob Smith`, '/home/bob', '~/projects'],
+      {
+        caseInsensitive: true,
+      },
+    );
+    // On Windows either slash separates and nothing escapes; an apostrophe is part of a name.
+    expect(known(String.raw`type C:\Users\Bob Smith\(old) notes\'draft'\x.txt now`)).toBe(
+      'type [LOCAL_PATH] now',
+    );
+    expect(known(String.raw`dir ~\projects\a b\c.txt now`)).toBe('dir [LOCAL_PATH] now');
+    // A POSIX shell on Windows names the same folder and escapes a space in it.
+    expect(known(String.raw`cd /c/Users/Bob\ Smith/my\ notes/x && ls`)).toBe(
+      'cd [LOCAL_PATH] && ls',
+    );
+    // In a POSIX name, a backslash before a letter is part of the name.
+    expect(known(String.raw`see /home/bob/notes\draft x/y.txt now`)).toBe('see [LOCAL_PATH] now');
+  });
+
+  it('leaves a known path alone in a remote URL and in a relative folder named @fs', () => {
+    const known = createPacketSanitizer(['/work/acme'], { caseInsensitive: false });
+    for (const text of [
+      'GET https://[2001:db8::1]/work/acme/status',
+      'cat fixtures/@fs/work/acme/status',
+    ]) {
+      expect(known(text)).toBe(text);
+    }
+    expect(known('GET http://localhost:5173/@fs/work/acme/x.ts')).toBe(
+      'GET http://localhost:5173/@fs[LOCAL_PATH]',
+    );
+  });
+
+  it('withholds a text longer than a million characters', () => {
+    const known = createPacketSanitizer(['/work/acme'], { caseInsensitive: false });
+    const withheld = '[REDACTED: text too long to sanitize]';
+    expect(known(`"/work/acme/${'a'.repeat(1_000_000)}"`)).toBe(withheld);
+    expect(sanitizeForPacket(`"/home/${'a'.repeat(1_000_000)}"`)).toBe(withheld);
+    expect(known(`"/work/acme/${'a'.repeat(999_000)}"`)).toBe('"[LOCAL_PATH]"');
   });
 });
