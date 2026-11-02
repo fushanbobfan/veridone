@@ -92,8 +92,9 @@ const knownPathsMaxLength = 100_000;
 const treeMaxLength = 100_000;
 const treeMaxSeparators = 1_000;
 const separatorRun = String.raw`[\\/]+`;
-// The lookbehinds run only where a root's first character follows, so each reads back over one word at most once.
-const rootStart = String.raw`(?:(?<![\w.\\/@])(?<!\/\/\[[^\]\s\/]*\])|(?<=(?<![\w.\\/-])-{1,2}[A-Za-z][\w-]*)|(?<=file:\/\/localhost|vscode:\/\/file|\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?\/@fs))`;
+// The lookbehinds run only where a root's first character follows, so each reads back over one word at most once. A
+// URL's host, `//` and what follows up to the path, comes before a remote path, a Unicode or bracketed IPv6 one too.
+const rootStart = String.raw`(?:(?<![\w.\\/@])(?<!\/\/[^\s\/]+)|(?<=(?<![\w.\\/-])-{1,2}[A-Za-z][\w-]*)|(?<=file:\/\/localhost|vscode:\/\/file|\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?\/@fs))`;
 const posixRoot = String.raw`(?=[\\/])${rootStart}${separatorRun}`;
 const homeRoot = String.raw`(?=[~$%])${rootStart}(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE)${separatorRun}`;
 const knownPathEnd = String.raw`(?![\p{Script=Latin}\p{M}\p{Nd}_-]|[.%][\p{L}\p{N}])`;
@@ -101,17 +102,18 @@ const knownPathEnd = String.raw`(?![\p{Script=Latin}\p{M}\p{Nd}_-]|[.%][\p{L}\p{
 // it, with a drive letter, a leading backslash, `%USERPROFILE%`, or `~` or `$HOME` and then a backslash, starts a
 // Windows path: either slash separates, and a name may hold any character but `<>"`, those Windows keeps out of names
 // included, so a path written right after it, as in `a;~/b?c`, goes with it. Any other root starts a POSIX path: only
-// a slash separates, JSON-escaped or not; a backslash escapes the character after it, as a shell writes `a\ b`, and
-// before any other character belongs to the name; an apostrophe opens a shell-quoted part when a closing one follows on
-// the line, and is part of the name otherwise, as in `Bob's`; each reading excludes the other.
+// a slash separates, JSON-escaped or not; a backslash escapes the character after it, a backslash included, as a shell
+// writes `a\ b` or `a\\`, and before any other character belongs to the name, as one before a slash may end a segment;
+// an apostrophe opens a shell-quoted part when a closing one follows on the line, and is part of the name otherwise, as
+// in `Bob's`; each reading excludes the other.
 const windowsRoot =
   /^(?:[a-z](?::|%3a)|\\(?!\/)|%userprofile%|\$env:userprofile|(?:~|\$home|\$\{home\})\\(?!\/))/iu;
-const escapable = String.raw` \x09!"#$&'()*;<>?[\]^\x60{|}~`;
+const escapable = String.raw` \x09!"#$&'()*;<>?[\]^\x60{|}~\\`;
 const shellEscape = String.raw`\\[${escapable}]`;
 // In a path's last segment a colon belongs to the name, as in `10:00:00`, unless a line and column follow it to the end,
-// as in `x.ts:12:5` before a space or `)`; inside a segment that a separator follows, every colon does. The digits are
-// bounded, so the look ahead from each colon is short.
-const restColon = String.raw`:(?!\d{1,9}(?::\d{1,9})?[)\]}>"',;]?(?:\s|$))`;
+// as in `x.ts:12:5` before a space, `)` or `.`; inside a segment that a separator follows, every colon does. The digits
+// and the punctuation are bounded, so the look ahead from each colon is short.
+const restColon = String.raw`:(?!\d{1,9}(?::\d{1,9})?[)\]}>"',;.!?]{0,4}(?:\s|$))`;
 const restQuote = String.raw`'[^'\n]*'|'(?![^'\n]*')`;
 
 // The first pass puts a mark where it finds a known path, one mark for each kind, so the credential pass reads a value
@@ -130,31 +132,34 @@ const replacementCharacter = String.fromCharCode(0xfffd);
 /**
  * What follows a known path inside it, read as a Windows or a POSIX path. A mark ends it, since it stands for the next
  * known path. The known path's own last segment may go on first, as the general patterns read a segment: with spaces
- * up to a later separator, as in `project copy/x`, or without them from a character prose does not put right after a
- * word, as in `bob(1)`, `bob\x` or `bob:x`, when a letter or digit comes in it. In a credential value, `inValue`, the
- * value's own rules read each apostrophe and the separators after the last segment, as they read them after any other
- * character: a quote opens a quoted part and a backslash escapes the character after it.
+ * up to a later separator, as in `project copy/x`, or without them from an ASCII punctuation mark, as in `bob(1)`,
+ * `bob\x` or `bob:x`, when an ASCII letter or digit comes in it, so prose such as `bob), then` or `bob，请` stays. In a
+ * credential value, `inValue`, the value's own rules read each apostrophe and the separators after the last segment,
+ * as they read them after any other character: a quote opens a quoted part and a backslash escapes the character
+ * after it.
  */
 function restPattern(windows: boolean, inValue = false): string {
   const apostrophe = inValue ? "'" : '';
   let name: string;
   let inner: string;
   let separator: string;
+  let first: string;
   if (windows) {
     name = String.raw`[^\s\\/<>:"${apostrophe}${marks}]`;
     inner = String.raw`[^\\/<>"${apostrophe}\n${marks}]`;
     separator = String.raw`[\\/]`;
+    first = String.raw`(?:${name}|:)`;
   } else {
     const backslash = String.raw`\\(?![\s${escapable}\/])`;
     const quote = inValue ? '' : `${restQuote}|`;
     name = String.raw`(?:[^\s\\/<>"':${marks}]|${quote}${shellEscape}|${backslash})`;
     inner = String.raw`(?:[^\\/<>"'\n${marks}]|${quote}${shellEscape}|${backslash})`;
     separator = String.raw`\\?\/`;
+    first = String.raw`(?:${name}|:|\\(?=\/))`;
   }
-  const first = String.raw`(?:${name}|:)`;
   const last = String.raw`(?:${name}|${restColon})`;
-  const nameStart = String.raw`[^\p{L}\p{N}\s"${windows ? '' : "'"}]`;
-  const goesOn = String.raw`(?:${inner}*${first}(?=${separator})|(?=${nameStart})(?=[^\s<>"${marks}]*?[\p{L}\p{N}])${last}+)?`;
+  const nameStart = String.raw`(?=[!-~])(?![\p{L}\p{N}"${windows ? '' : "'"}])`;
+  const goesOn = String.raw`(?:${inner}*${first}(?=${separator})|${nameStart}(?=[^\s<>"${marks}]*?[A-Za-z0-9])${last}+)?`;
   const segments = String.raw`(?:(?:${separator})+(?:${first}(?:${inner}*${first})?(?=${separator})|${last}+))*`;
   return inValue ? `${goesOn}${segments}` : `${goesOn}${segments}(?:${separator})*`;
 }
@@ -168,15 +173,17 @@ const bearerAfterMarks = new RegExp(
   String.raw`\bBearer\s+(?=[A-Za-z0-9._~+/-]{0,7}[${marks}]|[A-Za-z0-9._~+/-]{8})(?:${pathRests}|[A-Za-z0-9._~+/-])+=*`,
   'gu',
 );
-// A name the first pass kept after a mark starts and ends with a word character and comes before an assignment.
-// Nothing else after a mark starts with one, since a word character there would have continued the known path's name.
-const keptName = String.raw`\w(?:[\w.-]*\w)?(?=["']?\s*[:=])`;
+// A name the first pass kept after a mark starts and ends with a word character. Nothing else after a mark starts with
+// one, since a word character there would have continued the known path's name.
+const keptName = String.raw`\w(?:[\w.-]*\w)?`;
 const markedPath = new RegExp(
   String.raw`((?<!\\)"|'|\\")?(?:${posixMark}(?:${keptName}|${restPattern(false)})|${windowsMark}(?:${keptName}|${restPattern(true)}))`,
   'gu',
 );
 const secretNameEnd = new RegExp(`(?:${secretWord})$`, 'iu');
 const assignmentAhead = /["']?\s*[:=]/uy;
+const bearerNameEnd = /\bBearer$/u;
+const spaceAhead = /\s/uy;
 
 // Text past a million characters, which no packet field needs, is withheld whole: a pattern could exhaust V8's stack on
 // such a text, and a sanitizer that throws would stop the export.
@@ -195,17 +202,20 @@ function withinLimits(value: string, sanitize: (text: string) => string): string
 }
 
 /**
- * The mark of its kind for a known path the first pass found, with the credential's name the path ends in when it is
- * assigned.
+ * The mark of its kind for a known path the first pass found, with the name the path ends in when a credential pattern
+ * needs it: a credential's name that is assigned, or `Bearer` before a space.
  */
 function markKnownPath(match: string, offset: number, text: string): string {
   const mark = windowsRoot.test(match) ? windowsMark : posixMark;
-  assignmentAhead.lastIndex = offset + match.length;
-  if (!assignmentAhead.test(text)) return mark;
   let start = match.length;
   while (start > 0 && /[\w.-]/u.test(match[start - 1] ?? '')) start -= 1;
   const name = match.slice(start);
-  return secretNameEnd.test(name) ? `${mark}${name}` : mark;
+  assignmentAhead.lastIndex = offset + match.length;
+  spaceAhead.lastIndex = offset + match.length;
+  const kept =
+    (secretNameEnd.test(name) && assignmentAhead.test(text)) ||
+    (bearerNameEnd.test(name) && spaceAhead.test(text));
+  return kept ? `${mark}${name}` : mark;
 }
 
 /** A Windows drive in each of the forms above. */

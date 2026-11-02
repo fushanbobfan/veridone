@@ -646,6 +646,11 @@ describe('known local paths', () => {
     expect(known('/work/token=supersecret')).toBe('[LOCAL_PATH]=[REDACTED]');
     expect(known('Bearer abc-/work/acme/secret')).toBe('Bearer [REDACTED]');
     expect(known('Bearer abc-/work/acme/x')).toBe('Bearer [REDACTED]');
+    // A shell writes an escaped backslash as two, so the quote after them opens a quoted part of the value.
+    expect(known(String.raw`TOKEN=/work/acme\\'x SECRET'`)).toBe('TOKEN=[REDACTED]');
+    // A known path that ends in the word a bearer value follows keeps it, so the value still goes.
+    const bearer = createPacketSanitizer(['/work/Bearer'], { caseInsensitive: false });
+    expect(bearer('/work/Bearer abcdefgh')).toBe('[LOCAL_PATH] [REDACTED]');
   });
 
   it("reads on where the text continues a known path's last segment", () => {
@@ -663,10 +668,14 @@ describe('known local paths', () => {
     expect(known(String.raw`see /home/bob\secret.txt now`)).toBe('see [LOCAL_PATH] now');
     expect(known('see /home/bob:secret.txt now')).toBe('see [LOCAL_PATH] now');
     expect(known('see /home/bob;secret now')).toBe('see [LOCAL_PATH] now');
+    // A JSON-escaped slash may follow a space in the segment, as the general patterns read it.
+    expect(known(String.raw`see /home/bob \/secret.txt now`)).toBe('see [LOCAL_PATH] now');
     // Prose after a path stays: punctuation, a line and column, and words no separator follows.
     expect(known('(see /home/bob), /home/bob. Then /home/bob:12:5 and /home/bob more')).toBe(
       '(see [LOCAL_PATH]), [LOCAL_PATH]. Then [LOCAL_PATH]:12:5 and [LOCAL_PATH] more',
     );
+    expect(known('see /home/bob:12:5. Next')).toBe('see [LOCAL_PATH]:12:5. Next');
+    expect(known('see /home/bob，请重试')).toBe('see [LOCAL_PATH]，请重试');
   });
 
   it('reads private-use characters as text and noncharacters as U+FFFD', () => {
@@ -708,6 +717,7 @@ describe('known local paths', () => {
     const known = createPacketSanitizer(['/work/acme'], { caseInsensitive: false });
     for (const text of [
       'GET https://[2001:db8::1]/work/acme/status',
+      'GET https://例子.中国/work/acme/status',
       'cat fixtures/@fs/work/acme/status',
       'import "@/work/acme/status"',
     ]) {
