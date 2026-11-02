@@ -35,6 +35,8 @@ const bootstrap: BootstrapDto = {
       executableSha256: 'a'.repeat(64),
       definitionHash: 'b'.repeat(64),
       approvedAt: '2026-10-22T10:00:00.000Z',
+      setupArgs: [],
+      setupTimeoutMs: 600_000,
     },
   ],
   evidence: [],

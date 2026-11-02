@@ -222,6 +222,12 @@ export function WorkspaceExplorerDialog({
                         <dt>Arguments</dt>
                         <dd className="mono tool-path">{JSON.stringify(check.args)}</dd>
                       </div>
+                      {check.setupArgs.length > 0 && (
+                        <div className="wide">
+                          <dt>Setup arguments</dt>
+                          <dd className="mono tool-path">{JSON.stringify(check.setupArgs)}</dd>
+                        </div>
+                      )}
                       <div>
                         <dt>SHA-256</dt>
                         <dd className="mono">

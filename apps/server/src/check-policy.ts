@@ -42,6 +42,14 @@ export const checkRequestSchema = z.object({
     .max(30 * 60_000)
     .default(120_000),
   maxOutputBytes: z.number().int().min(1_024).max(10_000_000).default(1_000_000),
+  // Arguments the same pinned tool runs in the checkout before the check, such as a frozen dependency install.
+  setupArgs: z.array(z.string().max(4_096)).max(100).default([]),
+  setupTimeoutMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(60 * 60_000)
+    .default(10 * 60_000),
 });
 
 export interface CheckDefinition {
@@ -58,6 +66,8 @@ export interface CheckDefinition {
   /** Canonical path of the tool file the operator approved; null until the tool is pinned. */
   resolvedExecutable: string | null;
   executableSha256: string | null;
+  setupArgs: string[];
+  setupTimeoutMs: number;
 }
 
 /** Hashes exactly the fields that define a check, including the pinned tool. */
@@ -76,6 +86,10 @@ export async function checkDefinitionHash(definition: CheckDefinition): Promise<
       maxOutputBytes: definition.maxOutputBytes,
       resolvedExecutable: definition.resolvedExecutable,
       executableSha256: definition.executableSha256,
+      // A check without setup keeps the hash it had before setup existed, so its evidence stays fresh.
+      ...(definition.setupArgs.length > 0
+        ? { setupArgs: definition.setupArgs, setupTimeoutMs: definition.setupTimeoutMs }
+        : {}),
     }),
   );
 }

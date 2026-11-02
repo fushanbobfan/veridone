@@ -83,6 +83,8 @@ function workspace(options: {
         executableSha256: 'f'.repeat(64),
         definitionHash: 'e'.repeat(64),
         approvedAt: '2026-10-22T10:00:00.000Z',
+        setupArgs: [],
+        setupTimeoutMs: 600_000,
       },
     ],
     evidence: options.evidence

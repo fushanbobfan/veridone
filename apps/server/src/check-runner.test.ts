@@ -3,6 +3,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { sha256File } from '@veridone/adapters';
+import { canonicalJson, sha256Hex } from '@veridone/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { checkDefinitionHash } from './check-policy.js';
@@ -220,6 +221,8 @@ describe('check tools are pinned', () => {
       maxOutputBytes: 1_024,
       resolvedExecutable: '/usr/bin/node',
       executableSha256: 'a'.repeat(64),
+      setupArgs: [],
+      setupTimeoutMs: 600_000,
     };
 
     expect(await checkDefinitionHash(definition)).not.toBe(
@@ -267,6 +270,8 @@ describe('check tools are pinned', () => {
       resolvedExecutable: null,
       executableSha256: null,
       definitionHash: 'a'.repeat(64),
+      setupArgs: [],
+      setupTimeoutMs: 600_000,
     });
     await fixture.get('/api/v1/bootstrap');
 
@@ -407,4 +412,85 @@ describe('acceptance readiness', () => {
       acceptanceReadiness(fixture.database, fixture.workItemId),
     );
   }, 60_000);
+});
+
+describe('setup before a check', () => {
+  const approve = (
+    fixture: Awaited<ReturnType<typeof workspace>>,
+    setupArgs: string[],
+    args: string[],
+  ) =>
+    fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Needs dependencies',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs,
+      args,
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+    });
+
+  it('runs the setup arguments with the pinned tool in the checkout first', async () => {
+    const fixture = await workspace({ 'README.md': '# Fixture\n', '.gitignore': 'deps/\n' });
+    const approved = await approve(
+      fixture,
+      [
+        '-e',
+        "const fs = require('node:fs'); fs.mkdirSync('deps'); fs.writeFileSync('deps/ready.txt', 'ok')",
+      ],
+      ['-e', "process.exit(require('node:fs').existsSync('deps/ready.txt') ? 0 : 7)"],
+    );
+    expect(approved.status).toBe(201);
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence).toMatchObject({ result: 'passed', invalidReason: null });
+  }, 60_000);
+
+  it('records a failed setup and leaves the check unrun', async () => {
+    const fixture = await workspace();
+    const approved = await approve(
+      fixture,
+      ['-e', 'process.stderr.write("cannot install"); process.exit(3)'],
+      ['-e', 'process.stdout.write("check ran")'],
+    );
+
+    const run = await fixture.post<RunResponse & { evidence: { exitCode: number | null } }>(
+      `/api/v1/checks/${approved.body.check.id}/run`,
+      { workItemId: fixture.workItemId },
+    );
+
+    expect(run.body.evidence).toMatchObject({ result: 'failed', exitCode: 3 });
+    expect(run.body.evidence.stdout).not.toContain('check ran');
+    expect(run.body.evidence.stdout).toContain('setup exited with 3');
+  }, 60_000);
+
+  it('keeps the definition hash a check without setup had before setup existed', async () => {
+    const definition = {
+      repositoryId: 'repo',
+      label: 'Unit tests',
+      kind: 'test',
+      executable: 'node',
+      args: ['--test'],
+      versionArgs: ['--version'],
+      scopePaths: [],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+      resolvedExecutable: '/usr/bin/node',
+      executableSha256: 'a'.repeat(64),
+    };
+    const before = await sha256Hex(canonicalJson(definition));
+
+    expect(
+      await checkDefinitionHash({ ...definition, setupArgs: [], setupTimeoutMs: 600_000 }),
+    ).toBe(before);
+    expect(
+      await checkDefinitionHash({ ...definition, setupArgs: ['install'], setupTimeoutMs: 600_000 }),
+    ).not.toBe(before);
+  });
 });

@@ -110,6 +110,7 @@ export async function runApprovedCheck(
   let completedAt: string;
   let toolVersion: string | null;
   let result: Awaited<ReturnType<typeof runBoundedProcess>>;
+  let setup: Awaited<ReturnType<typeof runBoundedProcess>> | null = null;
   let comparison: CheckoutComparison | { error: string };
   let tool: { path: string; sha256: string };
   let toolUnchanged: boolean;
@@ -139,15 +140,31 @@ export async function runApprovedCheck(
           .split(/\r?\n/u)[0]
           ?.slice(0, 4_096) ?? null)
       : null;
-    result = await runBoundedProcess({
-      executable: tool.path,
-      args: check.args,
-      cwd: workingDirectory,
-      timeoutMs: check.timeoutMs,
-      maxOutputBytes: check.maxOutputBytes,
-      env: minimalEnvironment(),
-      ...(signal ? { signal } : {}),
-    });
+    // Setup runs the same pinned tool in the checkout first, for example to install dependencies from the
+    // lockfile; a setup that fails ends the run, and its exit code and output become the evidence.
+    if (check.setupArgs.length > 0) {
+      setup = await runBoundedProcess({
+        executable: tool.path,
+        args: check.setupArgs,
+        cwd: workingDirectory,
+        timeoutMs: check.setupTimeoutMs,
+        maxOutputBytes: check.maxOutputBytes,
+        env: minimalEnvironment(),
+        ...(signal ? { signal } : {}),
+      });
+    }
+    result =
+      setup && !(setup.state === 'completed' && setup.exitCode === 0)
+        ? setup
+        : await runBoundedProcess({
+            executable: tool.path,
+            args: check.args,
+            cwd: workingDirectory,
+            timeoutMs: check.timeoutMs,
+            maxOutputBytes: check.maxOutputBytes,
+            env: minimalEnvironment(),
+            ...(signal ? { signal } : {}),
+          });
     completedAt = new Date().toISOString();
     toolUnchanged = (await sha256File(tool.path).catch(() => null)) === tool.sha256;
     // A checkout the check left unreadable counts as changed; the run is still recorded.
@@ -181,8 +198,17 @@ export async function runApprovedCheck(
     checkResult = 'mutated';
     invalidReason = invalidReason.slice(0, 2_000);
   }
-  const stdout = redactSecrets(result.stdout);
-  const stderr = redactSecrets(result.stderr);
+  // With a setup, the output carries both steps under headers; when the setup failed, it is the setup's alone.
+  const checkRan = setup !== result;
+  const setupHeader = setup ? `--- setup exited with ${setup.exitCode ?? setup.state} ---\n` : '';
+  const stdout = redactSecrets(
+    setup
+      ? `${setupHeader}${setup.stdout}${checkRan ? `\n--- check ---\n${result.stdout}` : ''}`
+      : result.stdout,
+  );
+  const stderr = redactSecrets(
+    setup ? `${setup.stderr}${checkRan ? result.stderr : ''}` : result.stderr,
+  );
   const artifactHash = await sha256Hex(
     canonicalJson({
       checkId,
@@ -209,7 +235,7 @@ export async function runApprovedCheck(
     checkDefinitionVersion,
     startedAt,
     completedAt,
-    durationMs: result.durationMs,
+    durationMs: result.durationMs + (setup && checkRan ? setup.durationMs : 0),
     toolVersion,
     exitCode: result.exitCode,
     stdout,

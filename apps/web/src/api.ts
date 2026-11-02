@@ -98,6 +98,8 @@ export interface CheckDto {
   executableSha256: string | null;
   definitionHash: string;
   approvedAt: string;
+  setupArgs: string[];
+  setupTimeoutMs: number;
 }
 
 export interface EvidenceDto {
@@ -260,6 +262,8 @@ export interface NewCheckInput {
   kind: string;
   executable: string;
   args: string[];
+  /** Arguments the same tool runs in the checkout before the check; empty for no setup. */
+  setupArgs: string[];
   versionArgs: string[];
   scopePaths: string[];
   cwdRelative: string;

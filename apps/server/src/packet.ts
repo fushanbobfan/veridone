@@ -112,6 +112,8 @@ function publicChecks(checks: CheckRecord[], pseudonym: Pseudonym) {
     scopePaths: check.scopePaths.map(sanitizeForPacket),
     timeoutMs: check.timeoutMs,
     maxOutputBytes: check.maxOutputBytes,
+    setupArgs: check.setupArgs.map(sanitizeForPacket),
+    setupTimeoutMs: check.setupTimeoutMs,
     definitionHash: pseudonym('check-definition', check.definitionHash),
     approvedAt: check.approvedAt,
   }));

@@ -81,6 +81,13 @@ const checkSchema = z.object({
   executableSha256: sha256.nullable().default(null),
   definitionHash: sha256,
   approvedAt: isoDate,
+  setupArgs: z.array(z.string().max(4_096)).max(100).default([]),
+  setupTimeoutMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(60 * 60_000)
+    .default(10 * 60_000),
 });
 
 const evidenceSchema = z.object({
@@ -366,6 +373,8 @@ export async function importWorkspace(
           cwdRelative: record.cwdRelative,
           timeoutMs: record.timeoutMs,
           maxOutputBytes: record.maxOutputBytes,
+          setupArgs: record.setupArgs,
+          setupTimeoutMs: record.setupTimeoutMs,
         }),
         // A backup cannot vouch for a tool file on this machine; the operator pins it again.
         resolvedExecutable: null,
@@ -486,11 +495,13 @@ export async function importWorkspace(
         INSERT INTO checks (
           id, repository_id, label, kind, executable, args_json, cwd_relative,
           timeout_ms, max_output_bytes, definition_hash, approved_at,
-          version_args_json, scope_paths_json, resolved_executable, executable_sha256
+          version_args_json, scope_paths_json, resolved_executable, executable_sha256,
+          setup_args_json, setup_timeout_ms
         ) VALUES (
           @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
           @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
-          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256
+          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256,
+          @setupArgsJson, @setupTimeoutMs
         ) ON CONFLICT(id) DO NOTHING
       `);
         for (const record of checks) {
@@ -499,6 +510,7 @@ export async function importWorkspace(
             argsJson: JSON.stringify(record.args),
             versionArgsJson: JSON.stringify(record.versionArgs),
             scopePathsJson: JSON.stringify(record.scopePaths),
+            setupArgsJson: JSON.stringify(record.setupArgs),
           });
           if (tally('checks', result.changes === 1)) {
             added.checks.push({ label: record.label, executable: record.executable });

@@ -224,6 +224,12 @@ const migrationTen = `
     CHECK (status IN ('approved', 'pending'));
 `;
 
+// The same pinned tool can prepare the checkout, for example with a frozen dependency install, before the check.
+const migrationEleven = `
+  ALTER TABLE checks ADD COLUMN setup_args_json TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE checks ADD COLUMN setup_timeout_ms INTEGER NOT NULL DEFAULT 600000;
+`;
+
 export type WorkspaceKeyPurpose = 'packet-pseudonyms' | 'packet-signing';
 
 const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
@@ -345,6 +351,9 @@ export interface CheckRecord {
   executableSha256: string | null;
   definitionHash: string;
   approvedAt: string;
+  /** Arguments the pinned tool runs in the checkout before the check; empty for no setup. */
+  setupArgs: string[];
+  setupTimeoutMs: number;
 }
 
 export interface EvidenceRecord {
@@ -422,6 +431,7 @@ export class VeriDoneDatabase {
       { version: 8, sql: migrationEight },
       { version: 9, sql: migrationNine },
       { version: 10, sql: migrationTen },
+      { version: 11, sql: migrationEleven },
     ];
 
     for (const migration of migrations) {
@@ -791,11 +801,13 @@ export class VeriDoneDatabase {
         `INSERT INTO checks (
           id, repository_id, label, kind, executable, args_json, cwd_relative,
           timeout_ms, max_output_bytes, definition_hash, approved_at,
-          version_args_json, scope_paths_json, resolved_executable, executable_sha256
+          version_args_json, scope_paths_json, resolved_executable, executable_sha256,
+          setup_args_json, setup_timeout_ms
         ) VALUES (
           @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
           @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
-          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256
+          @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256,
+          @setupArgsJson, @setupTimeoutMs
         )`,
       )
       .run({
@@ -803,6 +815,7 @@ export class VeriDoneDatabase {
         argsJson: JSON.stringify(record.args),
         versionArgsJson: JSON.stringify(record.versionArgs),
         scopePathsJson: JSON.stringify(record.scopePaths),
+        setupArgsJson: JSON.stringify(record.setupArgs),
       });
     return record;
   }
@@ -847,6 +860,8 @@ export class VeriDoneDatabase {
       executableSha256: row.executable_sha256 === null ? null : String(row.executable_sha256),
       definitionHash: String(row.definition_hash),
       approvedAt: String(row.approved_at),
+      setupArgs: JSON.parse(String(row.setup_args_json)) as string[],
+      setupTimeoutMs: Number(row.setup_timeout_ms),
     }));
   }
 
