@@ -12,11 +12,15 @@ const secretWord =
 const doubleQuoted = String.raw`"(?:[^"\\\n]|\\\r\n|\\[\s\S])*"?`;
 const singleQuoted = String.raw`'(?:[^'\\\n]|\\\r\n|\\[\s\S])*'?`;
 const escaped = String.raw`\\\r\n|\\[\s\S]`;
-const secretValue = String.raw`(?:[^\s"',;\\]|${escaped})(?:${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\])*|(?:${doubleQuoted}|${singleQuoted})(?:${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\)\]}>&|])*`;
-const secretAssignment = new RegExp(
-  String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:${secretValue})`,
-  'giu',
-);
+/** An assignment of a secret; `part`, when given, is an alternative tried first where a part of the value may start. */
+function secretAssignmentPattern(part = ''): RegExp {
+  const value = String.raw`(?:${part}[^\s"',;\\]|${escaped})(?:${part}${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\])*|(?:${doubleQuoted}|${singleQuoted})(?:${part}${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\)\]}>&|])*`;
+  return new RegExp(
+    String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:${value})`,
+    'giu',
+  );
+}
+const secretAssignment = secretAssignmentPattern();
 // An option such as `--token` whose value is the next argument.
 const secretOption = new RegExp(
   String.raw`^--?(?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord})$`,
@@ -67,14 +71,16 @@ const homeRelativePath =
 // - with a Windows drive named as a POSIX shell on Windows names it (`/d/x`, `/mnt/d/x`, `/cygdrive/d/x`), and a path
 //   under the home directory written from `~`, `$HOME` or `%USERPROFILE%`.
 // A match starts where no word character, period or separator comes before it, or right after a command-line flag
-// (`-I/x`), a URL's scheme and host (`file://localhost/x`, `vscode://file/x`) or Vite's `/@fs`. A separator never comes
-// just before the start, so a run of separators is read once; a drive letter may follow anything, as in `/ID:\x`. The
-// known path's last segment must end there: a Latin letter, digit, mark, `_` or `-` after it continues a longer name, so
-// `importer` leaves `importer-v2` and `importeré` alone, while a Chinese character after it reads as prose. What follows
-// a separator then belongs to the path, read at least as far as the general patterns read it; after a quote, the match
-// runs to the closing quote. The known paths share prefix trees, so a match attempt follows one path through a tree.
-// The first character of a segment takes no shell escape, which a separator run could also claim, so no text can be
-// read two ways and a failed attempt costs time in proportion to the path.
+// that opens a word (`-I/x`), a local URL's host (`file://localhost/x`, `vscode://file/x`) or Vite's `/@fs`; a path
+// inside a longer relative path or a remote URL stays. A separator never comes just before the start, so a run of
+// separators is read once; a drive letter may follow anything, as in `/ID:\x`. The known path's last segment must end
+// there: a Latin letter, digit, mark, `_` or `-` after it continues a longer name, so `importer` leaves `importer-v2`
+// and `importeré` alone, while a Chinese character after it reads as prose. What follows a separator then belongs to
+// the path, read at least as far as the general patterns read it, a shell-quoted part (`'my dir'`) whole; after a quote,
+// the match runs to the closing quote. The known paths share prefix trees, so a match attempt follows one path through
+// a tree. The first character of a segment takes no shell escape, which a separator run could also claim, and a `%`
+// has a second reading only where its encoded form cannot be mistaken for it, so no text can be read two ways and a
+// failed attempt costs time in proportion to the path.
 //
 // V8 compiles a regular expression on first use, and it refuses one past a size limit or a sequence deep enough to
 // exhaust its stack, and compiles many separator loops in one pattern slowly. A known path longer than 512 characters
@@ -86,18 +92,41 @@ const treeMaxLength = 100_000;
 const treeMaxSeparators = 1_000;
 const separatorRun = String.raw`[\\/]+`;
 // The lookbehinds run only where a root's first character follows, so each reads back over one word at most once.
-const rootStart = String.raw`(?:(?<![\w.\\/])|(?<=(?<![\w-])-{1,2}[A-Za-z][\w-]*)|(?<=:\/\/[\w.:@-]*)|(?<=\/@fs))`;
+const rootStart = String.raw`(?:(?<![\w.\\/])|(?<=(?<![\w.\\/-])-{1,2}[A-Za-z][\w-]*)|(?<=file:\/\/localhost|vscode:\/\/file|\/@fs))`;
 const posixRoot = String.raw`(?=[\\/])${rootStart}${separatorRun}`;
 const homeRoot = String.raw`(?=[~$%])${rootStart}(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE)${separatorRun}`;
 const knownPathEnd = String.raw`(?![\p{Script=Latin}\p{M}\p{Nd}_-]|[.%][\p{L}\p{N}])`;
 const shellEscape = String.raw`\\[ !"#$&'()*;<>?[\]^\x60{|}~]`;
-// A colon belongs to a name, as in `10:00:00/`, unless a line and column follow it to the end of the path, as in
-// `x.ts:12:5` before a space or `)`; the digits are bounded, so the look ahead from each colon is short.
+// A backslash may end a segment, as Windows writes it, or escape the next character, as a shell writes `a\ b`; read as
+// a separator, the escaped character, a space included, may start the next segment.
+const escapedStart = String.raw`(?<=\\)[ !#$&'()*;?[\]^\x60{|}~]`;
+// In a path's last segment a colon belongs to the name, as in `10:00:00`, unless a line and column follow it to the end,
+// as in `x.ts:12:5` before a space or `)`; inside a segment that a separator follows, every colon does. The digits are
+// bounded, so the look ahead from each colon is short. An apostrophe opens a shell-quoted part when a closing one
+// follows on the line, and is part of the name otherwise, as in `Bob's`; each reading excludes the other.
 const restColon = String.raw`:(?!\d{1,9}(?::\d{1,9})?[)\]}>"',;]?(?:\s|$))`;
-const restCharacter = String.raw`(?:[^\s\\/<>":]|${restColon}|${shellEscape})`;
-const restInner = String.raw`(?:[^\\/<>":\n]|${restColon}|${shellEscape})`;
-const knownPathRest = String.raw`(?:${separatorRun}(?:${restCharacter}(?:${restInner}*${restCharacter})?(?=[\\/])|${restCharacter}+))*[\\/]*`;
+const restQuote = String.raw`'[^'\n]*'|'(?![^'\n]*')`;
+
+/**
+ * What follows a separator after a known path; `quote`, when given, is how an apostrophe reads. A mark ends it, since
+ * it stands for the next known path.
+ */
+function restPattern(quote = ''): string {
+  const character = String.raw`(?:[^\s\\/<>"':\uE000]|${quote}${restColon}|${shellEscape})`;
+  const inner = String.raw`(?:[^\\/<>"'\n\uE000]|${quote}${shellEscape})`;
+  const start = String.raw`(?:${character}|${escapedStart})`;
+  return String.raw`(?:${separatorRun}(?:${start}(?:${inner}*${character})?(?=[\\/])|${start}${character}*))*[\\/]*`;
+}
+const knownPathRest = restPattern(`${restQuote}|`);
 const shellEscapable = new Set(' !"#$&\'()*;<>?[]^`{|}~');
+
+// The first pass puts this private-use character where it finds a known path, so the credential pass reads a value
+// through the spaces of a known path, and the last pass replaces each mark with what follows it inside that path. In a
+// credential value, the value's own rules read the quotes after a known path, as they read them without one: a quoted
+// part joins the value, and a quote that does not close runs to the end of the line.
+const knownPathMark = '\uE000';
+const secretAssignmentAfterMarks = secretAssignmentPattern(`${knownPathMark}${restPattern()}|`);
+const markedPath = new RegExp(String.raw`((?<!\\)"|'|\\")?${knownPathMark}${knownPathRest}`, 'gu');
 
 /** A Windows drive in each of the forms above. */
 function driveRoot(drive: string): string {
@@ -112,11 +141,12 @@ function hexPattern(hex: string): string {
 
 /**
  * A character of a known path as itself, percent-encoded, as a JSON `\u` escape for a character past ASCII or one of
- * `&<>`, and, unless it starts a segment, escaped with a backslash as a shell escapes it. A `%` followed by two hex
- * digits reads as an encoded character, so text has one reading.
+ * `&<>`, and, unless it starts a segment, escaped with a backslash as a shell escapes it. `next` holds the name's two
+ * characters after this one: a `%` followed by `25` in the name reads only as itself, since its encoded form `%25` could
+ * then also be read as a `%` and `25`.
  */
-function characterPattern(character: string, first: boolean): string {
-  if (character === '%') return '(?:%(?![0-9A-Fa-f]{2})|%25)';
+function characterPattern(character: string, first: boolean, next: string): string {
+  if (character === '%') return next === '25' ? '%' : '(?:%|%25)';
   const literal = character.replace(/[\\^$.*+?()[\]{}|/]/u, '\\$&');
   const forms = [literal];
   if (!/^[\w.~-]$/u.test(character)) {
@@ -147,8 +177,10 @@ function knownPathTokens(knownPath: string): string[] | null {
   const tokens = [parsed[1] ? homeRoot : drive ? driveRoot(drive) : posixRoot];
   for (const [index, segment] of segments.entries()) {
     if (index > 0) tokens.push(separatorRun);
-    for (const [position, character] of [...segment].entries()) {
-      tokens.push(characterPattern(character, position === 0));
+    const characters = [...segment];
+    for (const [position, character] of characters.entries()) {
+      const next = characters.slice(position + 1, position + 3).join('');
+      tokens.push(characterPattern(character, position === 0, next));
     }
   }
   return tokens;
@@ -211,21 +243,22 @@ function closingQuote(text: string, from: number, quote: string): number {
 }
 
 /**
- * Replaces each known path that `pattern` finds. A match that opens with a quote runs to the quote that closes it after
- * the known path, which may hold a quote of its own, as in `O'Brien`; the replacement keeps the quotes. Without one, it
- * ends where the pattern ends.
+ * Replaces each marked known path with what follows it inside that path. A mark right after a quote runs to the quote
+ * that closes it, which the replacement keeps; the known path itself may have held a quote, as in `O'Brien`, which the
+ * mark has taken. Without a quote, the replacement ends where the rest of the path ends.
  */
-function replaceKnownPaths(text: string, pattern: RegExp): string {
+function replaceMarkedPaths(text: string): string {
   let result = '';
   let position = 0;
-  pattern.lastIndex = 0;
-  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+  markedPath.lastIndex = 0;
+  for (let match = markedPath.exec(text); match; match = markedPath.exec(text)) {
     const quote = match[1] ?? '';
-    const pathEnd = match.index + quote.length + (match[2] ?? '').length;
-    const close = quote ? closingQuote(text, pathEnd, quote) : -1;
+    const close = quote
+      ? closingQuote(text, match.index + quote.length + knownPathMark.length, quote)
+      : -1;
     result += `${text.slice(position, match.index)}${quote}[LOCAL_PATH]${close >= 0 ? quote : ''}`;
     position = close >= 0 ? close : match.index + match[0].length;
-    pattern.lastIndex = position;
+    markedPath.lastIndex = position;
   }
   return result + text.slice(position);
 }
@@ -254,9 +287,9 @@ function redactPrivateKeys(value: string): string {
 }
 
 /** Removes credentials from text a tool printed or an agent wrote; paths and the rest stay. */
-export function redactSecrets(value: string): string {
+export function redactSecrets(value: string, assignment = secretAssignment): string {
   let redacted = redactPrivateKeys(value).replace(
-    secretAssignment,
+    assignment,
     (match: string, name: string, quote: string, separator: string) => {
       const assigned = match.slice(name.length + quote.length + separator.length);
       const wrapper = assigned.startsWith('"') ? '"' : assigned.startsWith("'") ? "'" : '';
@@ -317,13 +350,7 @@ export function createPacketSanitizer(
   let separators = 0;
   const closeTree = () => {
     if (length === 0) return;
-    // A quote right before a known path makes the match run to the closing quote.
-    patterns.push(
-      new RegExp(
-        String.raw`((?<!\\)"|'|\\")?(${treePattern(tree)})${knownPathEnd}${knownPathRest}`,
-        flags,
-      ),
-    );
+    patterns.push(new RegExp(`(?:${treePattern(tree)})${knownPathEnd}`, flags));
     tree = { next: new Map(), end: false };
     length = 0;
     separators = 0;
@@ -344,9 +371,11 @@ export function createPacketSanitizer(
   closeTree();
   if (patterns.length === 0) return sanitizeForPacket;
   return (value) => {
-    let text = value;
-    for (const pattern of patterns) text = replaceKnownPaths(text, pattern);
-    return sanitizeForPacket(text);
+    let marked = value;
+    for (const pattern of patterns) marked = marked.replace(pattern, knownPathMark);
+    return replaceGeneralPaths(
+      replaceMarkedPaths(redactSecrets(marked, secretAssignmentAfterMarks)),
+    );
   };
 }
 

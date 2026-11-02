@@ -358,6 +358,7 @@ describe('known local paths', () => {
         'restore [LOCAL_PATH] now',
       ],
       ['/home/bob', 'see /home/bob/a|b/what?/a`b/secret.txt now', 'see [LOCAL_PATH] now'],
+      ['/home/bob', 'see /home/bob/run:12 archive/payroll.csv now', 'see [LOCAL_PATH] now'],
       [
         '/Users/bob',
         'see /Users/bob/Screenshots/Screen Shot 2024-01-01 at 10:00:00/x.png now',
@@ -394,6 +395,11 @@ describe('known local paths', () => {
       sanitizeArgsForPacket(['sign', '--private-key=/work/acme repo/keys/id_ed25519'], repos),
     ).toEqual(['sign', '--private-key=[REDACTED]']);
     expect(repos(`see ${tokenLike}/notes here`)).toBe('see [LOCAL_PATH] here');
+    // A shell-quoted part after the known path stays whole, so the assignment still takes it.
+    const posixHome = createPacketSanitizer(['/home/bob'], { caseInsensitive: false });
+    expect(posixHome("TOKEN=/home/bob/'secret plan.txt'")).toBe('TOKEN=[REDACTED]');
+    expect(posixHome('TOKEN=/home/bob/"secret plan.txt"')).toBe('TOKEN=[REDACTED]');
+    expect(posixHome("cd /home/bob/'my dir'/x && ls")).toBe('cd [LOCAL_PATH] && ls');
   });
 
   it('replaces a known path in file URLs, JSON escapes and shell escapes', () => {
@@ -439,6 +445,12 @@ describe('known local paths', () => {
     expect(apostrophe(String.raw`at Object.<anonymous> (C:\Users\Bob O'Brien\src\x.js:3:9)`)).toBe(
       'at Object.<anonymous> ([LOCAL_PATH]:3:9)',
     );
+    const literal = createPacketSanitizer(['/work/%ab', '/work/100%25'], {
+      caseInsensitive: false,
+    });
+    expect(literal('see /work/%ab/secret.txt')).toBe('see [LOCAL_PATH]');
+    expect(literal('see file:///work/%25ab/x here')).toBe('see file:[LOCAL_PATH] here');
+    expect(literal('see /work/100%25/x here')).toBe('see [LOCAL_PATH] here');
     const percent = createPacketSanitizer(['/work/100% done'], { caseInsensitive: false });
     expect(percent('see file:///work/100%25%20done/x here')).toBe('see file:[LOCAL_PATH] here');
     expect(percent('see /work/100% done/y here')).toBe('see [LOCAL_PATH] here');
@@ -460,10 +472,16 @@ describe('known local paths', () => {
       'open vscode://file[LOCAL_PATH] now',
     );
     expect(repos(String.raw`cl /ID:\clients\acme\include x.c`)).toBe('cl /I[LOCAL_PATH] x.c');
-    // A relative path that merely holds a known path's segments stays.
+    // A relative path that merely holds a known path's segments stays, and so does a remote URL.
     expect(createPacketSanitizer(['/app'])('built src/app/page.tsx')).toBe(
       'built src/app/page.tsx',
     );
+    for (const text of [
+      'cat fixtures/-I/work/acme/result.json',
+      '{"url":"https://example.org/work/acme/status"}',
+    ]) {
+      expect(repos(text)).toBe(text);
+    }
   });
 
   it('ends a Windows path at the semicolon of a PATH list', () => {
@@ -514,6 +532,8 @@ describe('known local paths', () => {
       ['(', ')'],
       ['', ':12:5'],
       ['x=', ' y'],
+      ['TOKEN=', ''],
+      ['TOKEN=', ' done'],
     ];
     let checked = 0;
     for (let round = 0; round < 2_000; round += 1) {
