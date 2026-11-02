@@ -256,7 +256,7 @@ export function createApp(options: AppOptions): Hono {
       return context.json(
         {
           error: 'root_moved',
-          message: `${root.path} now resolves to ${canonicalPath}. Add that directory as a new root instead.`,
+          message: `${root.path} now resolves to ${canonicalPath}. To use that directory, add it as a new root.`,
         },
         409,
       );

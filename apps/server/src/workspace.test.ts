@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { canonicalJson, sha256Hex } from '@veridone/core';
@@ -403,6 +403,34 @@ describe('restored roots wait for the operator', () => {
     const response = await target.post(`/api/v1/roots/${restored?.id}/approve`, {});
     expect(response.status).toBe(400);
     expect(target.database.listRoots().find((root) => root.label === 'Elsewhere')?.status).toBe(
+      'pending',
+    );
+  }, 30_000);
+
+  it('refuses to approve a restored root whose path now leads to another directory', async () => {
+    const target = await boundWorkspace();
+    cleanups.push(target.cleanup);
+    const elsewhere = path.join(target.directory, 'elsewhere');
+    const link = path.join(target.directory, 'link');
+    await mkdir(elsewhere);
+    // A junction on Windows, a symbolic link elsewhere; either way the stored path resolves to another directory.
+    await symlink(elsewhere, link, 'junction');
+    const backup = (await exportWorkspace(emptyDatabase())) as unknown as Backup & {
+      data: { approvedRoots: Array<Record<string, unknown>> };
+    };
+    backup.data.approvedRoots.push({
+      id: randomUUID(),
+      path: link,
+      label: 'Linked',
+      createdAt: '2026-10-22T10:00:00.000Z',
+    });
+
+    await importWorkspace(target.database, await resealed(backup));
+
+    const restored = target.database.listRoots().find((root) => root.label === 'Linked');
+    const response = await target.post(`/api/v1/roots/${restored?.id}/approve`, {});
+    expect(response).toMatchObject({ status: 409, body: { error: 'root_moved' } });
+    expect(target.database.listRoots().find((root) => root.label === 'Linked')?.status).toBe(
       'pending',
     );
   }, 30_000);
