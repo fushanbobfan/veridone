@@ -36,8 +36,10 @@ export async function boundWorkspace(
       demoMode: false,
     },
   });
+  // Requests are addressed to the server's own loopback name, as a browser on this machine sends them.
+  const local = (url: string) => new URL(url, 'http://127.0.0.1:4317').href;
   const post = async <T>(url: string, body: unknown): Promise<ApiResponse<T>> => {
-    const response = await app.request(url, {
+    const response = await app.request(local(url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-VeriDone-CSRF': csrfToken },
       body: JSON.stringify(body),
@@ -45,7 +47,7 @@ export async function boundWorkspace(
     return { status: response.status, body: (await response.json()) as T };
   };
   const get = async <T>(url: string): Promise<ApiResponse<T>> => {
-    const response = await app.request(url);
+    const response = await app.request(local(url));
     return { status: response.status, body: (await response.json()) as T };
   };
 

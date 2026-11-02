@@ -17,7 +17,7 @@ import {
 import { CheckCapacityError, CheckExecutionManager } from './check-execution.js';
 import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
 import { acceptanceReadiness, aggregateCheckVersion } from './check-runner.js';
-import type { ServerConfig } from './config.js';
+import { allowedHosts, type ServerConfig } from './config.js';
 import { VerdictConflictError, type RepositoryRecord, type VeriDoneDatabase } from './database.js';
 import { buildAcceptancePacket } from './packet.js';
 import { exportWorkspace, importWorkspace, WorkspaceConflictError } from './workspace.js';
@@ -86,6 +86,18 @@ export function createApp(options: AppOptions): Hono {
       },
     }),
   );
+
+  // A page that rebinds its own domain to 127.0.0.1 reaches this server under that domain's name, so the server
+  // answers only to its loopback names. The request line can carry an absolute URL, so both places are checked.
+  const hosts = new Set(allowedHosts(options.config));
+  app.use('*', async (context, next) => {
+    const header = context.req.header('Host')?.toLowerCase();
+    const addressed = new URL(context.req.url).host.toLowerCase();
+    if ((header !== undefined && !hosts.has(header)) || !hosts.has(addressed)) {
+      return context.json({ error: 'host_not_allowed' }, 403);
+    }
+    return next();
+  });
 
   /** Captures a known repository again with its current check set and stores the snapshot. */
   const recaptureRepository = async (repository: RepositoryRecord) => {
