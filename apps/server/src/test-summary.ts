@@ -9,75 +9,103 @@ export interface TestCounts {
 
 // Terminal color codes start with ESC (0x1b).
 const ansiEscape = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, 'gu');
-// Patterns use [ \t] where \s would also match line breaks: on a long run of empty lines that costs quadratic time,
-// and the output comes from the commit under review.
 
-function lastMatch(text: string, pattern: RegExp): RegExpExecArray | null {
-  let last: RegExpExecArray | null = null;
-  for (const match of text.matchAll(pattern)) last = match;
-  return last;
+// The output comes from the commit under review, so every pattern here runs in linear time: each one is anchored to
+// the start of a line or a part of one, and no two neighbouring quantifiers can match the same character. Splitting
+// and slicing do the rest.
+const nodeLine = /^[ \t]*[ℹ#] (tests|pass|fail|cancelled|skipped|todo) (\d+)[ \t]*$/u;
+const vitestPrefix = /^[ \t]*Tests[ \t]{2,}/u;
+const jestPrefix = /^Tests:[ \t]/u;
+const pytestPrefix = /^=*[ \t]*/u;
+const pytestTime = / in [\d.]+s\b/u;
+const pytestCounts = /^\d+ [a-z]+(?:, \d+ [a-z]+)*$/u;
+const countPart = /^[ \t]*(\d+) ([a-z]+)[ \t]*$/u;
+
+/** The `<number> <word>` parts of a summary, keyed by word; parts that read otherwise are left out. */
+function countsIn(parts: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const part of parts) {
+    const match = countPart.exec(part);
+    if (match?.[1] && match[2]) counts.set(match[2], Number(match[1]));
+  }
+  return counts;
 }
 
-/** The number before `word` in a comma- or bar-separated summary, or 0. */
-function countOf(summary: string, word: string): number {
-  const match = new RegExp(`(\\d+) ${word}\\b`, 'u').exec(summary);
-  return match ? Number(match[1]) : 0;
-}
-
-function nodeTest(text: string): TestCounts | null {
-  // The spec reporter prefixes its summary with ℹ, the TAP reporter with #.
-  const count = (name: string) => {
-    const match = lastMatch(text, new RegExp(`^[ \\t]*[ℹ#] ${name} (\\d+)[ \\t]*$`, 'gmu'));
-    return match ? Number(match[1]) : null;
-  };
-  const total = count('tests');
-  const passed = count('pass');
-  const failed = count('fail');
-  if (total === null || passed === null || failed === null) return null;
+function vitestOrJest(runner: 'vitest' | 'jest', parts: string[], total: number): TestCounts {
+  const counts = countsIn(parts);
+  const count = (word: string) => counts.get(word) ?? 0;
   return {
-    runner: 'node:test',
+    runner,
     total,
-    passed,
-    failed: failed + (count('cancelled') ?? 0),
-    skipped: (count('skipped') ?? 0) + (count('todo') ?? 0),
+    passed: count('passed'),
+    failed: count('failed'),
+    skipped: count('skipped') + count('todo'),
   };
 }
 
-function vitest(text: string): TestCounts | null {
-  const line = lastMatch(text, /^[ \t]*Tests[ \t]{2,}(.+?)[ \t]*\((\d+)\)[ \t]*$/gmu);
-  if (!line?.[1] || !line[2]) return null;
-  return {
-    runner: 'vitest',
-    total: Number(line[2]),
-    passed: countOf(line[1], 'passed'),
-    failed: countOf(line[1], 'failed'),
-    skipped: countOf(line[1], 'skipped') + countOf(line[1], 'todo'),
-  };
+function vitest(line: string): TestCounts | null {
+  const prefix = vitestPrefix.exec(line);
+  if (!prefix) return null;
+  // `Tests  1 failed | 127 passed | 2 skipped (130)`: the total closes the line in parentheses.
+  const rest = line.trimEnd();
+  const open = rest.lastIndexOf('(');
+  if (open <= prefix[0].length || !rest.endsWith(')')) return null;
+  const total = rest.slice(open + 1, -1);
+  if (!/^\d+$/u.test(total)) return null;
+  return vitestOrJest('vitest', rest.slice(prefix[0].length, open).split('|'), Number(total));
 }
 
-function jest(text: string): TestCounts | null {
-  const line = lastMatch(text, /^Tests:[ \t]+(.+?),[ \t]+(\d+) total[ \t]*$/gmu);
-  if (!line?.[1] || !line[2]) return null;
-  return {
-    runner: 'jest',
-    total: Number(line[2]),
-    passed: countOf(line[1], 'passed'),
-    failed: countOf(line[1], 'failed'),
-    skipped: countOf(line[1], 'skipped') + countOf(line[1], 'todo'),
-  };
+function jest(line: string): TestCounts | null {
+  if (!jestPrefix.test(line)) return null;
+  // `Tests:       1 failed, 2 skipped, 3 passed, 6 total`
+  const parts = line.slice('Tests:'.length).trimEnd().split(',');
+  const total = /^[ \t]*(\d+) total$/u.exec(parts.pop() ?? '');
+  if (!total?.[1]) return null;
+  return vitestOrJest('jest', parts, Number(total[1]));
 }
 
-function pytest(text: string): TestCounts | null {
-  const line = lastMatch(text, /^=*[ \t]*((?:\d+ [a-z]+(?:, )?)+) in [\d.]+s\b/gmu);
-  if (!line?.[1]) return null;
-  const passed = countOf(line[1], 'passed');
-  const failed = countOf(line[1], 'failed') + countOf(line[1], 'errors?');
-  const skipped = countOf(line[1], 'skipped');
+function pytest(line: string): TestCounts | null {
+  // `===== 1 failed, 5 passed, 2 skipped, 3 warnings in 0.42s =====`
+  const text = line.replace(pytestPrefix, '');
+  const end = text.search(pytestTime);
+  if (end <= 0) return null;
+  const head = text.slice(0, end);
+  if (!pytestCounts.test(head)) return null;
+  const counts = countsIn(head.split(','));
+  const count = (word: string) => counts.get(word) ?? 0;
+  const passed = count('passed');
+  const failed = count('failed') + count('error') + count('errors');
+  const skipped = count('skipped');
   return { runner: 'pytest', total: passed + failed + skipped, passed, failed, skipped };
 }
 
-/** Counts from the last summary a known runner printed, or null when none appears. */
+/** Counts from the summary printed last by a runner VeriDone knows, or null when none appears. */
 export function summarizeTestOutput(output: string): TestCounts | null {
-  const text = output.replace(ansiEscape, '');
-  return nodeTest(text) ?? vitest(text) ?? jest(text) ?? pytest(text);
+  const lines = output.replace(ansiEscape, '').split(/\r?\n/u);
+  let found: TestCounts | null = null;
+  // node:test prints its summary over several lines, which form one block from `tests` on.
+  let block: Map<string, number> | null = null;
+  for (const line of lines) {
+    const node = nodeLine.exec(line);
+    if (node?.[1] && node[2]) {
+      if (node[1] === 'tests') block = new Map();
+      if (!block) continue;
+      block.set(node[1], Number(node[2]));
+      const total = block.get('tests');
+      const passed = block.get('pass');
+      const failed = block.get('fail');
+      if (total !== undefined && passed !== undefined && failed !== undefined) {
+        found = {
+          runner: 'node:test',
+          total,
+          passed,
+          failed: failed + (block.get('cancelled') ?? 0),
+          skipped: (block.get('skipped') ?? 0) + (block.get('todo') ?? 0),
+        };
+      }
+      continue;
+    }
+    found = vitest(line) ?? jest(line) ?? pytest(line) ?? found;
+  }
+  return found;
 }

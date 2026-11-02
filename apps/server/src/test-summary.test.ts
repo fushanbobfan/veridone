@@ -75,6 +75,32 @@ describe('test summaries', () => {
     expect(summarizeTestOutput(output)).toMatchObject({ total: 2, passed: 1, failed: 1 });
   });
 
+  it('takes the summary printed last when different runners print one', () => {
+    const output = [
+      'ℹ tests 5',
+      'ℹ pass 5',
+      'ℹ fail 0',
+      '      Tests  2 failed | 1 passed (3)',
+    ].join('\n');
+    expect(summarizeTestOutput(output)).toEqual({
+      runner: 'vitest',
+      total: 3,
+      passed: 1,
+      failed: 2,
+      skipped: 0,
+    });
+  });
+
+  it('reads lines that end with a carriage return', () => {
+    expect(summarizeTestOutput('collected 1 item\r\n===== 1 passed in 0.10s =====\r\n')).toEqual({
+      runner: 'pytest',
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
   // The output comes from the commit under review; a pattern with quadratic cost would stall the server.
   it('stays fast on hostile output', () => {
     for (const hostile of [
@@ -82,6 +108,13 @@ describe('test summaries', () => {
       ' \n'.repeat(100_000),
       `Tests:${' ,'.repeat(100_000)}`,
       `${'1 a'.repeat(50_000)} in 1s`,
+      `      Tests  ${'9'.repeat(50_000)} (1)`,
+      `      Tests  x${' '.repeat(50_000)}`,
+      `Tests:${' '.repeat(50_000)}`,
+      `ℹ tests ${'9'.repeat(50_000)}x`,
+      '='.repeat(50_000),
+      '1 passed, '.repeat(20_000),
+      ` in ${'9'.repeat(50_000)}`,
     ]) {
       const started = performance.now();
       summarizeTestOutput(hostile);
