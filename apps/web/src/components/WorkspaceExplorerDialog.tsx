@@ -153,7 +153,8 @@ export function WorkspaceExplorerDialog({
                             type="button"
                             onClick={() => void approveRoot(root.id)}
                             disabled={busy !== null}
-                            aria-label={`Approve ${root.label}`}
+                            // The accessible name starts with the visible text, so none while it reads "Approving…".
+                            aria-label={busy === root.id ? undefined : `Approve ${root.label}`}
                           >
                             {busy === root.id ? 'Approving…' : 'Approve'}
                           </button>
