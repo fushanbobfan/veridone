@@ -90,4 +90,41 @@ describe('workspace restore', () => {
     ]);
     expect(onImported).toHaveBeenCalled();
   });
+
+  // A second backup chosen while the first is read would race it: the later answer could show, and be restored,
+  // for the other file.
+  it('takes no other backup while one is being read', async () => {
+    const user = userEvent.setup();
+    let answer: (response: Response) => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      ),
+    );
+
+    render(
+      <WorkspaceDialog
+        open
+        bootstrap={bootstrap}
+        onClose={() => undefined}
+        onImported={vi.fn(async () => undefined)}
+      />,
+    );
+    const input = screen.getByLabelText<HTMLInputElement>(
+      'Choose a VeriDone workspace JSON backup',
+    );
+    await user.upload(
+      input,
+      new File(['{"schemaVersion":2}'], 'backup.json', { type: 'application/json' }),
+    );
+
+    expect(input.disabled).toBe(true);
+    answer(new Response(JSON.stringify(result), { status: 200 }));
+    expect(await screen.findByText('/work/restored')).toBeTruthy();
+    expect(input.disabled).toBe(false);
+  });
 });

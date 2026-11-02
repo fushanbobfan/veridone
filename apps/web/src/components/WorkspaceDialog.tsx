@@ -171,6 +171,8 @@ export function WorkspaceDialog({
             type="file"
             accept="application/json,.json"
             aria-label="Choose a VeriDone workspace JSON backup"
+            // Disabled with the button that opens it: a second backup chosen while one is read would race it.
+            disabled={busy}
             onChange={chooseFile}
           />
           <a className="workspace-action" href="/api/v1/workspace/signing-key" download>
