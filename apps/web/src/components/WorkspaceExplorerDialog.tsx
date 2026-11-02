@@ -211,7 +211,9 @@ export function WorkspaceExplorerDialog({
                           type="button"
                           onClick={() => void reviewTool(check.id)}
                           disabled={busy !== null}
-                          aria-label={`Review the tool for ${check.label} before pinning it again`}
+                          aria-label={
+                            busy === check.id ? undefined : `Pin tool again for ${check.label}`
+                          }
                         >
                           {busy === check.id ? 'Reading the tool…' : 'Pin tool again'}
                         </button>

@@ -45,7 +45,13 @@ describe('workspace explorer checks', () => {
   it('shows the file it would pin and pins exactly that file', async () => {
     const user = userEvent.setup();
     const candidate = { path: '/opt/node-24/bin/node', sha256: 'c'.repeat(64) };
-    const onReviewTool = vi.fn(async () => candidate);
+    let answerReview: (value: typeof candidate) => void = () => undefined;
+    const onReviewTool = vi.fn(
+      () =>
+        new Promise<typeof candidate>((resolve) => {
+          answerReview = resolve;
+        }),
+    );
     const onPinTool = vi.fn(async () => undefined);
 
     render(
@@ -61,12 +67,11 @@ describe('workspace explorer checks', () => {
     );
 
     expect(screen.getByText('/opt/node/bin/node')).toBeTruthy();
-    await user.click(
-      screen.getByRole('button', {
-        name: 'Review the tool for Unit tests before pinning it again',
-      }),
-    );
+    // The accessible name starts with the visible text, as WCAG 2.5.3 asks, in both states.
+    await user.click(screen.getByRole('button', { name: 'Pin tool again for Unit tests' }));
     expect(onReviewTool).toHaveBeenCalledWith('check');
+    expect(screen.getByRole('button', { name: 'Reading the tool…' })).toBeTruthy();
+    answerReview(candidate);
     expect(await screen.findByText(candidate.path)).toBeTruthy();
     expect(screen.getByText(candidate.sha256)).toBeTruthy();
     expect(onPinTool).not.toHaveBeenCalled();
