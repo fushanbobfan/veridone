@@ -513,8 +513,30 @@ describe('setup before a check', () => {
     });
 
     expect(run.body.evidence.result).toBe('passed');
-    expect(run.body.evidence.stdout.length).toBeLessThanOrEqual(2_048);
+    expect(Buffer.byteLength(run.body.evidence.stdout)).toBeLessThanOrEqual(2_048);
     expect(run.body.evidence.stdout).toContain('c'.repeat(2000));
+  }, 60_000);
+
+  it('counts the output limit in UTF-8 bytes', async () => {
+    const fixture = await workspace();
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Accented install',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs: ['-e', 'process.stdout.write("é".repeat(512))'],
+      args: ['-e', 'process.stdout.write("é".repeat(512))'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_024,
+    });
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(Buffer.byteLength(run.body.evidence.stdout)).toBeLessThanOrEqual(1_024);
+    expect(run.body.evidence.stdout).not.toContain('�');
   }, 60_000);
 
   it('keeps redacted output within the limit, where markers lengthen it', async () => {
@@ -535,7 +557,7 @@ describe('setup before a check', () => {
     });
 
     expect(run.body.evidence.result).toBe('passed');
-    expect(run.body.evidence.stdout.length).toBeLessThanOrEqual(2_048);
+    expect(Buffer.byteLength(run.body.evidence.stdout)).toBeLessThanOrEqual(2_048);
     expect(run.body.evidence.stdout).toMatch(/^token=\[REDACTED\]\n/u);
   }, 60_000);
 

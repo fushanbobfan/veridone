@@ -30,6 +30,16 @@ function minimalEnvironment(): Record<string, string> {
   return env;
 }
 
+/** The longest start of `text` that fits in `limit` UTF-8 bytes, cut where a character begins. */
+function capBytes(text: string, limit: number): string {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= limit) return text;
+  let end = Math.max(0, limit);
+  // A byte of the form 10xxxxxx continues a character, so the cut moves back to where that character starts.
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
 /** Hashes the pinned tool file and refuses to continue unless it is the file the operator approved. */
 async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha256: string }> {
   if (!check.resolvedExecutable || !check.executableSha256) {
@@ -199,25 +209,29 @@ export async function runApprovedCheck(
     invalidReason = invalidReason.slice(0, 2_000);
   }
   // With a setup, the output carries both steps under headers; when the setup failed, it is the setup's alone.
-  // Each text stays within the check's output limit, since a backup refuses a longer one and evidence never
-  // changes: the setup's part is cut first, and the cap applies again after redaction, whose markers can be
+  // Each text stays within the check's output limit in UTF-8 bytes, since a backup refuses a longer one and evidence
+  // never changes: the setup's part is cut first, and the cap applies again after redaction, whose markers can be
   // longer than what they replace.
   const checkRan = setup !== result;
   const limit = check.maxOutputBytes;
   const joined = (setupText: string, head: string, tail: string) =>
-    `${head}${setupText.slice(0, Math.max(0, limit - head.length - tail.length))}${tail}`;
-  const stdout = redactSecrets(
-    setup
-      ? joined(
-          setup.stdout,
-          `--- setup exited with ${setup.exitCode ?? setup.state} ---\n`,
-          checkRan ? `\n--- check ---\n${result.stdout}` : '',
-        )
-      : result.stdout,
-  ).slice(0, limit);
-  const stderr = redactSecrets(
-    setup ? joined(setup.stderr, '', checkRan ? result.stderr : '') : result.stderr,
-  ).slice(0, limit);
+    `${head}${capBytes(setupText, limit - Buffer.byteLength(head) - Buffer.byteLength(tail))}${tail}`;
+  const stdout = capBytes(
+    redactSecrets(
+      setup
+        ? joined(
+            setup.stdout,
+            `--- setup exited with ${setup.exitCode ?? setup.state} ---\n`,
+            checkRan ? `\n--- check ---\n${result.stdout}` : '',
+          )
+        : result.stdout,
+    ),
+    limit,
+  );
+  const stderr = capBytes(
+    redactSecrets(setup ? joined(setup.stderr, '', checkRan ? result.stderr : '') : result.stderr),
+    limit,
+  );
   const artifactHash = await sha256Hex(
     canonicalJson({
       checkId,
