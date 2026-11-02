@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { canonicalJson, sha256Hex } from '@veridone/core';
 
 import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
-import { sanitizeForPacket } from './redaction.js';
+import { sanitizeArgsForPacket, sanitizeForPacket } from './redaction.js';
 import { summarizeTestOutput, type TestCounts } from './test-summary.js';
 
 /** The packet schemas a verifier accepts; schema 2 carries pseudonymous identifiers and a signature. */
@@ -97,6 +97,18 @@ function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
   }));
 }
 
+/** A value with every string in it, object keys included, passed through the packet sanitizer. */
+function sanitizeDeep(value: unknown): unknown {
+  if (typeof value === 'string') return sanitizeForPacket(value);
+  if (Array.isArray(value)) return value.map(sanitizeDeep);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [sanitizeForPacket(key), sanitizeDeep(child)]),
+    );
+  }
+  return value;
+}
+
 /** What each check ran, so a reader can see the command behind its evidence. */
 function publicChecks(checks: CheckRecord[], pseudonym: Pseudonym) {
   return checks.map((check) => ({
@@ -106,13 +118,13 @@ function publicChecks(checks: CheckRecord[], pseudonym: Pseudonym) {
     // The file name and the pinned SHA-256 identify the tool; the directory it sits in stays local.
     executable: sanitizeForPacket(check.executable.split(/[\\/]/u).pop() ?? check.executable),
     toolSha256: check.executableSha256,
-    args: check.args.map(sanitizeForPacket),
-    versionArgs: check.versionArgs.map(sanitizeForPacket),
+    args: sanitizeArgsForPacket(check.args),
+    versionArgs: sanitizeArgsForPacket(check.versionArgs),
     cwdRelative: sanitizeForPacket(check.cwdRelative),
     scopePaths: check.scopePaths.map(sanitizeForPacket),
     timeoutMs: check.timeoutMs,
     maxOutputBytes: check.maxOutputBytes,
-    setupArgs: check.setupArgs.map(sanitizeForPacket),
+    setupArgs: sanitizeArgsForPacket(check.setupArgs),
     setupTimeoutMs: check.setupTimeoutMs,
     definitionHash: pseudonym('check-definition', check.definitionHash),
     approvedAt: check.approvedAt,
@@ -204,7 +216,10 @@ export async function verifyAcceptancePacket(
       keyId = signature.data.keyId;
       try {
         const publicKey = createPublicKey(signature.data.publicKey);
-        if (keyIdOf(publicKey) !== keyId) {
+        // Node verifies with whatever key type the PEM holds, so an RSA key labeled Ed25519 would pass.
+        if (publicKey.asymmetricKeyType !== 'ed25519') {
+          issues.push('The packet signature is not an Ed25519 signature.');
+        } else if (keyIdOf(publicKey) !== keyId) {
           issues.push('The signature names a key other than the one it carries.');
         } else {
           signed = verify(
@@ -264,8 +279,12 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
     rawVerdicts[0]?.contractVersion ??
     rawEvidence[0]?.contractVersion ??
     repository?.snapshot.contractVersion;
-  const contract =
+  // A restored backup can carry any contract text, so the contract is sanitized like the rest.
+  const recordedContract =
     contracts.find((candidate) => candidate.version === contractVersion) ?? contracts[0] ?? null;
+  const contract = recordedContract
+    ? (sanitizeDeep(recordedContract) as typeof recordedContract)
+    : null;
   // The repository id hashes the local path, and the fingerprint, worktree, claim, definition and artifact hashes
   // each mix local data with fields a packet carries, so each could confirm a guessed path or file. They appear as
   // HMACs under a key only this workspace holds; equal values stay equal, so a packet's bindings can still be

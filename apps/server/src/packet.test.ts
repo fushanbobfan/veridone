@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { canonicalJson, sha256Hex } from '@veridone/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { VeriDoneDatabase } from './database.js';
@@ -12,22 +13,25 @@ import {
   workspaceSigningKey,
 } from './packet.js';
 import { boundWorkspace } from './test-fixtures.js';
-import { exportWorkspace } from './workspace.js';
+import { exportWorkspace, importWorkspace } from './workspace.js';
 
 type Packet = Awaited<ReturnType<typeof buildAcceptancePacket>>['packet'];
 
 /**
  * Changes a packet's title the way a careful forger would: the payload hash recomputed and, with `resign`, the
- * payload signed again with a key of the forger's own, embedded in place of the workspace key.
+ * payload signed again with a key of the forger's own, of that type, embedded in place of the workspace key.
  */
-function forge(packet: Packet, resign = false): Packet {
+function forge(packet: Packet, resign: 'ed25519' | 'rsa' | null = null): Packet {
   const forged = structuredClone(packet);
   forged.workItem.title = 'Forged title';
   const { manifest: _manifest, ...payload } = forged;
   const canonical = packetCanonicalJson(payload);
   forged.manifest.payloadHash = createHash('sha256').update(canonical).digest('hex');
   if (resign) {
-    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const { privateKey, publicKey } =
+      resign === 'rsa'
+        ? generateKeyPairSync('rsa', { modulusLength: 2048 })
+        : generateKeyPairSync('ed25519');
     forged.manifest.signature = {
       algorithm: 'ed25519',
       keyId: createHash('sha256')
@@ -276,7 +280,7 @@ describe('acceptance packets', () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);
     const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
-    const resigned = forge(packet, true);
+    const resigned = forge(packet, 'ed25519');
     const key = workspaceSigningKey(fixture.database);
 
     // The forger's own signature is sound; only a key the reader trusts tells the two apart.
@@ -292,6 +296,80 @@ describe('acceptance packets', () => {
       trusted: false,
       issues: expect.arrayContaining(['The packet is not signed by a trusted key.']),
     });
+  }, 30_000);
+
+  it('refuses a signature made with a key other than Ed25519', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
+
+    await expect(verifyAcceptancePacket(forge(packet, 'rsa'))).resolves.toMatchObject({
+      valid: false,
+      signed: false,
+      issues: expect.arrayContaining(['The packet signature is not an Ed25519 signature.']),
+    });
+  }, 30_000);
+
+  it('keeps a secret passed as a separate argument out of every format', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const approved = await fixture.post('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Deploy preview',
+      kind: 'test',
+      executable: process.execPath,
+      setupArgs: ['--password', 'setup-secret-value'],
+      args: ['--token', 'check-secret-value'],
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+    });
+    expect(approved.status).toBe(201);
+
+    const { json, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+
+    for (const format of [json, markdown, html]) {
+      expect(format).not.toContain('setup-secret-value');
+      expect(format).not.toContain('check-secret-value');
+    }
+  }, 30_000);
+
+  it('sanitizes a contract that a restored backup carried', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const backup = (await exportWorkspace(fixture.database)) as {
+      data: { contracts: Array<Record<string, unknown>> };
+      integrity?: unknown;
+    };
+    // Listed by creation time, a contract dated before the default one is the one a packet picks.
+    backup.data.contracts.push({
+      id: 'restored-contract',
+      version: 'default-v1',
+      title: 'Ship it password=contract-secret-value',
+      criteria: [
+        { id: 'notes', title: 'Read /home/example/private-project/notes.md', required: true },
+      ],
+      createdAt: '2020-01-01T00:00:00.000Z',
+    });
+    const { integrity: _integrity, ...payload } = backup;
+    await importWorkspace(fixture.database, {
+      ...payload,
+      integrity: { algorithm: 'sha256', payloadHash: await sha256Hex(canonicalJson(payload)) },
+    });
+
+    const { packet, json, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+
+    expect(packet.contract?.id).toBe('restored-contract');
+    for (const format of [json, markdown, html]) {
+      expect(format).not.toContain('contract-secret-value');
+      expect(format).not.toContain('private-project');
+    }
   }, 30_000);
 
   it('refuses a schema-2 packet whose signature was removed', async () => {
