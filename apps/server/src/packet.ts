@@ -1,7 +1,14 @@
+import { createHmac } from 'node:crypto';
+
 import { canonicalJson, sha256Hex } from '@veridone/core';
 
 import type { EvidenceRecord, VeriDoneDatabase } from './database.js';
 import { sanitizeForPacket } from './redaction.js';
+
+/** The packet schemas a verifier accepts; schema 2 carries pseudonymous identifiers. */
+const packetSchemaVersions = new Set([1, 2]);
+
+type Pseudonym = (kind: string, value: string) => string;
 
 function escapeHtml(value: string): string {
   return sanitizeForPacket(value)
@@ -19,13 +26,17 @@ function escapeMarkdown(value: string): string {
     .replaceAll('>', '&gt;');
 }
 
-function publicEvidence(evidence: EvidenceRecord[]) {
+function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
   // The tool's SHA-256 identifies it; its local path stays out of the packet.
   return evidence.map(({ stdout: _stdout, stderr: _stderr, toolPath: _toolPath, ...item }) => ({
     ...item,
     label: sanitizeForPacket(item.label),
     toolVersion: item.toolVersion ? sanitizeForPacket(item.toolVersion) : null,
     invalidReason: item.invalidReason ? sanitizeForPacket(item.invalidReason) : null,
+    repositoryId: pseudonym('repository', item.repositoryId),
+    snapshotFingerprint: pseudonym('fingerprint', item.snapshotFingerprint),
+    checkDefinitionVersion: pseudonym('check-definitions', item.checkDefinitionVersion),
+    artifactHashes: item.artifactHashes.map((hash) => pseudonym('artifact', hash)),
   }));
 }
 
@@ -78,7 +89,11 @@ export async function verifyAcceptancePacket(input: unknown): Promise<PacketVeri
   if (canonicalJson(expectedArtifacts) !== canonicalJson(manifestArtifacts)) {
     issues.push('Evidence artifact hashes do not match the manifest.');
   }
-  if (packet.schemaVersion !== 1 || packet.application !== 'veridone') {
+  if (
+    typeof packet.schemaVersion !== 'number' ||
+    !packetSchemaVersions.has(packet.schemaVersion) ||
+    packet.application !== 'veridone'
+  ) {
     issues.push('Packet identity or schema version is invalid.');
   }
 
@@ -101,32 +116,49 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
   const generatedAt =
     rawVerdicts[0]?.decidedAt ?? rawEvidence[0]?.completedAt ?? rawWorkItem.updatedAt;
   const contract = database.listContracts()[0] ?? null;
+  // The repository id hashes the local path, and the fingerprint, claim, definition and artifact hashes each mix
+  // local data with fields a packet carries, so each could confirm a guessed path. They appear as HMACs under a key
+  // only this workspace holds; equal values stay equal, so a packet's bindings can still be compared.
+  const key = database.workspaceKey('packet-pseudonyms');
+  const pseudonym: Pseudonym = (kind, value) =>
+    createHmac('sha256', key).update(`${kind}:${value}`).digest('hex');
   const workItem = {
     ...rawWorkItem,
     title: sanitizeForPacket(rawWorkItem.title),
     claim: sanitizeForPacket(rawWorkItem.claim),
     sourceLabel: sanitizeForPacket(rawWorkItem.sourceLabel),
     sourceRef: sanitizeForPacket(rawWorkItem.sourceRef),
+    repositoryId: rawWorkItem.repositoryId
+      ? pseudonym('repository', rawWorkItem.repositoryId)
+      : null,
+    snapshotFingerprint: rawWorkItem.snapshotFingerprint
+      ? pseudonym('fingerprint', rawWorkItem.snapshotFingerprint)
+      : null,
+    claimHash: pseudonym('claim', rawWorkItem.claimHash),
   };
-  const evidence = publicEvidence(rawEvidence);
+  const evidence = publicEvidence(rawEvidence, pseudonym);
   const verdicts = rawVerdicts.map((verdict) => ({
     ...verdict,
     note: sanitizeForPacket(verdict.note),
     overrideReason: verdict.overrideReason ? sanitizeForPacket(verdict.overrideReason) : null,
+    snapshotFingerprint: pseudonym('fingerprint', verdict.snapshotFingerprint),
+    claimHash: verdict.claimHash ? pseudonym('claim', verdict.claimHash) : null,
   }));
+  const fingerprint = repository ? pseudonym('fingerprint', repository.snapshot.fingerprint) : null;
   const payload = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     application: 'veridone',
     privacyMode: 'strict',
+    identifiers: 'hmac-sha256-workspace-pseudonyms',
     generatedAt,
     workItem,
     repository: repository
       ? {
-          id: repository.id,
+          id: pseudonym('repository', repository.id),
           name: sanitizeForPacket(repository.name),
           branch: repository.snapshot.branch ? sanitizeForPacket(repository.snapshot.branch) : null,
           head: repository.snapshot.head,
-          fingerprint: repository.snapshot.fingerprint,
+          fingerprint,
           worktreeHash: repository.snapshot.worktreeHash,
           diffStats: repository.snapshot.diffStats,
           statusEntries: repository.snapshot.statusEntries.map(sanitizeForPacket),
@@ -172,7 +204,7 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
 - Source: ${escapeMarkdown(workItem.sourceLabel)}
 - Repository: ${escapeMarkdown(repository?.name ?? 'Unlinked')}
 - HEAD: ${repository?.snapshot.head ?? 'Unbound'}
-- Fingerprint: ${repository?.snapshot.fingerprint ?? 'Unbound'}
+- Fingerprint: ${fingerprint ?? 'Unbound'}
 - Contract: ${escapeMarkdown(contract?.title ?? 'No contract')} (${contract?.version ?? 'n/a'})
 - Verdict: ${latestVerdict?.decision ?? 'No human verdict'}
 - Evidence items: ${evidence.length}

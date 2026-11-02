@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -209,6 +209,21 @@ const migrationEight = `
   ALTER TABLE verdicts ADD COLUMN claim_hash TEXT;
 `;
 
+// Key material this workspace keeps for itself, created on first use; workspace backups leave it out.
+const migrationNine = `
+  CREATE TABLE workspace_keys (
+    purpose TEXT PRIMARY KEY,
+    material TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+`;
+
+export type WorkspaceKeyPurpose = 'packet-pseudonyms';
+
+const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
+  'packet-pseudonyms': () => randomBytes(32).toString('hex'),
+};
+
 /** SHA-256 of the title and claim a reviewer reads before deciding. */
 export function claimHash(workItem: { title: string; claim: string }): string {
   return createHash('sha256')
@@ -374,6 +389,7 @@ export class VeriDoneDatabase {
       { version: 6, sql: migrationSix },
       { version: 7, sql: migrationSeven },
       { version: 8, sql: migrationEight },
+      { version: 9, sql: migrationNine },
     ];
 
     for (const migration of migrations) {
@@ -409,6 +425,19 @@ export class VeriDoneDatabase {
 
   close(): void {
     this.connection.close();
+  }
+
+  /** This workspace's key material for one purpose, created on first use. */
+  workspaceKey(purpose: WorkspaceKeyPurpose): string {
+    const select = this.connection.prepare('SELECT material FROM workspace_keys WHERE purpose = ?');
+    const existing = select.get(purpose) as { material: string } | undefined;
+    if (existing) return existing.material;
+    this.connection
+      .prepare(
+        'INSERT OR IGNORE INTO workspace_keys (purpose, material, created_at) VALUES (?, ?, ?)',
+      )
+      .run(purpose, createKeyMaterial[purpose](), new Date().toISOString());
+    return (select.get(purpose) as { material: string }).material;
   }
 
   addApprovedRoot(canonicalPath: string, label = path.basename(canonicalPath)): ApprovedRootRecord {
