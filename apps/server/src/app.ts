@@ -203,17 +203,22 @@ export function createApp(options: AppOptions): Hono {
     return context.body(`${JSON.stringify(document, null, 2)}\n`);
   });
 
-  app.post(
-    '/api/v1/workspace/import',
-    bodyLimit({
-      maxSize: 25_000_000,
-      onError: (context) => context.json({ error: 'workspace_too_large' }, 413),
-    }),
-    async (context) => {
-      const result = await importWorkspace(options.database, await context.req.json());
-      return context.json(result, 201);
-    },
+  const workspaceBodyLimit = bodyLimit({
+    maxSize: 25_000_000,
+    onError: (context) => context.json({ error: 'workspace_too_large' }, 413),
+  });
+
+  // What a restore of this backup would add, found by running the restore and rolling it back.
+  app.post('/api/v1/workspace/preview', workspaceBodyLimit, async (context) =>
+    context.json(
+      await importWorkspace(options.database, await context.req.json(), { dryRun: true }),
+    ),
   );
+
+  app.post('/api/v1/workspace/import', workspaceBodyLimit, async (context) => {
+    const result = await importWorkspace(options.database, await context.req.json());
+    return context.json(result, 201);
+  });
 
   app.post('/api/v1/roots', async (context) => {
     const request = rootRequestSchema.parse(await context.req.json());

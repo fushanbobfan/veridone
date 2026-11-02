@@ -407,3 +407,38 @@ describe('restored roots wait for the operator', () => {
     );
   }, 30_000);
 });
+
+describe('restore preview', () => {
+  it('lists what a restore would add and writes nothing', async () => {
+    const { backup, database: source } = await decidedWorkspace();
+    const target = emptyDatabase();
+
+    const preview = await importWorkspace(target, backup, { dryRun: true });
+
+    expect(target.listRoots()).toEqual([]);
+    expect(target.listWorkItems()).toEqual([]);
+    expect(target.listVerdicts()).toEqual([]);
+    expect(target.listEvidence()).toEqual([]);
+    expect(preview.added.roots.map((root) => root.path)).toEqual(
+      source.listRoots().map((root) => root.path),
+    );
+    expect(preview.added.workItems.map((item) => item.title)).toEqual(['Fix the importer']);
+    expect(preview.added.checks.map((check) => check.label)).toEqual(['Deterministic check']);
+    expect(preview.imported.verdicts).toBe(2);
+
+    const restored = await importWorkspace(target, backup);
+    expect(restored.imported).toEqual(preview.imported);
+    expect(target.listVerdicts()).toHaveLength(2);
+  }, 30_000);
+
+  it('reports a conflicting backup before anything is restored', async () => {
+    const { backup, database } = await decidedWorkspace();
+    const rewritten = structuredClone(backup);
+    const verdict = rewritten.data.verdicts[0];
+    if (verdict) verdict.decision = 'rejected';
+
+    await expect(
+      importWorkspace(database, await resealed(rewritten), { dryRun: true }),
+    ).rejects.toBeInstanceOf(WorkspaceConflictError);
+  }, 30_000);
+});

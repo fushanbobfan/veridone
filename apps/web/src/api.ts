@@ -305,9 +305,29 @@ export async function createVerdict(
   });
 }
 
+/** What a restore adds or found already present, and the added records the operator reviews by name. */
+export interface RestoreResultDto {
+  imported: Record<string, number>;
+  unchanged: Record<string, number>;
+  added: {
+    roots: Array<{ path: string; label: string }>;
+    repositories: Array<{ name: string; path: string }>;
+    checks: Array<{ label: string; executable: string }>;
+    workItems: Array<{ title: string }>;
+  };
+}
+
+/** Runs a restore and rolls it back, so the operator sees what it would add before confirming. */
+export async function previewWorkspaceDocument(
+  document: unknown,
+  csrfToken: string,
+): Promise<RestoreResultDto> {
+  return mutate('/api/v1/workspace/preview', csrfToken, document);
+}
+
 export async function importWorkspaceDocument(
   document: unknown,
   csrfToken: string,
-): Promise<{ imported: Record<string, number>; unchanged: Record<string, number> }> {
+): Promise<RestoreResultDto> {
   return mutate('/api/v1/workspace/import', csrfToken, document);
 }
