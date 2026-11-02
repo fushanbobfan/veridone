@@ -564,6 +564,8 @@ describe('known local paths', () => {
     for (let round = 0; round < 2_000; round += 1) {
       const index = Math.floor(random() * knownPaths.length);
       const separator = index === 2 ? pick(['\\', '/']) : '/';
+      // The first part may also go on in the known path's last segment.
+      const glue = random() < 0.25 ? '' : separator;
       const parts = Array.from({ length: 1 + Math.floor(random() * 3) }, () =>
         Array.from({ length: 1 + Math.floor(random() * 5) }, () =>
           random() < 0.15 ? pick(escapes) : pick(characters),
@@ -572,7 +574,9 @@ describe('known local paths', () => {
       const at = Math.floor(random() * parts.length);
       parts[at] = `${parts[at] ?? ''}MARKER`;
       const [before, after] = pick(contexts);
-      const text = `${before}${knownPaths[index] ?? ''}${separator}${parts.join(separator)}${after}`;
+      const text = `${before}${knownPaths[index] ?? ''}${glue}${parts.join(separator)}${after}`;
+      // A letter of a script other than Latin right after a known path reads as prose, as the docs state.
+      if (glue === '' && /^(?!\p{Script=Latin})\p{L}/u.test(parts[0] ?? '')) continue;
       if (sanitizeForPacket(text).includes('MARKER')) continue;
       checked += 1;
       expect(sanitizers[index]?.(text), text).not.toContain('MARKER');
@@ -638,9 +642,31 @@ describe('known local paths', () => {
     // A backslash before a line break or a tab escapes it, so the value goes on.
     expect(known(`TOKEN=/home/bob/${backslash}${newline}secret`)).toBe('TOKEN=[REDACTED]');
     expect(known(`TOKEN=/home/bob/${backslash}${tab}secret`)).toBe('TOKEN=[REDACTED]');
-    // The known path ends in the assignment's own name, or sits inside a bearer value.
+    // The known path ends in the assignment's own name, or sits inside a bearer value, a short one included.
     expect(known('/work/token=supersecret')).toBe('[LOCAL_PATH]=[REDACTED]');
     expect(known('Bearer abc-/work/acme/secret')).toBe('Bearer [REDACTED]');
+    expect(known('Bearer abc-/work/acme/x')).toBe('Bearer [REDACTED]');
+  });
+
+  it("reads on where the text continues a known path's last segment", () => {
+    const known = createPacketSanitizer(
+      ['/Users/bob/project', String.raw`C:\Users\Bob Smith\project`, '/home/bob'],
+      { caseInsensitive: false },
+    );
+    // A copy of a folder, as a file manager names it, holds the known name and more.
+    expect(known('see /Users/bob/project copy/secret.txt now')).toBe('see [LOCAL_PATH] now');
+    expect(known(String.raw`see C:\Users\Bob Smith\project copy\secret.txt now`)).toBe(
+      'see [LOCAL_PATH] now',
+    );
+    expect(known('see /home/bob(1)/secret.txt now')).toBe('see [LOCAL_PATH] now');
+    // A POSIX name may go on with a backslash, a colon or a semicolon.
+    expect(known(String.raw`see /home/bob\secret.txt now`)).toBe('see [LOCAL_PATH] now');
+    expect(known('see /home/bob:secret.txt now')).toBe('see [LOCAL_PATH] now');
+    expect(known('see /home/bob;secret now')).toBe('see [LOCAL_PATH] now');
+    // Prose after a path stays: punctuation, a line and column, and words no separator follows.
+    expect(known('(see /home/bob), /home/bob. Then /home/bob:12:5 and /home/bob more')).toBe(
+      '(see [LOCAL_PATH]), [LOCAL_PATH]. Then [LOCAL_PATH]:12:5 and [LOCAL_PATH] more',
+    );
   });
 
   it('reads private-use characters as text and noncharacters as U+FFFD', () => {
@@ -652,6 +678,10 @@ describe('known local paths', () => {
     expect(known(`see /home/bob/${glyph}secret.txt now`)).toBe('see [LOCAL_PATH] now');
     expect(known(`a ${posixMark} b ${windowsMark} c`)).toBe(`a ${replacement} b ${replacement} c`);
     expect(known(`see /home/bob/${windowsMark}secret.txt now`)).toBe('see [LOCAL_PATH] now');
+    // So they read with no known path, and in a known path that holds one.
+    expect(createPacketSanitizer([])(`a ${posixMark} b`)).toBe(`a ${replacement} b`);
+    const marked = createPacketSanitizer([`/work/${posixMark}`], { caseInsensitive: false });
+    expect(marked(`see /work/${posixMark}/secret.txt now`)).toBe('see [LOCAL_PATH] now');
   });
 
   it('reads what follows a known path by the rules of the system its root is written for', () => {
@@ -674,17 +704,20 @@ describe('known local paths', () => {
     expect(known(String.raw`see /home/bob/notes\draft x/y.txt now`)).toBe('see [LOCAL_PATH] now');
   });
 
-  it('leaves a known path alone in a remote URL and in a relative folder named @fs', () => {
+  it('leaves a known path alone in a remote URL and in a relative path such as @fs/x or @/x', () => {
     const known = createPacketSanitizer(['/work/acme'], { caseInsensitive: false });
     for (const text of [
       'GET https://[2001:db8::1]/work/acme/status',
       'cat fixtures/@fs/work/acme/status',
+      'import "@/work/acme/status"',
     ]) {
       expect(known(text)).toBe(text);
     }
     expect(known('GET http://localhost:5173/@fs/work/acme/x.ts')).toBe(
       'GET http://localhost:5173/@fs[LOCAL_PATH]',
     );
+    // A bracket that closes a log prefix, unlike one that closes a URL's IPv6 host, comes before a path.
+    expect(known('[INFO]/work/acme/secret.txt')).toBe('[INFO][LOCAL_PATH]');
   });
 
   it('withholds a text longer than a million characters', () => {

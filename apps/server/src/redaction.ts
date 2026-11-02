@@ -70,17 +70,18 @@ const homeRelativePath =
 //   JSON writes a character past ASCII (`\u5ba2`), or escaped with a backslash, as a shell writes it (`acme\ \(old\)`);
 // - with a Windows drive named as a POSIX shell on Windows names it (`/d/x`, `/mnt/d/x`, `/cygdrive/d/x`), and a path
 //   under the home directory written from `~`, `$HOME` or `%USERPROFILE%`.
-// A match starts where no word character, period or separator comes before it, or right after a command-line flag
-// that opens a word (`-I/x`), a local URL's host (`file://localhost/x`, `vscode://file/x`) or Vite's `/@fs` on a local
-// host; a path inside a longer relative path or a remote URL stays. A separator never comes just before the start, so a
-// run of separators is read once; a drive letter may follow anything, as in `/ID:\x`. The known path's last segment
-// must end there: a Latin letter, digit, mark, `_` or `-` after it continues a longer name, so `importer` leaves
-// `importer-v2` and `importeré` alone, while a Chinese character after it reads as prose. What follows a separator then
-// belongs to the path, read at least as far as the general patterns read it, by the rules of Windows or POSIX below;
-// after a quote, the match runs to the closing quote. The known paths share prefix trees, so a match attempt follows
-// one path through a tree. The first character of a segment takes no shell escape, which a separator run could also
-// claim, and a `%` has a second reading only where its encoded form cannot be mistaken for it, so no text can be read
-// two ways and a failed attempt costs time in proportion to the path.
+// A match starts where no word character, period, separator, `@` or URL's bracketed host comes before it, or right
+// after a command-line flag that opens a word (`-I/x`), a local URL's host (`file://localhost/x`, `vscode://file/x`) or
+// Vite's `/@fs` on a local host; a path inside a longer relative path, such as `@/x`, or a remote URL stays. A
+// separator never comes just before the start, so a run of separators is read once; a drive letter may follow
+// anything, as in `/ID:\x`. The known path's last segment must end there: a Latin letter, digit, mark, `_` or `-`
+// after it continues a longer name, so `importer` leaves `importer-v2` and `importeré` alone, while a letter of
+// another script after it, such as a Chinese character, reads as prose. What follows then belongs to the path, read at
+// least as far as the general patterns read it, by the rules of Windows or POSIX below; after a quote, the match runs
+// to the closing quote. The known paths share prefix trees, so a match attempt follows one path through a tree. The
+// first character of a segment takes no shell escape, which a separator run could also claim, and a `%` has a second
+// reading only where its encoded form cannot be mistaken for it, so no text can be read two ways and a failed attempt
+// costs time in proportion to the path.
 //
 // V8 compiles a regular expression on first use, and it refuses one past a size limit or a sequence deep enough to
 // exhaust its stack, and compiles many separator loops in one pattern slowly. A known path longer than 512 characters
@@ -92,7 +93,7 @@ const treeMaxLength = 100_000;
 const treeMaxSeparators = 1_000;
 const separatorRun = String.raw`[\\/]+`;
 // The lookbehinds run only where a root's first character follows, so each reads back over one word at most once.
-const rootStart = String.raw`(?:(?<![\w.\\/\]])|(?<=(?<![\w.\\/-])-{1,2}[A-Za-z][\w-]*)|(?<=file:\/\/localhost|vscode:\/\/file|\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?\/@fs))`;
+const rootStart = String.raw`(?:(?<![\w.\\/@])(?<!\/\/\[[^\]\s\/]*\])|(?<=(?<![\w.\\/-])-{1,2}[A-Za-z][\w-]*)|(?<=file:\/\/localhost|vscode:\/\/file|\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?\/@fs))`;
 const posixRoot = String.raw`(?=[\\/])${rootStart}${separatorRun}`;
 const homeRoot = String.raw`(?=[~$%])${rootStart}(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE)${separatorRun}`;
 const knownPathEnd = String.raw`(?![\p{Script=Latin}\p{M}\p{Nd}_-]|[.%][\p{L}\p{N}])`;
@@ -127,41 +128,51 @@ const markInText = new RegExp(`[${marks}]`, 'gu');
 const replacementCharacter = String.fromCharCode(0xfffd);
 
 /**
- * What follows a separator after a known path, read as a Windows or a POSIX path. A mark ends it, since it stands for
- * the next known path. In a credential value, `inValue`, the value's own rules read each apostrophe and the separators
- * after the last segment, as they read them after any other character: a quote opens a quoted part and a backslash
- * escapes the character after it.
+ * What follows a known path inside it, read as a Windows or a POSIX path. A mark ends it, since it stands for the next
+ * known path. The known path's own last segment may go on first, as the general patterns read a segment: with spaces
+ * up to a later separator, as in `project copy/x`, or without them from a character prose does not put right after a
+ * word, as in `bob(1)`, `bob\x` or `bob:x`, when a letter or digit comes in it. In a credential value, `inValue`, the
+ * value's own rules read each apostrophe and the separators after the last segment, as they read them after any other
+ * character: a quote opens a quoted part and a backslash escapes the character after it.
  */
 function restPattern(windows: boolean, inValue = false): string {
   const apostrophe = inValue ? "'" : '';
+  let name: string;
+  let inner: string;
+  let separator: string;
   if (windows) {
-    const name = String.raw`[^\s\\/<>:"${apostrophe}${marks}]`;
-    const first = String.raw`(?:${name}|:)`;
-    const inner = String.raw`[^\\/<>"${apostrophe}\n${marks}]`;
-    const last = String.raw`(?:${name}|${restColon})`;
-    const segments = String.raw`(?:${separatorRun}(?:${first}(?:${inner}*${first})?(?=[\\/])|${last}+))*`;
-    return inValue ? segments : String.raw`${segments}[\\/]*`;
+    name = String.raw`[^\s\\/<>:"${apostrophe}${marks}]`;
+    inner = String.raw`[^\\/<>"${apostrophe}\n${marks}]`;
+    separator = String.raw`[\\/]`;
+  } else {
+    const backslash = String.raw`\\(?![\s${escapable}\/])`;
+    const quote = inValue ? '' : `${restQuote}|`;
+    name = String.raw`(?:[^\s\\/<>"':${marks}]|${quote}${shellEscape}|${backslash})`;
+    inner = String.raw`(?:[^\\/<>"'\n${marks}]|${quote}${shellEscape}|${backslash})`;
+    separator = String.raw`\\?\/`;
   }
-  const slash = String.raw`(?:\\?\/)`;
-  const backslash = String.raw`\\(?![\s${escapable}\/])`;
-  const quote = inValue ? '' : `${restQuote}|`;
-  const name = String.raw`(?:[^\s\\/<>"':${marks}]|${quote}${shellEscape}|${backslash})`;
   const first = String.raw`(?:${name}|:)`;
-  const inner = String.raw`(?:[^\\/<>"'\n${marks}]|${quote}${shellEscape}|${backslash})`;
   const last = String.raw`(?:${name}|${restColon})`;
-  const segments = String.raw`(?:${slash}+(?:${first}(?:${inner}*${first})?(?=${slash})|${last}+))*`;
-  return inValue ? segments : `${segments}${slash}*`;
+  const nameStart = String.raw`[^\p{L}\p{N}\s"${windows ? '' : "'"}]`;
+  const goesOn = String.raw`(?:${inner}*${first}(?=${separator})|(?=${nameStart})(?=[^\s<>"${marks}]*?[\p{L}\p{N}])${last}+)?`;
+  const segments = String.raw`(?:(?:${separator})+(?:${first}(?:${inner}*${first})?(?=${separator})|${last}+))*`;
+  return inValue ? `${goesOn}${segments}` : `${goesOn}${segments}(?:${separator})*`;
 }
 const shellEscapable = new Set(' !"#$&\'()*;<>?[]^`{|}~');
 const valueRests = `${posixMark}${restPattern(false, true)}|${windowsMark}${restPattern(true, true)}`;
+const pathRests = `${posixMark}${restPattern(false)}|${windowsMark}${restPattern(true)}`;
 const secretAssignmentAfterMarks = secretAssignmentPattern(`${valueRests}|`);
+// A bearer value needs eight characters; a mark counts as at least that many, for the path it stands for, and the
+// value takes the whole path, as a bearer value has no quoting of its own.
 const bearerAfterMarks = new RegExp(
-  String.raw`\bBearer\s+(?=[A-Za-z0-9._~+/${marks}-]{8})(?:${valueRests}|[A-Za-z0-9._~+/-])+=*`,
+  String.raw`\bBearer\s+(?=[A-Za-z0-9._~+/-]{0,7}[${marks}]|[A-Za-z0-9._~+/-]{8})(?:${pathRests}|[A-Za-z0-9._~+/-])+=*`,
   'gu',
 );
-const keptName = String.raw`(?:[\w.-]+(?=["']?\s*[:=]))?`;
+// A name the first pass kept after a mark starts and ends with a word character and comes before an assignment.
+// Nothing else after a mark starts with one, since a word character there would have continued the known path's name.
+const keptName = String.raw`\w(?:[\w.-]*\w)?(?=["']?\s*[:=])`;
 const markedPath = new RegExp(
-  String.raw`((?<!\\)"|'|\\")?(?:${posixMark}${keptName}${restPattern(false)}|${windowsMark}${keptName}${restPattern(true)})`,
+  String.raw`((?<!\\)"|'|\\")?(?:${posixMark}(?:${keptName}|${restPattern(false)})|${windowsMark}(?:${keptName}|${restPattern(true)}))`,
   'gu',
 );
 const secretNameEnd = new RegExp(`(?:${secretWord})$`, 'iu');
@@ -406,8 +417,12 @@ export function createPacketSanitizer(
   let total = 0;
   for (const knownPath of knownPaths) {
     if (knownPath.length > knownPathMaxLength) continue;
-    // macOS may write a name composed or decomposed, so each known path goes in both ways.
-    for (const form of new Set([knownPath.normalize('NFC'), knownPath.normalize('NFD')])) {
+    // macOS may write a name composed or decomposed, so each known path goes in both ways. A mark in it reads as
+    // U+FFFD, as it does in the text.
+    const forms = [knownPath.normalize('NFC'), knownPath.normalize('NFD')].map((form) =>
+      form.replace(markInText, replacementCharacter),
+    );
+    for (const form of new Set(forms)) {
       const tokens = knownPathTokens(form);
       if (!tokens || total + form.length > knownPathsMaxLength) continue;
       sequences.push(tokens);
@@ -440,7 +455,6 @@ export function createPacketSanitizer(
     separators += tokensSeparators;
   }
   closeTree();
-  if (patterns.length === 0) return sanitizeForPacket;
   return (value) =>
     withinLimits(value, (text) => {
       let marked = text.replace(markInText, replacementCharacter);
