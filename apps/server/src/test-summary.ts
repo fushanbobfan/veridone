@@ -28,7 +28,10 @@ const vitestPrefix = /^[ \t]*Tests[ \t]{2,}/u;
 const jestPrefix = /^Tests:[ \t]/u;
 const pytestPrefix = /^=*[ \t]*/u;
 const pytestTime = / in [\d.]+s\b/u;
-const pytestCounts = /^\d+ [a-z]+(?:, \d+ [a-z]+)*$/u;
+// pytest adds `157 subtests passed` to its summary at some verbosity settings and leaves it out at the default. `countsIn`
+// leaves that part out too, so the passed count reads the same either way. Any other part of two words, such as `2 tests
+// collected`, is no summary.
+const pytestCounts = /^\d+ [a-z]+(?:, \d+ (?:subtests passed|[a-z]+))*$/u;
 const countPart = /^[ \t]*(\d+) ([a-z]+)[ \t]*$/u;
 
 /** The `<number> <word>` parts of a summary, keyed by word; parts that read otherwise are left out. */

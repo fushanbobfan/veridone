@@ -122,6 +122,7 @@ describe('test summaries', () => {
       `Tests:${' ,'.repeat(32_000)}`,
       `${'1 a'.repeat(21_000)} in 1s`,
       `${'1 a, '.repeat(13_000)}x in 1s`,
+      `1 a${', 1 subtests passed'.repeat(3_400)}x in 1s`,
       `Tests: 1 a,${' '.repeat(60_000)}x`,
       `      Tests  ${'9'.repeat(50_000)} (1)`,
       `      Tests  x${' '.repeat(50_000)}`,
@@ -163,6 +164,22 @@ describe('test summaries', () => {
       ['1 passed in 1sx', null],
       ['1  in 1s', null],
       ['x 1 passed in 1s', null],
+      // pytest prints its passed subtests apart at some verbosity settings, and they stay out of the counts.
+      ['179 passed, 157 subtests passed in 1.15s', counts('pytest', 179, 179)],
+      [
+        '== 2 failed, 2 passed, 1 skipped, 5 subtests passed in 0.22s ==',
+        counts('pytest', 5, 2, 2, 1),
+      ],
+      [
+        '3 failed, 1 passed, 2 skipped, 1 xfailed, 1 subtests passed in 1s',
+        counts('pytest', 6, 1, 3, 2),
+      ],
+      ['1 subtests passed in 1s', null],
+      ['1 passed, 1 subtests failed in 1s', null],
+      ['1 passed, 1 other passed in 1s', null],
+      // What `pytest --collect-only` prints is no summary, and leaves the one before it standing.
+      ['2 tests collected in 0.02s', null],
+      ['5 passed in 1s\n2 tests collected in 0.02s', counts('pytest', 5, 5)],
       // `K` erases the line and only `m` closes a color code, so this code stays and the line holds no summary.
       [`${String.fromCharCode(0x1b)}[2K1 passed in 1s`, null],
     ];

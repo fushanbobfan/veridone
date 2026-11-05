@@ -11,7 +11,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - A check can name setup arguments that its pinned tool runs in the checkout before the check, with a ten-minute timeout, for example a frozen `pnpm install`. A setup that fails ends the run with its own exit code and output, files it writes outside ignored paths mark the evidence mutated, and a check without setup keeps its definition hash. Stored stdout and stderr each stay within the check's output limit in UTF-8 bytes, with the setup's part cut first.
 - Restoring a backup first lists the roots, repositories, checks, and work items it would add, with the evidence and verdict counts, and writes nothing until the operator confirms; `POST /api/v1/workspace/preview` returns the same list.
 - **Roots** in the workspace explorer lists each root with its state and approves a root restored from a backup.
-- Packets name each check's command, setup command, working directory, and tool hash, and give the test counts from the last summary that node:test, Vitest, Jest, or pytest printed.
+- Packets name each check's command, setup command, working directory, and tool hash, and give the test counts from the last summary that node:test, Vitest, Jest, or pytest printed. A pytest summary that reports `157 subtests passed` is read with that part left out of the counts.
 
 ### Changed
 
