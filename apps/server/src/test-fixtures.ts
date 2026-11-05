@@ -19,7 +19,13 @@ export interface ApiResponse<T> {
  * bound to it. Every request goes through the real API.
  */
 export async function boundWorkspace(
-  options: { files?: Record<string, string>; runId?: string; status?: string } = {},
+  options: {
+    files?: Record<string, string>;
+    runId?: string;
+    status?: string;
+    /** The repository's folder name, `repository` unless given. */
+    repositoryName?: string;
+  } = {},
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), 'veridone-fixture-'));
   const database = new VeriDoneDatabase(':memory:');
@@ -51,7 +57,7 @@ export async function boundWorkspace(
     return { status: response.status, body: (await response.json()) as T };
   };
 
-  const repositoryPath = path.join(directory, 'repository');
+  const repositoryPath = path.join(directory, options.repositoryName ?? 'repository');
   await mkdir(repositoryPath);
   const git = (...args: string[]) => execFileAsync('git', args, { cwd: repositoryPath });
   await git('init', '-b', 'main');

@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { canonicalJson, sha256Hex } from '@veridone/core';
@@ -8,10 +9,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { VeriDoneDatabase } from './database.js';
 import {
   buildAcceptancePacket,
+  knownLocalPaths,
   packetCanonicalJson,
   verifyAcceptancePacket,
   workspaceSigningKey,
 } from './packet.js';
+import { createPacketSanitizer } from './redaction.js';
 import { boundWorkspace } from './test-fixtures.js';
 import { exportWorkspace, importWorkspace } from './workspace.js';
 
@@ -51,6 +54,83 @@ afterEach(async () => {
 });
 
 describe('acceptance packets', () => {
+  // Outside quotes, the shape-based patterns end a path at its first space, so a repository folder named with a space
+  // would keep its last words; the repository's own path is known, so it goes whole.
+  it('sanitizes every text in the payload, those a restored backup can set included', async () => {
+    const fixture = await boundWorkspace({ repositoryName: 'client acme' });
+    cleanups.push(fixture.cleanup);
+    const checkId = await fixture.approveCheck('process.exit(0)');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+    const [latest] = fixture.database.listEvidence(fixture.workItemId);
+    if (!latest) throw new Error('The check recorded no evidence.');
+    const { id: _id, ...recorded } = latest;
+    fixture.database.recordEvidence({
+      ...recorded,
+      kind: `test in ${fixture.repositoryPath}`,
+      result: `failed in ${fixture.repositoryPath}`,
+      contractVersion: `${fixture.repositoryPath} contract`,
+      completedAt: new Date(Date.parse(latest.completedAt) + 1_000).toISOString(),
+    });
+
+    const { json, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+
+    // The fixture's own folder name is random, so it appears only where the path leaked.
+    for (const text of [json, markdown, html]) {
+      expect(text).not.toContain(path.basename(fixture.directory));
+    }
+    expect(markdown).toContain('failed in [LOCAL_PATH]');
+  }, 30_000);
+
+  it('knows the home and temporary directories by both names, and paths under home from ~', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'veridone-known-'));
+    cleanups.push(() => rm(base, { recursive: true, force: true }));
+    const real = path.join(base, 'Real Home');
+    await mkdir(path.join(real, 'Bob Smith', 'work', 'acme repo'), { recursive: true });
+    await mkdir(path.join(real, 'Temp Dir'));
+    // A junction needs no privilege on Windows; elsewhere this makes a symbolic link.
+    await symlink(real, path.join(base, 'link'), 'junction');
+    const home = path.join(base, 'link', 'Bob Smith');
+    const temp = path.join(base, 'link', 'Temp Dir');
+    const repository = path.join(await realpath(home), 'work', 'acme repo');
+
+    const known = await knownLocalPaths(
+      { listRoots: () => [], listRepositories: () => [{ path: repository }], listChecks: () => [] },
+      [],
+      { home, temp },
+    );
+
+    const sanitize = createPacketSanitizer(known);
+    for (const written of [
+      await realpath(home),
+      await realpath(temp),
+      path.join(home, 'work', 'acme repo'),
+      '~/work/acme repo',
+      '$HOME/work/acme repo',
+    ]) {
+      expect(sanitize(`Saved in ${written}.`)).toBe('Saved in [LOCAL_PATH].');
+    }
+  });
+
+  it('replaces the repository path it knows, a folder name with a space included', async () => {
+    const fixture = await boundWorkspace({ repositoryName: 'client acme' });
+    cleanups.push(fixture.cleanup);
+    await fixture.writeReceipt(`Fixed the importer in ${fixture.repositoryPath}.`);
+    await fixture.importReceipt();
+
+    const { packet, markdown, html } = await buildAcceptancePacket(
+      fixture.database,
+      fixture.workItemId,
+    );
+
+    expect(packet.workItem.claim).toBe('Fixed the importer in [LOCAL_PATH].');
+    for (const text of [markdown, html]) {
+      expect(text).toContain('Fixed the importer in [LOCAL_PATH].');
+    }
+  }, 30_000);
+
   it('sanitizes the title and the branch in the JSON packet', async () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);
