@@ -246,6 +246,49 @@ describe('acceptance packets', () => {
     expect(json).not.toContain(JSON.stringify(process.execPath).slice(1, -1));
   }, 60_000);
 
+  // The commit under review chooses what its check prints, so no output up to the limit may stop the export. A check
+  // and its setup step can fill one stream each, and one character past Latin-1 makes V8 store the text the packet
+  // reads in two bytes per character.
+  it('exports a work item whose check and setup filled both streams at the largest limit', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    const limit = 10_000_000;
+    // Stored stdout starts with two headers, 43 bytes in all, around the setup's empty stdout.
+    const check = `process.stdout.write(String.fromCharCode(0x5ba2) + '\\nTests: ' + ' '.repeat(${limit - 71}) + '1 passed, 1 total');`;
+    const setup = `process.stderr.write('x in ' + '1'.repeat(${limit - 22}) + 's\\n1 passed in 1s\\n');`;
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Fills both streams',
+      kind: 'test',
+      executable: process.execPath,
+      args: ['-e', check],
+      setupArgs: ['-e', setup],
+      cwdRelative: '.',
+      timeoutMs: 60_000,
+      maxOutputBytes: limit,
+    });
+    expect(approved.status).toBe(201);
+    const run = await fixture.post<{
+      evidence: { result: string; stdout: string; stderr: string };
+    }>(`/api/v1/checks/${approved.body.check.id}/run`, { workItemId: fixture.workItemId });
+    expect(run.body.evidence.result).toBe('passed');
+    expect(Buffer.byteLength(run.body.evidence.stdout)).toBe(limit);
+    expect(Buffer.byteLength(run.body.evidence.stderr)).toBe(limit);
+
+    const exported = await fixture.get<Packet>(
+      `/api/v1/work-items/${fixture.workItemId}/packet/json`,
+    );
+
+    expect(exported.status).toBe(200);
+    expect(exported.body.evidence[0]?.testCounts).toEqual({
+      runner: 'pytest',
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+  }, 120_000);
+
   it('renders the same facts in its readable formats as in its JSON', async () => {
     const fixture = await boundWorkspace();
     cleanups.push(fixture.cleanup);

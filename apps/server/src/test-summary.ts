@@ -7,8 +7,18 @@ export interface TestCounts {
   skipped: number;
 }
 
-// Terminal color codes start with ESC (0x1b).
-const ansiEscape = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, 'gu');
+// Terminal color codes start with ESC (0x1b). This pattern reads the whole output, each stream up to the largest output
+// limit of ten million bytes, so it leaves out the `u` flag. V8 keeps no backtrack entry for a star over one character
+// class in a pattern without `u`; with `u`, it keeps one for each character of any text that holds a character past
+// Latin-1, and throws once they fill its 64 MB stack, at 8.4 million characters. Without `u` the pattern matches the same
+// text, since every character it names or stops at is one code unit.
+const ansiEscape = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, 'g');
+
+// The patterns below keep backtrack entries as they read, so they read no line past this length, color codes aside; a
+// longer line is skipped like any other line that holds no summary. pytest pads its summary line to within a column of
+// the terminal's width, which terminals report in 16 bits, and the other runners print theirs in under a hundred
+// characters.
+const longestSummaryLine = 65_536;
 
 // The output comes from the commit under review, so every pattern here runs in linear time: each one is anchored to
 // the start of a line or a part of one, and no two neighbouring quantifiers can match the same character. Splitting
@@ -86,6 +96,7 @@ export function summarizeTestOutput(output: string): TestCounts | null {
   // node:test prints its summary over several lines, which form one block from `tests` on.
   let block: Map<string, number> | null = null;
   for (const line of lines) {
+    if (line.length > longestSummaryLine) continue;
     const node = nodeLine.exec(line);
     if (node?.[1] && node[2]) {
       if (node[1] === 'tests') block = new Map();
