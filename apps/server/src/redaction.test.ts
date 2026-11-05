@@ -115,29 +115,37 @@ describe('secret redaction', () => {
 });
 
 describe('token values', () => {
-  const tokens: Array<[string, string, number]> = [
-    ['a fine-grained GitHub token', 'github_pat_', 22],
-    ['a classic GitHub token', 'ghp_', 20],
-    ['a GitLab token', 'glpat-', 20],
-    ['a sk- key', 'sk-', 20],
-    ['a Slack token', 'xoxb-', 10],
+  const tokens: Array<[string, string, number, string]> = [
+    ['a fine-grained GitHub token', 'github_pat_', 22, 'Z0_'],
+    ['a classic GitHub token', 'ghp_', 20, 'Z0_'],
+    ['a GitLab token', 'glpat-', 20, 'Z0_-'],
+    ['a sk- key', 'sk-', 20, 'Z0_-'],
+    ['a Slack token', 'xoxb-', 10, 'Z0-'],
   ];
-  for (const [name, prefix, least] of tokens) {
+  for (const [name, prefix, least, characters] of tokens) {
     it(`redacts ${name} from its shortest length on`, () => {
       expect(redactSecrets(joined(prefix, 'a'.repeat(least - 1)))).toBe(
         joined(prefix, 'a'.repeat(least - 1)),
       );
       expect(redactSecrets(joined(prefix, 'a'.repeat(least), ' tail'))).toBe('[REDACTED] tail');
     });
+
+    it(`reads each character ${name} may hold, in its first characters and after them`, () => {
+      const start = joined(prefix, characters.repeat(least));
+      expect(redactSecrets(joined(start, ' tail'))).toBe('[REDACTED] tail');
+    });
   }
 
   it('redacts a bearer value from its shortest length on, with its padding', () => {
     expect(redactSecrets('Bearer aaaaaaa')).toBe('Bearer aaaaaaa');
     expect(redactSecrets('Bearer aaaaaaaa== tail')).toBe('Bearer [REDACTED] tail');
+    expect(redactSecrets('Bearer ._~+/-aZ0._~+/-aZ0== tail')).toBe('Bearer [REDACTED] tail');
+    expect(redactSecrets(`Bearer${String.fromCharCode(0xa0)}aaaaaaaa`)).toBe('Bearer [REDACTED]');
   });
 
   const webTokens: Array<[string, string]> = [
     ['eyJaaaaaaaa.bbbbbbbb.cccccccc', '[REDACTED]'],
+    [`eyJ${'aZ0_-'.repeat(3)}.${'aZ0_-'.repeat(3)}.${'aZ0_-'.repeat(3)}`, '[REDACTED]'],
     ['-eyJaaaaaaaa.bbbbbbbb.cccccccc.dddddddd', '-[REDACTED].dddddddd'],
     ['eyJ-eyJaaaaaaaa.bbbbbbbb.cccccccc', '[REDACTED]'],
     // Too short in one part, so each stays, and a token after it does not.
@@ -214,6 +222,29 @@ describe('a credential value and its separator', () => {
     expect(redactSecrets('a-token token: x')).toBe('a-token token: [REDACTED]');
     // `secret` has no separator after it and `key` alone names no secret, so only the second one is an assignment.
     expect(redactSecrets('secret key=x secret_key=y')).toBe('secret key=x secret_key=[REDACTED]');
+  });
+
+  it('reads a name by Unicode case folding', () => {
+    const [longS, kelvin] = [0x17f, 0x212a].map((code) => String.fromCharCode(code));
+    expect(redactSecrets(`pa${longS}${longS}word=x`)).toBe(`pa${longS}${longS}word=[REDACTED]`);
+    expect(redactSecrets(`to${kelvin}en=x`)).toBe(`to${kelvin}en=[REDACTED]`);
+    // Folded to a word character, the letter before a name leaves no word boundary there.
+    expect(redactSecrets(`${longS}password=x`)).toBe(`${longS}password=x`);
+  });
+
+  it('ends a value at whitespace, a comma or a semicolon', () => {
+    for (const end of [' ', '\t', '\r', newline, String.fromCharCode(0xa0), ',', ';']) {
+      expect(redactSecrets(`password=a${end}b`)).toBe(`password=[REDACTED]${end}b`);
+      expect(redactSecrets(`password="a"${end}b`)).toBe(`password="[REDACTED]"${end}b`);
+    }
+  });
+
+  it('ends a value that starts quoted where a structure closes or a shell operator starts', () => {
+    for (const end of [')', ']', '}', '>', '&', '|']) {
+      expect(redactSecrets(`password="a"${end}b c`)).toBe(`password="[REDACTED]"${end}b c`);
+      expect(redactSecrets(`password='a'${end}b c`)).toBe(`password='[REDACTED]'${end}b c`);
+      expect(redactSecrets(`password=a${end}b c`)).toBe('password=[REDACTED] c');
+    }
   });
 
   it('keeps a name that no value follows', () => {
@@ -864,6 +895,14 @@ describe('known local paths', () => {
     const known = createPacketSanitizer(['/home/bob', '/work/token', '/work/acme'], {
       caseInsensitive: false,
     });
+    // The value reads what follows a known path inside it, spaces included.
+    expect(known('TOKEN=/work/acme copy/secret.txt tail')).toBe('TOKEN=[REDACTED] tail');
+    expect(known('TOKEN=/work/acme/a b/secret.txt tail')).toBe('TOKEN=[REDACTED] tail');
+    // It reads a letter in any case: under the `i` and `u` flags, the Kelvin sign counts as a `k`.
+    expect(known(`TOKEN=/work/acme.,(${String.fromCharCode(0x212a)}) tail`)).toBe(
+      'TOKEN=[REDACTED] tail',
+    );
+    expect(known('TOKEN=/work/acme.,() tail')).toBe('TOKEN=[REDACTED],() tail');
     // A backslash before a line break or a tab escapes it, so the value goes on.
     expect(known(`TOKEN=/home/bob/${backslash}${newline}secret`)).toBe('TOKEN=[REDACTED]');
     expect(known(`TOKEN=/home/bob/${backslash}${tab}secret`)).toBe('TOKEN=[REDACTED]');

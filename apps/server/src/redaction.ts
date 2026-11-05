@@ -1,9 +1,9 @@
 // Check output comes from the commit under review, so the patterns that read it must finish on any text up to the
-// largest output limit, ten million bytes. V8 keeps a backtrack entry for each round of a loop and throws once they fill
-// its 64 MB stack, at 5.6 million rounds of `x{20,}` and 8.4 million of `(?:x|y)*`. It keeps none for a star over one
-// character class in a pattern without the `u` flag. So a pattern here that reads an unbounded run writes it as
-// `x{20}x*` and leaves out `u`. Without `u` it matches the same text, since every character it names or stops at is one
-// code unit; with `u` it would keep an entry for each character of any text that holds a character past Latin-1.
+// largest output limit, ten million bytes. V8 keeps a backtrack entry for each round of most loops and throws once they
+// fill its 64 MB stack, at 5.6 million rounds of `[x]{20,}` and 8.4 million of `(?:[x]|y)*`. It keeps none for a star
+// over one character class in a pattern without the `u` flag; with `u`, that star keeps one for each character of any
+// text that holds a character past Latin-1. So a pattern here that reads an unbounded run writes it as `[x]{20}[x]*` and
+// leaves out `u`. Without `u` it matches the same text, since every character it names or stops at is one code unit.
 
 // A name that ends in a secret word, written as an assignment, a header or a JSON field. The word must end the
 // name, so `max_tokens` and `token_count` stay readable while `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY` lose their
