@@ -241,7 +241,7 @@ function hexPattern(hex: string): string {
  */
 function characterPattern(character: string, first: boolean, next: string): string {
   if (character === '%') return next === '25' ? '%' : '(?:%|%25)';
-  const literal = character.replace(/[\\^$.*+?()[\]{}|/]/u, '\\$&');
+  const literal = character.replace(/[\\^$.*+?()[\]{}|/]/gu, '\\$&');
   const forms = [literal];
   if (!/^[\w.~-]$/u.test(character)) {
     const bytes = [...new TextEncoder().encode(character)];
