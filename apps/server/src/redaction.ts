@@ -1,42 +1,39 @@
+// Check output comes from the commit under review, so the patterns that read it must finish on any text up to the
+// largest output limit, ten million bytes. V8 keeps a backtrack entry for each round of a loop and throws once they fill
+// its 64 MB stack, at 5.6 million rounds of `x{20,}` and 8.4 million of `(?:x|y)*`. It keeps none for a star over one
+// character class in a pattern without the `u` flag. So a pattern here that reads an unbounded run writes it as
+// `x{20}x*` and leaves out `u`. Without `u` it matches the same text, since every character it names or stops at is one
+// code unit; with `u` it would keep an entry for each character of any text that holds a character past Latin-1.
+
 // A name that ends in a secret word, written as an assignment, a header or a JSON field. The word must end the
 // name, so `max_tokens` and `token_count` stay readable while `NPM_TOKEN` and `AWS_SECRET_ACCESS_KEY` lose their
-// values. A quoted value is replaced up to its closing quote, past escaped quotes and escaped line breaks, or to the
-// end of the line when the output was cut off before the quote closed. A value may join adjacent parts, as shell
-// quoting does in `'alpha'"beta"` or `alpha\ beta`, and ends at whitespace. A value that starts unquoted keeps the
-// characters a shell word may hold, `}` included; after a quoted start, `} ] ) >` close a structure and `& |` start a
-// shell operator, so they end the value, as in `{"password": "x"}` or `'x'&&echo`. The name's prefix is bounded: check
-// output comes from the commit under review, and an unbounded prefix takes quadratic time on input such as `a-a-a-…`.
-// Each part of a value starts with a different character, so it is read once.
+// values. The name's prefix is bounded: an unbounded prefix takes quadratic time on input such as `a-a-a-…`.
+// `secretValueStart` reads the separator after the name, and `secretValueEnd` the value.
 const secretWord =
   'password|passwd|secret|secret[_-]?key|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?';
-const doubleQuoted = String.raw`"(?:[^"\\\n]|\\\r\n|\\[\s\S])*"?`;
-const singleQuoted = String.raw`'(?:[^'\\\n]|\\\r\n|\\[\s\S])*'?`;
-const escaped = String.raw`\\\r\n|\\[\s\S]`;
-/** An assignment of a secret; `part`, when given, is an alternative tried first where a part of the value may start. */
-function secretAssignmentPattern(part = ''): RegExp {
-  const value = String.raw`(?:${part}[^\s"',;\\]|${escaped})(?:${part}${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\])*|(?:${doubleQuoted}|${singleQuoted})(?:${part}${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\)\]}>&|])*`;
-  return new RegExp(
-    String.raw`\b((?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord}))(["']?)(\s*[:=]\s*)(?:${value})`,
-    'giu',
-  );
-}
-const secretAssignment = secretAssignmentPattern();
+const secretName = new RegExp(
+  String.raw`\b(?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord})["']?(?=[\s:=])`,
+  'giu',
+);
 // An option such as `--token` whose value is the next argument.
 const secretOption = new RegExp(
   String.raw`^--?(?:[a-z0-9]{1,40}[_-]){0,6}(?:${secretWord})$`,
   'iu',
 );
 const tokenValues = [
-  /\bgithub_pat_[A-Za-z0-9_]{22,}/gu,
-  /\bgh[oprsu]_[A-Za-z0-9_]{20,}/gu,
-  /\bgl(?:pat|ptt)-[A-Za-z0-9_-]{20,}/gu,
-  /\bsk-[A-Za-z0-9_-]{20,}/gu,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/gu,
+  /\bgithub_pat_[A-Za-z0-9_]{22}[A-Za-z0-9_]*/g,
+  /\bgh[oprsu]_[A-Za-z0-9_]{20}[A-Za-z0-9_]*/g,
+  /\bgl(?:pat|ptt)-[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*/g,
+  /\bsk-[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10}[A-Za-z0-9-]*/g,
   /\bnpm_[A-Za-z0-9]{36}\b/gu,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/gu,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/gu,
 ];
-const bearerValue = /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gu;
+// A JSON web token. A start whose first part no token follows takes that part along, since any start inside it would
+// read to the same end and fail there too, so `eyJ-eyJ-…` is read once.
+const jsonWebToken =
+  /\beyJ[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*(\.[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*)?/g;
+const bearerValue = /\bBearer\s+[A-Za-z0-9._~+/-]{8}[A-Za-z0-9._~+/-]*=*/g;
 const keyBegin = /-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----/gu;
 const keyEnd = /-----END [A-Z ]{0,40}PRIVATE KEY-----/gu;
 
@@ -165,9 +162,11 @@ function restPattern(windows: boolean, inValue = false): string {
   return inValue ? `${goesOn}${segments}` : `${goesOn}${segments}(?:${separator})*`;
 }
 const shellEscapable = new Set(' !"#$&\'()*;<>?[]^`{|}~');
-const valueRests = `${posixMark}${restPattern(false, true)}|${windowsMark}${restPattern(true, true)}`;
+const valueRest = new RegExp(
+  `${posixMark}${restPattern(false, true)}|${windowsMark}${restPattern(true, true)}`,
+  'iuy',
+);
 const pathRests = `${posixMark}${restPattern(false)}|${windowsMark}${restPattern(true)}`;
-const secretAssignmentAfterMarks = secretAssignmentPattern(`${valueRests}|`);
 // A bearer value needs eight characters; a mark counts as at least that many, for the path it stands for, and the
 // value takes the whole path, as a bearer value has no quoting of its own.
 const bearerAfterMarks = new RegExp(
@@ -378,21 +377,100 @@ function redactPrivateKeys(value: string): string {
   return result + value.slice(position);
 }
 
-/** Removes credentials from text a tool printed or an agent wrote; paths and the rest stay. */
-export function redactSecrets(
-  value: string,
-  assignment = secretAssignment,
-  bearer = bearerValue,
-): string {
-  let redacted = redactPrivateKeys(value).replace(
-    assignment,
-    (match: string, name: string, quote: string, separator: string) => {
-      const assigned = match.slice(name.length + quote.length + separator.length);
-      const wrapper = assigned.startsWith('"') ? '"' : assigned.startsWith("'") ? "'" : '';
-      return `${name}${quote}${separator}${wrapper}[REDACTED]${wrapper}`;
-    },
-  );
+// A credential's value. A quoted part is replaced up to its closing quote, past escaped quotes and escaped line breaks,
+// or to the end of the line when the output was cut off before the quote closed. A value may join adjacent parts, as
+// shell quoting does in `'alpha'"beta"` or `alpha\ beta`, and ends at whitespace. A value that starts unquoted keeps the
+// characters a shell word may hold, `}` included; after a quoted start, `} ] ) >` close a structure and `& |` start a
+// shell operator, so they end the value, as in `{"password": "x"}` or `'x'&&echo`.
+//
+// A value goes on as long as the text does, so a loop reads it one part at a time and no pattern repeats a choice. Each
+// part starts with a different character and nothing after a part can fail, so a part is read once.
+const spaceRun = /\s*/y;
+const doubleQuotedRun = /[^"\\\n]*/y;
+const singleQuotedRun = /[^'\\\n]*/y;
+const wordRun = new RegExp(String.raw`[^\s"',;\\${marks}]*`, 'y');
+const wordRunAfterQuote = new RegExp(String.raw`[^\s"',;\\)\]}>&|${marks}]*`, 'y');
+
+/** The index just past what `sticky`, a pattern that cannot fail here, reads at `index`. */
+function readAt(sticky: RegExp, text: string, index: number): number {
+  sticky.lastIndex = index;
+  sticky.test(text);
+  return sticky.lastIndex;
+}
+
+/** The index where a value starts after a name that ends at `nameEnd`, past its separator, or -1 where none starts. */
+function secretValueStart(text: string, nameEnd: number): number {
+  const separator = readAt(spaceRun, text, nameEnd);
+  if (text[separator] !== ':' && text[separator] !== '=') return -1;
+  const start = readAt(spaceRun, text, separator + 1);
+  const first = text[start];
+  if (first === undefined || first === ',' || first === ';') return -1;
+  return first === '\\' && start + 1 === text.length ? -1 : start;
+}
+
+/** The index just past the escape at `index`: a backslash and the character after it, or a Windows line break. */
+function escapeEnd(text: string, index: number): number {
+  return text.startsWith('\r\n', index + 1) ? index + 3 : index + 2;
+}
+
+/** The index just past the closing quote of the part at `start`, or where the part stops without one. */
+function quotedPartEnd(text: string, start: number): number {
+  const quote = text[start];
+  const run = quote === '"' ? doubleQuotedRun : singleQuotedRun;
+  let index = readAt(run, text, start + 1);
+  while (text[index] === '\\' && index + 1 < text.length) {
+    index = readAt(run, text, escapeEnd(text, index));
+  }
+  return text[index] === quote ? index + 1 : index;
+}
+
+/**
+ * The index just past the value at `start`. With `rest`, a mark where a part may start reads what follows it inside the
+ * known path; without it, a mark is a character like any other.
+ */
+function secretValueEnd(text: string, start: number, rest?: RegExp): number {
+  const word = text[start] === '"' || text[start] === "'" ? wordRunAfterQuote : wordRun;
+  let index = start;
+  for (;;) {
+    index = readAt(word, text, index);
+    const next = text[index];
+    if (next === '"' || next === "'") index = quotedPartEnd(text, index);
+    else if (next === '\\' && index + 1 < text.length) index = escapeEnd(text, index);
+    else if (next !== posixMark && next !== windowsMark) return index;
+    else index = rest ? readAt(rest, text, index) : index + 1;
+  }
+}
+
+/** Replaces the value of each credential's assignment, keeping a quote that opens it. */
+function redactAssignments(text: string, rest?: RegExp): string {
+  let result = '';
+  let position = 0;
+  secretName.lastIndex = 0;
+  for (let name = secretName.exec(text); name; name = secretName.exec(text)) {
+    const start = secretValueStart(text, name.index + name[0].length);
+    if (start < 0) {
+      secretName.lastIndex = name.index + 1;
+      continue;
+    }
+    const first = text[start];
+    const wrapper = first === '"' || first === "'" ? first : '';
+    result += `${text.slice(position, start)}${wrapper}[REDACTED]${wrapper}`;
+    position = secretValueEnd(text, start, rest);
+    secretName.lastIndex = position;
+  }
+  return result + text.slice(position);
+}
+
+/**
+ * Removes credentials from text a tool printed or an agent wrote; paths and the rest stay. A packet sanitizer passes
+ * `rest` and `bearer` to read through the known paths it marked.
+ */
+export function redactSecrets(value: string, rest?: RegExp, bearer = bearerValue): string {
+  let redacted = redactAssignments(redactPrivateKeys(value), rest);
   for (const pattern of tokenValues) redacted = redacted.replace(pattern, '[REDACTED]');
+  redacted = redacted.replace(jsonWebToken, (match: string, others?: string) =>
+    others ? '[REDACTED]' : match,
+  );
   return redacted.replace(bearer, 'Bearer [REDACTED]');
 }
 
@@ -474,7 +552,7 @@ export function createPacketSanitizer(
       let marked = text.replace(markInText, replacementCharacter);
       for (const pattern of patterns) marked = marked.replace(pattern, markKnownPath);
       return replaceGeneralPaths(
-        replaceMarkedPaths(redactSecrets(marked, secretAssignmentAfterMarks, bearerAfterMarks)),
+        replaceMarkedPaths(redactSecrets(marked, valueRest, bearerAfterMarks)),
       );
     });
 }

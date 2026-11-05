@@ -561,6 +561,33 @@ describe('setup before a check', () => {
     expect(run.body.evidence.stdout).toMatch(/^token=\[REDACTED\]\n/u);
   }, 60_000);
 
+  // The commit under review chooses what its check prints, so no output up to the limit may stop the run's record.
+  it('records a check whose output is one credential value at the largest limit', async () => {
+    const fixture = await workspace();
+    const limit = 10_000_000;
+    const approved = await fixture.post<{ check: { id: string } }>('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Prints one long value',
+      kind: 'test',
+      executable: process.execPath,
+      args: [
+        '-e',
+        `process.stdout.write('password="' + 'a'.repeat(${limit - 'password=""'.length}) + '"')`,
+      ],
+      cwdRelative: '.',
+      timeoutMs: 60_000,
+      maxOutputBytes: limit,
+    });
+    expect(approved.status).toBe(201);
+
+    const run = await fixture.post<RunResponse>(`/api/v1/checks/${approved.body.check.id}/run`, {
+      workItemId: fixture.workItemId,
+    });
+
+    expect(run.body.evidence.result).toBe('passed');
+    expect(run.body.evidence.stdout).toBe('password="[REDACTED]"');
+  }, 120_000);
+
   it('records a failed setup and leaves the check unrun', async () => {
     const fixture = await workspace();
     const approved = await approve(
