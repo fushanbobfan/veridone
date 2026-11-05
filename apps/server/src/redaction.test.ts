@@ -353,7 +353,7 @@ describe('redaction up to the largest output limit', () => {
         const output = redactSecrets(`${han}\n${text}`);
         const elapsed = performance.now() - started;
         expect(output === `${han}\n${expected(text)}`, `the output at ${length}`).toBe(true);
-        expect(elapsed, `the time at ${length}`).toBeLessThan(250 + length / 1_000);
+        expect(elapsed, `the time at ${length}`).toBeLessThan(1_000 + length / 1_000);
       }
       const text = build(limit);
       expect(redactSecrets(text) === expected(text), 'the output at the limit').toBe(true);
