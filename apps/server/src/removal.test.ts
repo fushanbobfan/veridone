@@ -339,6 +339,23 @@ describe('removing a root', () => {
     expect(body.sourceIssues[0]?.message).toContain('was removed');
   }, 30_000);
 
+  it('refuses a plain acceptance whose only root leaves while it reads the repository', async () => {
+    const fixture = await workspace();
+    await passingGate(fixture);
+    const root = await onlyRoot(fixture);
+    const expected = await fixture.expectedState();
+    const accepting = fixture.decide<ErrorBody>('accepted', 'Accepting.', { expected });
+    // The acceptance is reading the repository by now, under the roots it started with.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await removeRoot(fixture, root.id)).status).toBe(200);
+
+    const answered = await accepting;
+    expect(answered.status).toBe(409);
+    expect(answered.body.error).toBe('required_gates_open');
+    expect(answered.body.message).toContain(`Its root ${root.label} was removed`);
+    expect(fixture.database.listVerdicts(fixture.workItemId)).toEqual([]);
+  }, 30_000);
+
   it('removes a root restored from a backup, whose folder is not on this machine', async () => {
     const fixture = await workspace();
     const document = await exportWorkspace(fixture.database);
@@ -750,6 +767,15 @@ describe('removing a work item', () => {
     const twice = await fixture.post<ErrorBody>(url, { reason: 'Again.', expected: { claimHash } });
     expect(twice.status).toBe(409);
     expect(twice.body.error).toBe('record_removed');
+  }, 30_000);
+
+  it('is never ready while removed, whatever evidence it holds', async () => {
+    const fixture = await workspace();
+    await passingGate(fixture);
+    await removeWorkItem(fixture);
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(false);
+    await putBackWorkItem(fixture);
+    expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(true);
   }, 30_000);
 
   it('goes back with its binding and verdicts, and the gate is judged again', async () => {

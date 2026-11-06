@@ -170,20 +170,27 @@ export function createApp(options: AppOptions): Hono {
     repository: RepositoryRecord,
   ): Promise<{ repository: RepositoryRecord; issue: string | null }> => {
     if (repository.removedAt) return { repository, issue: removedRepositoryIssue(repository) };
+    const unreadable = (reason: string) =>
+      `VeriDone cannot read the repository ${repository.name}. ${reason} Until it can, you can still reject its work items, request changes, or accept with an override reason. To stop reading it, remove it under Repositories.`;
+    const rootLeft = (root: ApprovedRootRecord) =>
+      unreadable(`Its root ${root.label} was removed. Put it back under Removed.`);
     try {
-      return { repository: await recaptureRepository(repository), issue: null };
+      const captured = await recaptureRepository(repository);
+      // A capture keeps the roots it started with, and the last one over this repository can leave before it ends.
+      const leftMeanwhile = removedRootOver(captured);
+      return { repository: captured, issue: leftMeanwhile ? rootLeft(leftMeanwhile) : null };
     } catch (error) {
       const leftWithRoot = removedRootOver(repository);
-      const reason = leftWithRoot
-        ? `Its root ${leftWithRoot.label} was removed. Put it back under Removed.`
-        : error instanceof z.ZodError
-          ? 'Its state does not fit a repository snapshot.'
-          : error instanceof Error
-            ? error.message
-            : 'It could not be read.';
+      if (leftWithRoot) return { repository, issue: rootLeft(leftWithRoot) };
       return {
         repository,
-        issue: `VeriDone cannot read the repository ${repository.name}. ${reason} Until it can, you can still reject its work items, request changes, or accept with an override reason. To stop reading it, remove it under Repositories.`,
+        issue: unreadable(
+          error instanceof z.ZodError
+            ? 'Its state does not fit a repository snapshot.'
+            : error instanceof Error
+              ? error.message
+              : 'It could not be read.',
+        ),
       };
     }
   };
@@ -210,7 +217,7 @@ export function createApp(options: AppOptions): Hono {
       );
   };
 
-  /** Stops the checks running on repositories VeriDone no longer reads; a run past its checkout stays on record as cancelled. */
+  /** Stops the checks running on repositories VeriDone no longer reads. */
   const cancelChecksOn = (repositoryIds: string[]) => {
     const repositories = new Set(repositoryIds);
     const checks = new Set(

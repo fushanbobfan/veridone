@@ -390,6 +390,7 @@ export function acceptanceReadiness(
   return {
     ready:
       repositoryIssue === null &&
+      workItem.removedAt === null &&
       !degraded &&
       bindingFresh &&
       checks.length > 0 &&
