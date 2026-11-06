@@ -648,7 +648,7 @@ await runWalk('REMOVAL WALK', async () => {
     );
 
     // A root the backup brought from another machine can go, without approving it first.
-    await restorePage.getByRole('button', { name: 'Done' }).click();
+    await restorePage.getByRole('button', { name: 'Done', exact: true }).click();
     await restorePage.getByRole('button', { name: 'Roots', exact: true }).click();
     const restoredExplorer = restorePage.getByRole('dialog', {
       name: 'Inspect local review policy',

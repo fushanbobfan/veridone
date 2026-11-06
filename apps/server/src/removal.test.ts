@@ -206,6 +206,33 @@ describe('removing a root', () => {
     expect(added.status).toBe(400);
   }, 30_000);
 
+  it('names the next step for a path only a removed root covered', async () => {
+    const fixture = await workspace();
+    const root = await onlyRoot(fixture);
+    const folder = await outsideFolder();
+    await fixture.post('/api/v1/roots', { path: folder });
+    await removeRoot(fixture, root.id);
+
+    const added = await fixture.post<ErrorBody>('/api/v1/repositories', {
+      path: fixture.repositoryPath,
+    });
+    expect(added.status).toBe(400);
+    expect(added.body.message).toMatch(/outside the approved roots/u);
+    expect(added.body.message).toMatch(/under Add source/u);
+    const preview = await fixture.post<ErrorBody>('/api/v1/receipts/preview', {
+      path: path.join(root.path, 'receipt.json'),
+    });
+    expect(preview.status).toBe(400);
+    expect(preview.body.message).toMatch(/under Add source/u);
+
+    // The step it names works: adding the folder as a root brings it back.
+    await fixture.post('/api/v1/roots', { path: root.path });
+    expect(
+      (await fixture.post<ErrorBody>('/api/v1/repositories', { path: fixture.repositoryPath }))
+        .status,
+    ).toBe(201);
+  }, 30_000);
+
   it('asks for a reason, knows the root, and happens once', async () => {
     const fixture = await workspace();
     const root = await onlyRoot(fixture);
