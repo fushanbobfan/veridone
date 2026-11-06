@@ -22,7 +22,22 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      # A slow Azure apt mirror node sends about 50 kB/s without an error, so apt stays on it and the
+      # install outlasts the job (actions/runner-images#14823). A normal install takes 33 to 150 s.
+      # apt-get runs as root under sudo and outlives the kill, and its lock would fail the retry, so
+      # the retry stops it first.
+      - name: Install Playwright browsers
+        timeout-minutes: 9
+        run: |
+          install_browsers() {
+            timeout --kill-after=15s 4m pnpm exec playwright install --with-deps chromium firefox webkit
+          }
+          install_browsers && exit 0
+          echo '::warning::Playwright install failed or passed 4 minutes; retrying without the Azure apt mirror.'
+          sudo pkill --signal KILL --exact 'apt-get|dpkg' || true
+          sudo dpkg --configure -a
+          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+          install_browsers
       - run: pnpm test:e2e
       - if: failure()
         uses: actions/upload-artifact@v7
