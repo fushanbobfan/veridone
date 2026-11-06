@@ -20,12 +20,14 @@ No human verdict was recorded. Each packet deliberately contains `humanVerdict: 
 
 | Repository                                                                           | Bound commit                               | Tests | Captured tool   | Result                  | Packet payload SHA-256                                                        |
 | ------------------------------------------------------------------------------------ | ------------------------------------------ | ----: | --------------- | ----------------------- | ----------------------------------------------------------------------------- |
-| [Gravity Garden](https://github.com/fushanbobfan/gravity-garden)                     | `f56b49894191921e4ffbb17738a2e2c717bcc02b` |   128 | Node `v24.18.0` | Passed; clean after run | [`2b6c0c…fae6`](evidence/dogfood/gravity-garden-review-packet.json)           |
+| Gravity Garden                                                                       | `f56b49894191921e4ffbb17738a2e2c717bcc02b` |   128 | Node `v24.18.0` | Passed; clean after run | [`2b6c0c…fae6`](evidence/dogfood/gravity-garden-review-packet.json)           |
 | [AI Eval Micro Lab](https://github.com/fushanbobfan/ai-eval-micro-lab)               | `660ceccd869a8fe862ddbff2d89f8e93c3b75845` |    73 | Python `3.14.5` | Passed; clean after run | [`9b0fd7…5e51`](evidence/dogfood/ai-eval-micro-lab-review-packet.json)        |
 | [Useful Automation Lab](https://github.com/fushanbobfan/useful-automation-lab)       | `2549721dfd5fc1e4b31089fd0c2abcf4f51c2a29` |    77 | Python `3.14.5` | Passed; clean after run | [`fcbdcf…a7e3`](evidence/dogfood/useful-automation-lab-review-packet.json)    |
 | [Quant Research Micro Lab](https://github.com/fushanbobfan/quant-research-micro-lab) | `c9a9fca214cf45a10de4eb98574c92dd757f901e` |    62 | Python `3.14.5` | Passed; clean after run | [`d91cbb…97d2`](evidence/dogfood/quant-research-micro-lab-review-packet.json) |
 
 The run produced four fresh passing evidence records across 340 tests, four distinct commit-bound fingerprints, four packet checksums that pass the verifier, zero repository mutations, and zero automated human verdicts.
+
+Gravity Garden's repository is no longer public, so its row has no link. Its published packet still verifies with the commands below.
 
 ## Product finding
 

@@ -1,6 +1,6 @@
 # v1 security best-practices audit
 
-Date: 2026-07-21 (updated through v1.1.0 on 2026-07-22)
+Date: 2026-07-21 (updated through v1.2.0 on 2026-11-05)
 
 ## Executive summary
 
@@ -12,48 +12,48 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 ### VDS-001 — High — unauthenticated remote binding
 
-- **Location:** `apps/server/src/config.ts:31-36`
+- **Location:** `apps/server/src/config.ts:54-56`
 - **Evidence:** configuration now accepts only `127.0.0.1` or `::1`; the previous opt-in remote override was removed.
 - **Impact before fix:** a user enabling remote bind would have exposed the bootstrap CSRF token and mutation API to other network clients without authentication.
 - **Fix:** v1 refuses every non-loopback host. A regression test includes the legacy override flag and still expects rejection.
 
 ### VDS-002 — Medium — workspace body limit trusted a request header
 
-- **Location:** `apps/server/src/app.ts:190-204`
+- **Location:** `apps/server/src/app.ts:343-373`
 - **Evidence:** the import route uses Hono's streaming `bodyLimit` middleware before JSON parsing, at the 500 MB limit export also applies.
 - **Impact before fix:** a chunked request without `Content-Length` could force an unexpectedly large allocation.
 - **Fix:** enforce the limit for declared and streamed body sizes and return 413 before schema/import work.
 
 ### VDS-003 — Medium — app shell lacked an enforceable CSP baseline
 
-- **Location:** `apps/web/index.html:4-9`, `apps/web/public/_headers:1-7`, `apps/server/src/app.ts:87-103`
+- **Location:** `apps/web/index.html:5-8`, `apps/web/public/_headers:1-6`, `apps/server/src/app.ts:105-118`
 - **Evidence:** the static shell has an early CSP meta policy, supported edge hosts receive CSP/clickjacking/nosniff/privacy headers, and the API uses Hono secure headers. Script policy is self-only with no `unsafe-inline` or `unsafe-eval`. The meta policy permits Vite's development style elements and inline Motion styles; production edge headers narrow style elements back to self-only assets.
 - **Impact before fix:** an unrelated rendering mistake would have had less browser defense in depth.
 - **Fix:** add static and response-header policies while explicitly disabling HSTS for loopback HTTP.
 
 ### VDS-004 — Medium — bounded checks killed only the direct process
 
-- **Location:** `packages/adapters/src/process.ts:35-58`, `packages/adapters/src/process.ts:82-111`
+- **Location:** `packages/adapters/src/process.ts:35-61`, `packages/adapters/src/process.ts:84-111`
 - **Evidence:** non-Windows checks start in a process group; timeout, cancellation, and output-cap termination kill the group. Windows uses `taskkill /t /f` without a shell and falls back to the direct child.
 - **Impact before fix:** a timed-out tool could leave descendant processes running.
 - **Fix:** terminate the process tree for every bounded abnormal state.
 
 ### VDS-005 — Medium — portable evidence needed deterministic privacy verification
 
-- **Location:** `apps/server/src/packet.ts:11-45`, `apps/server/src/packet.ts:51-104`, `apps/server/src/packet.ts:107-160`
-- **Evidence:** packet text is credential/path-redacted, raw stdout/stderr are excluded, generation time derives from stable review state, and the verifier recomputes payload and artifact-manifest hashes.
+- **Location:** `apps/server/src/packet.ts:88-111`, `apps/server/src/packet.ts:333-436`, `apps/server/src/packet.ts:159-271`
+- **Evidence:** packet text is credential/path-redacted, raw stdout/stderr are excluded, generation time derives from stable review state, and the verifier recomputes the payload hash and compares the manifest's artifact hashes with the evidence records.
 - **Impact before fix:** packets could expose common local paths and repeated exports of unchanged state produced different hashes.
 - **Fix:** strict privacy payloads, deterministic serialization, three-format parity tests, and a standalone verifier.
 
 ## Verified controls
 
-- Origin allowlist and per-process anti-CSRF token: `apps/server/src/app.ts:132-159`.
-- Canonical approved-root and symlink boundary: `packages/adapters/src/path-boundary.ts:8-33`.
-- Direct spawn with `shell: false`: `packages/adapters/src/process.ts:35-43`.
-- Minimal check environment, redaction, tool version, exit code, and before/after mutation classification: `apps/server/src/check-runner.ts:12-31`, `apps/server/src/check-runner.ts:62-151`.
-- Full workspace schema/hash validation before a single import transaction: `apps/server/src/workspace.ts:134-184`.
+- Origin allowlist and per-process anti-CSRF token: `apps/server/src/app.ts:232-259`.
+- Canonical approved-root and symlink boundary: `packages/adapters/src/path-boundary.ts:22-51`.
+- Direct spawn with `shell: false`: `packages/adapters/src/process.ts:35-42`.
+- Minimal check environment, redaction, tool version, exit code, and before/after mutation classification: `apps/server/src/check-runner.ts:17-31`, `apps/server/src/check-runner.ts:66-270`.
+- Full workspace schema/hash validation before a single import transaction: `apps/server/src/workspace.ts:353-421`.
 - Frontend audit found no `dangerouslySetInnerHTML`, DOM HTML sink, string-to-code execution, dynamic script, postMessage, auth-token storage, or third-party remote script.
-- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:46-50`, `apps/web/src/App.tsx:126-130`.
+- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:62-66`, `apps/web/src/App.tsx:207-210`.
 
 ## Residual, documented boundaries
 
@@ -69,3 +69,4 @@ This review followed the local JavaScript/TypeScript and React security specific
 - v1.0.1 pins patched transitive versions for `shell-quote` GHSA-395f-4hp3-45gv and `esbuild` GHSA-g7r4-m6w7-qqqr; `pnpm audit --audit-level low` reports no known vulnerability.
 - v1.0.2 aligns every contributor-facing statement with the enforced loopback-only boundary; remote and multi-user deployments remain unsupported.
 - v1.1.0 requires an explicit repository choice before claim binding and displays the selected commit, path, dirty state, and fingerprint, preventing an unbound claim from silently targeting the first connected repository.
+- v1.2.0 runs approved checks in a clean checkout of the bound commit with a pinned top-level executable, starts Git with a fixed configuration, makes verdicts compare-and-swap and append-only, signs packets and replaces local identifiers with pseudonyms, redacts the paths the workspace knows, keeps restored roots pending until approved, and checks the API's `Host` header. An operator can replace or retire a check with a recorded reason, which packets show, and evidence counts only under the check set it ran with. A verdict records while a repository cannot be read, against the last state captured, and a plain acceptance stays refused there.
