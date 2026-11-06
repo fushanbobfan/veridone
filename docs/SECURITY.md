@@ -98,7 +98,7 @@ Packets are signed with an Ed25519 key that the workspace creates on first use a
 
 **Threat:** large receipts/workspace JSON, output floods, hanging processes, or huge repository scans exhaust resources.
 
-**Control:** receipt and streaming request-body limits, bounded concurrency, timeouts, output caps, cancellation, and bounded discovery depth/count; an import that reaches a limit fails with an explicit error and commits nothing. Check output comes from the commit under review, so the redaction and test-summary patterns that read it take linear time on any input, and tests time them on hostile output.
+**Control:** receipt and streaming request-body limits, bounded concurrency, timeouts, output caps, cancellation, and bounded discovery depth/count; an import that reaches a limit fails with an explicit error and commits nothing. Check output comes from the commit under review, so the redaction and test-summary patterns that read it take linear time on any input, and tests time them on hostile output. Redaction finishes on any text up to the largest output limit, ten million bytes, since it keeps no backtrack entry per character on V8's stack, and tests run it at that limit.
 
 ## Limits of these controls
 

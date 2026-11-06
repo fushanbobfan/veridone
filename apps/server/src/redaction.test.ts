@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { checkRequestSchema } from './check-policy.js';
 import {
   createPacketSanitizer,
   redactSecrets,
@@ -109,6 +110,253 @@ describe('secret redaction', () => {
   ]) {
     it(`leaves "${prose}" alone`, () => {
       expect(redactSecrets(prose)).toBe(prose);
+    });
+  }
+});
+
+describe('token values', () => {
+  const tokens: Array<[string, string, number, string]> = [
+    ['a fine-grained GitHub token', 'github_pat_', 22, 'Z0_'],
+    ['a classic GitHub token', 'ghp_', 20, 'Z0_'],
+    ['a GitLab token', 'glpat-', 20, 'Z0_-'],
+    ['a sk- key', 'sk-', 20, 'Z0_-'],
+    ['a Slack token', 'xoxb-', 10, 'Z0-'],
+  ];
+  for (const [name, prefix, least, characters] of tokens) {
+    it(`redacts ${name} from its shortest length on`, () => {
+      expect(redactSecrets(joined(prefix, 'a'.repeat(least - 1)))).toBe(
+        joined(prefix, 'a'.repeat(least - 1)),
+      );
+      expect(redactSecrets(joined(prefix, 'a'.repeat(least), ' tail'))).toBe('[REDACTED] tail');
+    });
+
+    it(`reads each character ${name} may hold, in its first characters and after them`, () => {
+      const start = joined(prefix, characters.repeat(least));
+      expect(redactSecrets(joined(start, ' tail'))).toBe('[REDACTED] tail');
+    });
+  }
+
+  it('redacts a bearer value from its shortest length on, with its padding', () => {
+    expect(redactSecrets('Bearer aaaaaaa')).toBe('Bearer aaaaaaa');
+    expect(redactSecrets('Bearer aaaaaaaa== tail')).toBe('Bearer [REDACTED] tail');
+    expect(redactSecrets('Bearer ._~+/-aZ0._~+/-aZ0== tail')).toBe('Bearer [REDACTED] tail');
+    expect(redactSecrets(`Bearer${String.fromCharCode(0xa0)}aaaaaaaa`)).toBe('Bearer [REDACTED]');
+  });
+
+  const webTokens: Array<[string, string]> = [
+    ['eyJaaaaaaaa.bbbbbbbb.cccccccc', '[REDACTED]'],
+    [`eyJ${'aZ0_-'.repeat(3)}.${'aZ0_-'.repeat(3)}.${'aZ0_-'.repeat(3)}`, '[REDACTED]'],
+    ['-eyJaaaaaaaa.bbbbbbbb.cccccccc.dddddddd', '-[REDACTED].dddddddd'],
+    ['eyJ-eyJaaaaaaaa.bbbbbbbb.cccccccc', '[REDACTED]'],
+    // Too short in one part, so each stays, and a token after it does not.
+    ['eyJaaaaaaa.bbbbbbbb.cccccccc', 'eyJaaaaaaa.bbbbbbbb.cccccccc'],
+    ['eyJaaaaaaaa.bbbbbbb.cccccccc', 'eyJaaaaaaaa.bbbbbbb.cccccccc'],
+    ['eyJaaaaaaaa.bbbbbbbb.ccccccc', 'eyJaaaaaaaa.bbbbbbbb.ccccccc'],
+    ['eyJaaaaaaaa eyJaaaaaaaa.bbbbbbbb.cccccccc', 'eyJaaaaaaaa [REDACTED]'],
+    ['eyJaaaaaaaa.b.eyJaaaaaaaa.bbbbbbbb.cccccccc', 'eyJaaaaaaaa.b.[REDACTED]'],
+    [
+      'eyJaaaaaaaa.bbbbbbbb.ccc.eyJdddddddd.eeeeeeee.ffffffff',
+      'eyJaaaaaaaa.bbbbbbbb.ccc.[REDACTED]',
+    ],
+    // A part that holds a start of its own.
+    ['eyJaaaaaaaa.eyJbbbbbbbb.eyJcccccccc.dddddddd', '[REDACTED].dddddddd'],
+    ['eyJaaaaaaaa.eyJbbbbbbbb.cc eyJdddddddd', 'eyJaaaaaaaa.eyJbbbbbbbb.cc eyJdddddddd'],
+  ];
+  for (const [input, expected] of webTokens) {
+    it(`reads "${input}" as JSON web tokens`, () => {
+      expect(redactSecrets(input)).toBe(expected);
+    });
+  }
+});
+
+describe('a credential value and its separator', () => {
+  const [backslash, doubleQuote, singleQuote, newline, carriageReturn] = [92, 34, 39, 10, 13].map(
+    (code) => String.fromCharCode(code),
+  );
+  // The value's rules as one pattern, which V8 can run on a short text only.
+  const doubleQuoted = String.raw`"(?:[^"\\\n]|\\\r\n|\\[\s\S])*"?`;
+  const singleQuoted = String.raw`'(?:[^'\\\n]|\\\r\n|\\[\s\S])*'?`;
+  const escaped = String.raw`\\\r\n|\\[\s\S]`;
+  const assignment = new RegExp(
+    String.raw`(password=\s*)(?:(?:[^\s"',;\\]|${escaped})(?:${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\])*|(?:${doubleQuoted}|${singleQuoted})(?:${doubleQuoted}|${singleQuoted}|${escaped}|[^\s"',;\\)\]}>&|])*)`,
+    'gu',
+  );
+  const byThePattern = (text: string) =>
+    text.replace(assignment, (match: string, head: string) => {
+      const first = match[head.length];
+      const wrapper = first === doubleQuote || first === singleQuote ? first : '';
+      return `${head}${wrapper}[REDACTED]${wrapper}`;
+    });
+
+  it('reads every short value as the pattern of its rules does', { timeout: 60_000 }, () => {
+    const parts = [
+      doubleQuote,
+      singleQuote,
+      backslash,
+      newline,
+      carriageReturn,
+      ' ',
+      ',',
+      'a',
+      ')',
+      String.fromCodePoint(0x1f600),
+      String.fromCharCode(0xfdd0),
+    ];
+    let differences = 0;
+    const read = (value: string, room: number) => {
+      for (const text of [`password=${value}`, `password=${value} tail`]) {
+        if (redactSecrets(text) !== byThePattern(text)) differences += 1;
+      }
+      if (room > 0) for (const part of parts) read(`${value}${part}`, room - 1);
+    };
+    read('', 5);
+    expect(differences).toBe(0);
+  });
+
+  it('reads the separator as a name with any spaces before and after it', () => {
+    expect(redactSecrets('password\t =\n x')).toBe('password\t =\n [REDACTED]');
+    expect(redactSecrets('"password" : "x y" tail')).toBe('"password" : "[REDACTED]" tail');
+    expect(redactSecrets(`password${String.fromCharCode(0xa0)}=x`)).toBe(
+      `password${String.fromCharCode(0xa0)}=[REDACTED]`,
+    );
+    expect(redactSecrets('a-token token: x')).toBe('a-token token: [REDACTED]');
+    // `secret` has no separator after it and `key` alone names no secret, so only the second one is an assignment.
+    expect(redactSecrets('secret key=x secret_key=y')).toBe('secret key=x secret_key=[REDACTED]');
+  });
+
+  it('reads a name by Unicode case folding', () => {
+    const [longS, kelvin] = [0x17f, 0x212a].map((code) => String.fromCharCode(code));
+    expect(redactSecrets(`pa${longS}${longS}word=x`)).toBe(`pa${longS}${longS}word=[REDACTED]`);
+    expect(redactSecrets(`to${kelvin}en=x`)).toBe(`to${kelvin}en=[REDACTED]`);
+    // Folded to a word character, the letter before a name leaves no word boundary there.
+    expect(redactSecrets(`${longS}password=x`)).toBe(`${longS}password=x`);
+  });
+
+  it('ends a value at whitespace, a comma or a semicolon', () => {
+    for (const end of [' ', '\t', '\r', newline, String.fromCharCode(0xa0), ',', ';']) {
+      expect(redactSecrets(`password=a${end}b`)).toBe(`password=[REDACTED]${end}b`);
+      expect(redactSecrets(`password="a"${end}b`)).toBe(`password="[REDACTED]"${end}b`);
+    }
+  });
+
+  it('ends a value that starts quoted where a structure closes or a shell operator starts', () => {
+    for (const end of [')', ']', '}', '>', '&', '|']) {
+      expect(redactSecrets(`password="a"${end}b c`)).toBe(`password="[REDACTED]"${end}b c`);
+      expect(redactSecrets(`password='a'${end}b c`)).toBe(`password='[REDACTED]'${end}b c`);
+      expect(redactSecrets(`password=a${end}b c`)).toBe('password=[REDACTED] c');
+    }
+  });
+
+  it('keeps a name that no value follows', () => {
+    for (const text of [
+      'password x',
+      'password',
+      'password=',
+      'password= ',
+      'password= , x',
+      'password=;',
+      `password=${backslash}`,
+      '"password" x',
+    ]) {
+      expect(redactSecrets(text)).toBe(text);
+    }
+  });
+});
+
+describe('redaction up to the largest output limit', () => {
+  const limit = 10_000_000;
+  const gives = (output: string) => () => output;
+  const unchanged = (text: string) => text;
+  const quotedValue = gives('password="[REDACTED]"');
+  const singleQuotedValue = gives("password='[REDACTED]'");
+  const token = gives('[REDACTED]');
+  const cases: Array<[string, (length: number) => string, (text: string) => string]> = [
+    ['a closed quoted value', (n) => `password="${'a'.repeat(n)}"`, quotedValue],
+    ['a value with no closing quote', (n) => `password="${'a'.repeat(n)}`, quotedValue],
+    ['a closed single-quoted value', (n) => `password='${'a'.repeat(n)}'`, singleQuotedValue],
+    ['an open single-quoted value', (n) => `password='${'a'.repeat(n)}`, singleQuotedValue],
+    ['an unquoted value', (n) => `password=${'a'.repeat(n)}`, gives('password=[REDACTED]')],
+    [
+      'a value of characters past U+FFFF',
+      (n) => `password="${String.fromCodePoint(0x1f600).repeat(n / 2)}"`,
+      quotedValue,
+    ],
+    [
+      'an unquoted value of the marks a packet sanitizer uses',
+      (n) => `password=${String.fromCharCode(0xfdd0).repeat(n)}`,
+      gives('password=[REDACTED]'),
+    ],
+    ['a word after a quoted part', (n) => `password="a"${'b'.repeat(n)}`, quotedValue],
+    ['a quoted value of escapes', (n) => `password="${'\\a'.repeat(n / 2)}"`, quotedValue],
+    [
+      'an unquoted value of escapes',
+      (n) => `password=${'\\a'.repeat(n / 2)}`,
+      gives('password=[REDACTED]'),
+    ],
+    ['a value of adjacent quoted parts', (n) => `password=${'"a"'.repeat(n / 3)}`, quotedValue],
+    [
+      'a value with text around it',
+      (n) => `x password="${'a'.repeat(n)}" y`,
+      gives('x password="[REDACTED]" y'),
+    ],
+    [
+      'spaces before a separator',
+      (n) => `password${' '.repeat(n)}=a`,
+      (text) => `${text.slice(0, -1)}[REDACTED]`,
+    ],
+    [
+      'spaces after a separator',
+      (n) => `password=${' '.repeat(n)}a`,
+      (text) => `${text.slice(0, -1)}[REDACTED]`,
+    ],
+    ['spaces that no value follows', (n) => `a-b-c-d-e-f-token=${' '.repeat(n)},`, unchanged],
+    ['names with no separator', (n) => 'token '.repeat(n / 6), unchanged],
+    ['a chain of name prefixes', (n) => 'a-'.repeat(n / 2), unchanged],
+    ['a fine-grained GitHub token', (n) => joined('github_pat_', 'a'.repeat(n)), token],
+    ['a classic GitHub token', (n) => joined('ghp_', 'a'.repeat(n)), token],
+    ['a GitLab token', (n) => joined('glpat-', 'a'.repeat(n)), token],
+    ['a sk- key', (n) => joined('sk-', 'a'.repeat(n)), token],
+    ['a Slack token', (n) => joined('xoxb-', 'a'.repeat(n)), token],
+    ['a web token with a long first part', (n) => `eyJ${'a'.repeat(n)}.bbbbbbbb.cccccccc`, token],
+    ['a web token with a long last part', (n) => `eyJaaaaaaaa.bbbbbbbb.${'c'.repeat(n)}`, token],
+    ['a web token with no period', (n) => `eyJ${'a'.repeat(n)}`, unchanged],
+    ['starts of web tokens with no period', (n) => 'eyJ-'.repeat(n / 4), unchanged],
+    [
+      'starts of web tokens after one period',
+      (n) => `eyJaaaaaaaa.${'eyJ-'.repeat(n / 4)}`,
+      unchanged,
+    ],
+    ['a bearer value', (n) => `Bearer ${'a'.repeat(n)}`, gives('Bearer [REDACTED]')],
+    [
+      'padding after a bearer value',
+      (n) => `Bearer aaaaaaaa${'='.repeat(n)}`,
+      gives('Bearer [REDACTED]'),
+    ],
+  ];
+
+  it('runs at the largest output limit a check may set', () => {
+    const maxOutputBytes = checkRequestSchema.shape.maxOutputBytes;
+    expect(maxOutputBytes.safeParse(limit).success).toBe(true);
+    expect(maxOutputBytes.safeParse(limit + 1).success).toBe(false);
+  });
+
+  // A pattern that keeps a backtrack entry per round throws at the longest texts. One that takes quadratic time misses
+  // its budget at the shortest, in seconds, long before a text at the limit would take it hours. A character past
+  // Latin-1 makes V8 store the whole text in two bytes per character, where a pattern with the `u` flag keeps more
+  // entries.
+  for (const [name, build, expected] of cases) {
+    it(`reads ${name} in time proportional to its length`, { timeout: 180_000 }, () => {
+      const han = String.fromCharCode(0x5ba2);
+      for (let length = limit / 64; length <= limit; length *= 2) {
+        const text = build(length);
+        const started = performance.now();
+        const output = redactSecrets(`${han}\n${text}`);
+        const elapsed = performance.now() - started;
+        expect(output === `${han}\n${expected(text)}`, `the output at ${length}`).toBe(true);
+        expect(elapsed, `the time at ${length}`).toBeLessThan(1_000 + length / 1_000);
+      }
+      const text = build(limit);
+      expect(redactSecrets(text) === expected(text), 'the output at the limit').toBe(true);
     });
   }
 });
@@ -647,6 +895,14 @@ describe('known local paths', () => {
     const known = createPacketSanitizer(['/home/bob', '/work/token', '/work/acme'], {
       caseInsensitive: false,
     });
+    // The value reads what follows a known path inside it, spaces included.
+    expect(known('TOKEN=/work/acme copy/secret.txt tail')).toBe('TOKEN=[REDACTED] tail');
+    expect(known('TOKEN=/work/acme/a b/secret.txt tail')).toBe('TOKEN=[REDACTED] tail');
+    // It reads a letter in any case: under the `i` and `u` flags, the Kelvin sign counts as a `k`.
+    expect(known(`TOKEN=/work/acme.,(${String.fromCharCode(0x212a)}) tail`)).toBe(
+      'TOKEN=[REDACTED] tail',
+    );
+    expect(known('TOKEN=/work/acme.,() tail')).toBe('TOKEN=[REDACTED],() tail');
     // A backslash before a line break or a tab escapes it, so the value goes on.
     expect(known(`TOKEN=/home/bob/${backslash}${newline}secret`)).toBe('TOKEN=[REDACTED]');
     expect(known(`TOKEN=/home/bob/${backslash}${tab}secret`)).toBe('TOKEN=[REDACTED]');
