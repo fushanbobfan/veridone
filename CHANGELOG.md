@@ -4,6 +4,10 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ## [Unreleased]
 
+### Fixed
+
+- The web app loads without a content security policy report. Its import of `@veridone/core` also brought in zod, which probes for eval when it builds its first object schema, so every page load reported a blocked eval and Firefox logged it as an error. The web app now imports `@veridone/core/scope`, which takes zod and the schemas out of the page and about 85 KB out of the JavaScript bundle. A Playwright check on the built page in Chromium, Firefox, and WebKit fails if a report or a console error appears while the page loads.
+
 ## [1.2.0] - 2026-11-05
 
 ### Added
