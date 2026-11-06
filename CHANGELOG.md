@@ -44,6 +44,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - A backup carries what earlier versions stored and today's import refuses: a long run id, status, or task type, or a time that is no timestamp. One such record used to stop export altogether.
 - Refusals say what to do next: a missing path, `VERIDONE_GIT` naming nothing, no approved root, more than 10,000 changed files, and a tool that cannot be pinned, which used to send the operator back to pin it.
 - One check that refuses to start no longer keeps the review's other checks from running, and an empty workspace offers **Restore a backup** on its first screen.
+- The built app loads every font subset from a file. Vite inlined the two smallest, Cyrillic Extended for Manrope and JetBrains Mono, as data URLs, which the content security policy blocks, so each page load logged two console errors and characters only those subsets cover fell back to another font. `pnpm smoke:built` now fails on an inlined font.
 
 ### Security
 

@@ -6,6 +6,10 @@ const apiProxy = `http://127.0.0.1:${process.env.VERIDONE_API_PORT ?? '4317'}`;
 export default defineConfig({
   base: process.env.VITE_BASE_PATH ?? '/',
   plugins: [react()],
+  build: {
+    // The content security policy allows fonts from 'self' only, and Vite would inline a small font subset as a data URL.
+    assetsInlineLimit: 0,
+  },
   server: {
     host: '127.0.0.1',
     port: Number(process.env.VERIDONE_WEB_PORT ?? '4173'),
