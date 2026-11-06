@@ -11,7 +11,7 @@ import {
 } from '@veridone/adapters';
 import { assessDeclaredScope, canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
 
-import type { CheckRecord, EvidenceRecord, VeriDoneDatabase } from './database.js';
+import type { CheckRecord, EvidenceRecord, EvidenceSummary, VeriDoneDatabase } from './database.js';
 import { redactSecrets } from './redaction.js';
 
 function minimalEnvironment(): Record<string, string> {
@@ -44,7 +44,7 @@ function capBytes(text: string, limit: number): string {
 async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha256: string }> {
   if (!check.resolvedExecutable || !check.executableSha256) {
     throw new Error(
-      `The check "${check.label}" was approved before VeriDone pinned tools. Pin its tool again under Checks before running it.`,
+      `The check "${check.label}" was approved before VeriDone pinned tools. Under Checks, pin its tool again, or replace or retire the check if its tool cannot be pinned.`,
     );
   }
   let sha256: string;
@@ -52,7 +52,7 @@ async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha
     sha256 = await sha256File(check.resolvedExecutable);
   } catch {
     throw new Error(
-      `The pinned tool ${check.resolvedExecutable} is missing. Pin the check's tool again under Checks.`,
+      `The pinned tool ${check.resolvedExecutable} is missing. Under Checks, pin the check's tool again, or replace or retire the check.`,
     );
   }
   if (sha256 !== check.executableSha256) {
@@ -63,10 +63,6 @@ async function verifyPinnedTool(check: CheckRecord): Promise<{ path: string; sha
   return { path: check.resolvedExecutable, sha256 };
 }
 
-export async function aggregateCheckVersion(checks: CheckRecord[]): Promise<string> {
-  return sha256Hex(canonicalJson(checks.map((check) => check.definitionHash).sort()));
-}
-
 export async function runApprovedCheck(
   database: VeriDoneDatabase,
   checkId: string,
@@ -75,6 +71,9 @@ export async function runApprovedCheck(
 ): Promise<EvidenceRecord> {
   const check = database.getCheck(checkId);
   if (!check) throw new Error('The approved check does not exist.');
+  if (check.retiredAt) {
+    throw new Error(`The check "${check.label}" is retired, so it no longer runs.`);
+  }
   const workItem = database.getWorkItem(workItemId);
   if (!workItem) throw new Error('The work item does not exist.');
   if (workItem.repositoryId !== check.repositoryId) {
@@ -82,10 +81,8 @@ export async function runApprovedCheck(
   }
   const repository = database.getRepository(check.repositoryId);
   if (!repository) throw new Error('The repository does not exist.');
-  const checks = database
-    .listChecks()
-    .filter((candidate) => candidate.repositoryId === repository.id);
-  const checkDefinitionVersion = await aggregateCheckVersion(checks);
+  const checkDefinitionVersion =
+    database.activeCheckVersion(repository.id) ?? repository.snapshot.checkDefinitionVersion;
   const approvedRoots = database.listApprovedRoots().map((root) => root.path);
 
   const before = await captureGitSnapshot(repository.path, {
@@ -283,6 +280,8 @@ export interface CheckReadiness {
 /** Whether a work item may be accepted without an override, and why; the web shows exactly this. */
 export interface AcceptanceReadiness {
   ready: boolean;
+  /** Why the bound repository cannot be read right now; null when it can. No gate holds while it cannot. */
+  repositoryIssue: string | null;
   /** The work item is bound to a repository snapshot. */
   bound: boolean;
   /** The bound snapshot is the repository's current state. */
@@ -300,7 +299,9 @@ export interface AcceptanceReadiness {
 export function acceptanceReadiness(
   database: VeriDoneDatabase,
   workItemId: string,
+  options: { repositoryIssue?: string | null } = {},
 ): AcceptanceReadiness {
+  const repositoryIssue = options.repositoryIssue ?? null;
   const workItem = database.getWorkItem(workItemId);
   // A receipt's work item has the source reference `<source type>:<run id>`, and no source type holds a colon, so
   // the run id is all that follows the first colon. Run ids may hold colons themselves: a suffix match would let the
@@ -313,6 +314,7 @@ export function acceptanceReadiness(
   if (!workItem || !repository) {
     return {
       ready: false,
+      repositoryIssue,
       bound: false,
       bindingFresh: false,
       degraded,
@@ -325,13 +327,13 @@ export function acceptanceReadiness(
     };
   }
   const bindingFresh = workItem.snapshotFingerprint === repository.snapshot.fingerprint;
-  const checks = database.listChecks().filter((check) => check.repositoryId === repository.id);
+  const checks = database.listActiveChecks(repository.id);
   const scope = assessDeclaredScope(
     repository.snapshot.statusEntries,
     checks.flatMap((check) => check.scopePaths),
   );
-  const evidence = database.listEvidence(workItemId);
-  const isFresh = (run: EvidenceRecord) =>
+  const evidence = database.listEvidenceSummaries(workItemId);
+  const isFresh = (run: EvidenceSummary) =>
     // Only evidence this workspace produced counts; restored evidence stays history.
     run.origin === 'local' &&
     run.result === 'passed' &&
@@ -360,11 +362,13 @@ export function acceptanceReadiness(
   const passing = checkStates.filter((check) => check.fresh);
   return {
     ready:
+      repositoryIssue === null &&
       !degraded &&
       bindingFresh &&
       checks.length > 0 &&
       passing.length === checks.length &&
       scope.satisfied,
+    repositoryIssue,
     bound: workItem.snapshotFingerprint !== null,
     bindingFresh,
     degraded,

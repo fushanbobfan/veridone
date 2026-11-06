@@ -84,8 +84,7 @@ export function ReviewInbox({
           <div className="source-issue" role="status">
             <strong>
               {sourceIssues.length} repository{' '}
-              {sourceIssues.length === 1 ? 'source is' : 'sources are'}
-              unavailable
+              {sourceIssues.length === 1 ? 'source is' : 'sources are'} unavailable
             </strong>
             <span>{sourceIssues[0]?.message}</span>
           </div>

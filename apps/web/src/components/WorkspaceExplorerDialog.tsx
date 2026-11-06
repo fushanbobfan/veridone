@@ -1,7 +1,7 @@
 import { Archive, FileCheck2, FolderGit2, FolderTree, ListChecks, X } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 
-import type { BootstrapDto, ToolCandidate } from '../api.js';
+import type { BootstrapDto, CheckDto, ToolCandidate } from '../api.js';
 import type { WorkspaceSection } from './Navigation.js';
 import { useDialogFocus } from './useDialogFocus.js';
 
@@ -26,6 +26,8 @@ export function WorkspaceExplorerDialog({
   onReviewTool,
   onPinTool,
   onApproveRoot,
+  onReplaceCheck,
+  onRetireCheck,
 }: {
   open: boolean;
   section: WorkspaceSection;
@@ -38,6 +40,10 @@ export function WorkspaceExplorerDialog({
   onPinTool?: (checkId: string, expected: ToolCandidate) => Promise<void>;
   /** Approves a root restored from a backup; the service checks the directory again first. */
   onApproveRoot?: (rootId: string) => Promise<void>;
+  /** Opens the approval dialog filled in from this check, to approve a corrected one in its place. */
+  onReplaceCheck?: (check: CheckDto) => void;
+  /** Takes the check out of the gate; its record and evidence stay in the history. */
+  onRetireCheck?: (check: CheckDto, reason: string) => Promise<void>;
 }) {
   const titleId = useId();
   const dialog = useRef<HTMLElement>(null);
@@ -46,6 +52,8 @@ export function WorkspaceExplorerDialog({
   const [candidate, setCandidate] = useState<(ToolCandidate & { checkId: string }) | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
+  const [retiring, setRetiring] = useState<string | null>(null);
+  const [retireReason, setRetireReason] = useState('');
   useDialogFocus(open, onClose, dialog, closeButton);
   if (!open) return null;
 
@@ -70,6 +78,13 @@ export function WorkspaceExplorerDialog({
       if (!onPinTool) return;
       await onPinTool(checkId, { path: reviewed.path, sha256: reviewed.sha256 });
       setCandidate(null);
+    });
+  const retireCheck = (check: CheckDto) =>
+    attempt(check.id, async () => {
+      if (!onRetireCheck) return;
+      await onRetireCheck(check, retireReason.trim());
+      setRetiring(null);
+      setRetireReason('');
     });
   const approveRoot = async (rootId: string) => {
     if (!onApproveRoot) return;
@@ -133,6 +148,7 @@ export function WorkspaceExplorerDialog({
                       <strong>{root.label}</strong>
                       <span>
                         {root.status === 'pending' ? 'Restored · waiting for approval' : 'Approved'}
+                        {root.missing ? ' · folder missing' : ''}
                       </span>
                     </div>
                     <dl>
@@ -141,6 +157,13 @@ export function WorkspaceExplorerDialog({
                         <dd className="mono tool-path">{root.path}</dd>
                       </div>
                     </dl>
+                    {root.missing && (
+                      <p>
+                        This folder is not on this machine right now. Repositories under it wait
+                        until it is back, and everything else keeps working. If it moved, add the
+                        new location as a new root.
+                      </p>
+                    )}
                     {root.status === 'pending' && (
                       <>
                         <p>
@@ -195,6 +218,13 @@ export function WorkspaceExplorerDialog({
                         <dd className="mono">{repository.snapshot.fingerprint.slice(0, 12)}…</dd>
                       </div>
                     </dl>
+                    {bootstrap.sourceIssues
+                      .filter((issue) => issue.repositoryId === repository.id)
+                      .map((issue) => (
+                        <p className="error-message" key={issue.repositoryId}>
+                          {issue.message}
+                        </p>
+                      ))}
                   </article>
                 ))
               )}
@@ -210,9 +240,15 @@ export function WorkspaceExplorerDialog({
                   <article key={check.id}>
                     <div>
                       <strong>{check.label}</strong>
-                      <span>{check.kind}</span>
+                      <span>{check.retiredAt ? 'Retired' : check.kind}</span>
                     </div>
                     <dl>
+                      {check.retiredAt && (
+                        <div className="wide">
+                          <dt>Retired {check.retiredAt.slice(0, 10)}</dt>
+                          <dd>{check.retiredReason}</dd>
+                        </div>
+                      )}
                       <div className="wide">
                         <dt>Pinned tool</dt>
                         <dd className="mono tool-path">
@@ -244,7 +280,8 @@ export function WorkspaceExplorerDialog({
                         <dd>{check.approvedAt.slice(0, 10)}</dd>
                       </div>
                     </dl>
-                    {onReviewTool &&
+                    {!check.retiredAt &&
+                      onReviewTool &&
                       onPinTool &&
                       (candidate?.checkId === check.id ? (
                         <div className="pin-review" aria-label={`Tool to pin for ${check.label}`}>
@@ -277,18 +314,88 @@ export function WorkspaceExplorerDialog({
                           </div>
                         </div>
                       ) : (
-                        <button
-                          className="secondary-action pin-action"
-                          type="button"
-                          onClick={() => void reviewTool(check.id)}
-                          disabled={busy !== null}
-                          aria-label={
-                            busy === check.id ? undefined : `Pin tool again for ${check.label}`
-                          }
-                        >
-                          {busy === check.id ? 'Reading the tool…' : 'Pin tool again'}
-                        </button>
+                        <div className="pin-actions">
+                          <button
+                            className="secondary-action pin-action"
+                            type="button"
+                            onClick={() => void reviewTool(check.id)}
+                            disabled={busy !== null}
+                            aria-label={
+                              busy === check.id ? undefined : `Pin tool again for ${check.label}`
+                            }
+                          >
+                            {busy === check.id ? 'Reading the tool…' : 'Pin tool again'}
+                          </button>
+                          {onReplaceCheck && (
+                            <button
+                              className="secondary-action pin-action"
+                              type="button"
+                              onClick={() => onReplaceCheck(check)}
+                              disabled={busy !== null}
+                              aria-label={`Replace ${check.label}`}
+                            >
+                              Replace
+                            </button>
+                          )}
+                          {onRetireCheck && (
+                            <button
+                              className="secondary-action pin-action"
+                              type="button"
+                              onClick={() => {
+                                setRetiring(check.id);
+                                setRetireReason('');
+                              }}
+                              disabled={busy !== null}
+                              aria-label={`Retire ${check.label}`}
+                            >
+                              Retire
+                            </button>
+                          )}
+                        </div>
                       ))}
+                    {retiring === check.id && !check.retiredAt && (
+                      <form
+                        className="retire-review"
+                        aria-label={`Retire ${check.label}`}
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void retireCheck(check);
+                        }}
+                      >
+                        <p>
+                          A retired check leaves the gate, and its record and evidence stay in the
+                          history. Evidence counts only under the set of checks it ran with, so the
+                          other checks may need to run again. Packets show this retirement and its
+                          reason.
+                        </p>
+                        <label>
+                          <span className="field-label">Why it retires</span>
+                          <textarea
+                            className="text-field"
+                            value={retireReason}
+                            maxLength={2_000}
+                            onChange={(event) => setRetireReason(event.currentTarget.value)}
+                            required
+                          />
+                        </label>
+                        <div className="pin-actions">
+                          <button
+                            className="primary-action"
+                            type="submit"
+                            disabled={busy !== null || retireReason.trim() === ''}
+                          >
+                            {busy === check.id ? 'Retiring…' : 'Retire this check'}
+                          </button>
+                          <button
+                            className="secondary-action"
+                            type="button"
+                            onClick={() => setRetiring(null)}
+                          >
+                            Keep it
+                          </button>
+                        </div>
+                      </form>
+                    )}
                   </article>
                 ))
               )}

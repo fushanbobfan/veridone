@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -60,6 +60,25 @@ async function waitForBuiltWorkspace(url, child, output) {
   }
   throw new Error(`Built workspace did not become healthy.\n${output()}`);
 }
+
+// The content security policy allows fonts from 'self' only, so a font inlined as a data URL is blocked on every page
+// load. Playwright runs the dev server, which serves fonts as files, so only the built CSS shows this.
+async function assertFontsAreFiles() {
+  const assets = path.join(repositoryRoot, 'apps', 'web', 'dist', 'assets');
+  const names = (await readdir(assets)).filter((name) => name.endsWith('.css'));
+  const sheets = await Promise.all(names.map((name) => readFile(path.join(assets, name), 'utf8')));
+  const faces = sheets.flatMap((sheet) => sheet.match(/@font-face\s*\{[^}]*\}/giu) ?? []);
+  if (faces.length === 0) throw new Error(`No @font-face rule found in ${assets}.`);
+  const inlined = faces.filter((face) => /url\(\s*["']?data:/iu.test(face));
+  if (inlined.length > 0) {
+    throw new Error(
+      `${inlined.length} of ${faces.length} @font-face rules inline a font as a data URL, which font-src 'self' blocks.`,
+    );
+  }
+  console.log(`Built CSS loads all ${faces.length} fonts from files.`);
+}
+
+await assertFontsAreFiles();
 
 const dataDirectory = await mkdtemp(path.join(tmpdir(), 'veridone-built-smoke-'));
 const apiPort = await reservePort();

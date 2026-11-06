@@ -132,6 +132,9 @@ function publicChecks(checks: CheckRecord[], pseudonym: Pseudonym, sanitize: San
     setupTimeoutMs: check.setupTimeoutMs,
     definitionHash: pseudonym('check-definition', check.definitionHash),
     approvedAt: check.approvedAt,
+    // A check the operator took out of the gate stays listed, so a reader sees that the policy changed and why.
+    retiredAt: check.retiredAt,
+    retiredReason: check.retiredReason,
   }));
 }
 
@@ -455,6 +458,8 @@ interface PacketViewInput {
     setupArgs: string[];
     cwdRelative: string;
     toolSha256: string | null;
+    retiredAt: string | null;
+    retiredReason: string | null;
   }>;
   evidence: Array<{
     label: string;
@@ -508,6 +513,7 @@ function packetView(packet: PacketViewInput) {
           : null,
       cwd: check.cwdRelative,
       tool: check.toolSha256 ?? 'not pinned',
+      retired: check.retiredAt ? `${check.retiredAt}: ${check.retiredReason ?? 'no reason'}` : null,
     })),
     evidence: packet.evidence.map((item) => ({
       label: item.label,
@@ -564,7 +570,7 @@ ${list(
 ${list(
   view.checks.map(
     (check) =>
-      `- **${escapeMarkdown(check.label)}** — \`${escapeMarkdown(check.command)}\` in \`${escapeMarkdown(check.cwd)}\`${check.setup ? `, after setup \`${escapeMarkdown(check.setup)}\`` : ''}; tool SHA-256 ${check.tool}`,
+      `- **${escapeMarkdown(check.label)}** — \`${escapeMarkdown(check.command)}\` in \`${escapeMarkdown(check.cwd)}\`${check.setup ? `, after setup \`${escapeMarkdown(check.setup)}\`` : ''}; tool SHA-256 ${check.tool}${check.retired ? `; retired ${escapeMarkdown(check.retired)}` : ''}`,
   ),
   '_No approved checks._',
 )}
@@ -617,7 +623,7 @@ function renderHtml(view: PacketView): string {
 <h2>Checks</h2>${list(
     view.checks.map(
       (check) =>
-        `<li><strong>${escapeHtml(check.label)}</strong> — <code>${escapeHtml(check.command)}</code> in <code>${escapeHtml(check.cwd)}</code>${check.setup ? `, after setup <code>${escapeHtml(check.setup)}</code>` : ''}<br><small>Tool SHA-256: ${escapeHtml(check.tool)}</small></li>`,
+        `<li><strong>${escapeHtml(check.label)}</strong> — <code>${escapeHtml(check.command)}</code> in <code>${escapeHtml(check.cwd)}</code>${check.setup ? `, after setup <code>${escapeHtml(check.setup)}</code>` : ''}<br><small>Tool SHA-256: ${escapeHtml(check.tool)}</small>${check.retired ? `<br><small>Retired ${escapeHtml(check.retired)}</small>` : ''}</li>`,
     ),
     'No approved checks.',
   )}

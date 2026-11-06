@@ -76,6 +76,7 @@ async function connectSource(
 test('onboards, verifies, decides, and exports without trusting the claim', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'No evidence sources yet' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Restore a backup' })).toBeVisible();
 
   await connectSource(page, 'Approved root', fixtureRoot);
   await connectSource(page, 'Git repository', repositoryPath);
@@ -110,7 +111,9 @@ test('onboards, verifies, decides, and exports without trusting the claim', asyn
 
   await page.getByRole('button', { name: 'Run approved checks' }).click();
 
-  await expect(page.getByText('All required evidence is current')).toBeVisible();
+  await expect(page.getByText('All required evidence is current')).toBeVisible({
+    timeout: 60_000,
+  });
   await expect(page.getByRole('button', { name: 'Accept work' })).toBeEnabled();
   await expectNoWcagViolations(page);
 

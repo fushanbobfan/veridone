@@ -1,4 +1,4 @@
-import { normalizeReceiptTimestamp, receiptFieldSchemas } from '@veridone/adapters';
+import { normalizeReceiptTimestamp } from '@veridone/adapters';
 import { canonicalJson, repositorySnapshotSchema, sha256Hex } from '@veridone/core';
 import { z } from 'zod';
 
@@ -6,7 +6,6 @@ import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
 import {
   claimHash,
   type EvidenceRecord,
-  type ReceiptRecord,
   type VerdictRecord,
   type VeriDoneDatabase,
 } from './database.js';
@@ -16,57 +15,70 @@ export class WorkspaceConflictError extends Error {
   override readonly name = 'WorkspaceConflictError';
 }
 
+/**
+ * The largest backup export writes and restore reads. A backup is read as one string, and a JavaScript string
+ * ends a little past 536 million characters.
+ */
+export const maxWorkspaceBackupBytes = 500_000_000;
+
 const isoDate = z.string().datetime({ offset: true });
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/iu);
+// A receipt's own time as an earlier version stored it: an ISO 8601 timestamp when it can be read as one.
+const storedTime = z.string().transform((value) => normalizeReceiptTimestamp(value) ?? value);
 
+// Import and approval limit new data. A backup carries whatever the workspace holds, so that export never fails on
+// a stored record, and it bounds text and lists only by the size of the whole file.
 const approvedRootSchema = z.object({
   id: z.string().uuid(),
-  path: z.string().min(1).max(4_096),
-  label: z.string().min(1).max(120),
+  path: z.string().min(1),
+  label: z.string().min(1),
   createdAt: isoDate,
 });
 
 const repositorySchema = z.object({
-  id: z.string().min(1).max(128),
-  path: z.string().min(1).max(4_096),
-  name: z.string().min(1).max(512),
-  snapshot: repositorySnapshotSchema,
+  id: z.string().min(1),
+  path: z.string().min(1),
+  name: z.string().min(1),
+  snapshot: repositorySnapshotSchema.extend({
+    statusEntries: z.array(z.string()),
+    submoduleEntries: z.array(z.string()).default([]),
+  }),
   updatedAt: isoDate,
 });
 
-// Receipt and work-item fields use the receipt import's own rules, so whatever imports also exports.
 const receiptSchema = z.object({
   id: z.string().uuid(),
-  runId: receiptFieldSchemas.runId,
-  sourcePath: z.string().min(1).max(4_096),
-  taskType: receiptFieldSchemas.taskType,
-  status: receiptFieldSchemas.status,
-  startedAt: receiptFieldSchemas.timestamp,
-  completedAt: receiptFieldSchemas.timestamp.nullable(),
-  stageCount: z.number().int().nonnegative().max(100_000),
+  runId: z.string().min(1),
+  sourcePath: z.string().min(1),
+  taskType: z.string(),
+  status: z.string(),
+  startedAt: storedTime,
+  completedAt: storedTime.nullable(),
+  stageCount: z.number().int().nonnegative(),
   degraded: z.boolean(),
   importedAt: isoDate,
 });
 
 const workItemSchema = z.object({
   id: z.string().uuid(),
-  repositoryId: z.string().min(1).max(128).nullable(),
-  sourceType: z.string().min(1).max(100),
-  sourceRef: z.string().min(1).max(4_096),
-  title: receiptFieldSchemas.title,
-  claim: receiptFieldSchemas.claim,
-  sourceLabel: z.string().min(1).max(200),
-  updatedAt: isoDate,
+  repositoryId: z.string().min(1).nullable(),
+  sourceType: z.string().min(1),
+  sourceRef: z.string().min(1),
+  title: z.string(),
+  claim: z.string(),
+  sourceLabel: z.string(),
+  updatedAt: storedTime,
   snapshotFingerprint: sha256.nullable(),
   humanVerdict: z.enum(['accepted', 'changes-requested', 'rejected']).nullable(),
 });
 
+// A restore validates each check again as a new definition, with the approval's limits.
 const checkSchema = z.object({
   id: z.string().uuid(),
-  repositoryId: z.string().min(1).max(128),
-  label: z.string().min(1).max(200),
-  kind: z.string().min(1).max(100),
-  executable: z.string().min(1).max(4_096),
+  repositoryId: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.string().min(1),
+  executable: z.string().min(1),
   args: z.array(z.string().max(4_096)).max(100),
   versionArgs: z.array(z.string().max(4_096)).max(10).default(['--version']),
   scopePaths: z.array(z.string().max(1_024)).max(100).default([]),
@@ -88,31 +100,33 @@ const checkSchema = z.object({
     .min(1_000)
     .max(60 * 60_000)
     .default(10 * 60_000),
+  retiredAt: isoDate.nullable().default(null),
+  retiredReason: z.string().min(1).max(2_000).nullable().default(null),
 });
 
 const evidenceSchema = z.object({
   id: z.string().uuid(),
   workItemId: z.string().uuid(),
   checkId: z.string().uuid(),
-  kind: z.string().min(1).max(100),
-  label: z.string().min(1).max(200),
-  result: z.string().min(1).max(100),
-  repositoryId: z.string().min(1).max(128),
+  kind: z.string().min(1),
+  label: z.string().min(1),
+  result: z.string().min(1),
+  repositoryId: z.string().min(1),
   snapshotFingerprint: sha256,
   head: z.string().regex(/^[0-9a-f]{7,64}$/iu),
-  contractVersion: z.string().min(1).max(200),
-  checkDefinitionVersion: z.string().min(1).max(200),
+  contractVersion: z.string().min(1),
+  checkDefinitionVersion: z.string().min(1),
   startedAt: isoDate,
   completedAt: isoDate,
   durationMs: z.number().int().nonnegative(),
-  toolVersion: z.string().max(4_096).nullable().default(null),
+  toolVersion: z.string().nullable().default(null),
   exitCode: z.number().int().nullable().default(null),
-  stdout: z.string().max(10_000_000),
-  stderr: z.string().max(10_000_000),
-  artifactHashes: z.array(sha256).max(10_000),
-  invalidReason: z.string().max(2_000).nullable(),
+  stdout: z.string(),
+  stderr: z.string(),
+  artifactHashes: z.array(sha256),
+  invalidReason: z.string().nullable(),
   isolation: z.enum(['clean-checkout']).nullable().default(null),
-  toolPath: z.string().min(1).max(4_096).nullable().default(null),
+  toolPath: z.string().min(1).nullable().default(null),
   toolSha256: sha256.nullable().default(null),
   origin: z.enum(['local', 'imported']).default('local'),
 });
@@ -121,12 +135,12 @@ const verdictSchema = z.object({
   id: z.string().uuid(),
   workItemId: z.string().uuid(),
   decision: z.enum(['accepted', 'changes-requested', 'rejected']),
-  note: z.string().max(10_000),
+  note: z.string(),
   decidedAt: isoDate,
   snapshotFingerprint: sha256,
-  contractVersion: z.string().min(1).max(200),
-  evidenceIds: z.array(z.string().uuid()).max(10_000),
-  overrideReason: z.string().min(1).max(2_000).nullable(),
+  contractVersion: z.string().min(1),
+  evidenceIds: z.array(z.string().uuid()),
+  overrideReason: z.string().min(1).nullable(),
   // Version 1 backups predate the verdict chain and carry neither field.
   sequence: z.number().int().min(1).optional(),
   previousVerdictId: z.string().uuid().nullable().optional(),
@@ -134,10 +148,10 @@ const verdictSchema = z.object({
 });
 
 const contractSchema = z.object({
-  id: z.string().min(1).max(128),
-  version: z.string().min(1).max(200),
-  title: z.string().min(1).max(200),
-  criteria: z.array(z.unknown()).max(1_000),
+  id: z.string().min(1),
+  version: z.string().min(1),
+  title: z.string().min(1),
+  criteria: z.array(z.unknown()),
   createdAt: isoDate,
 });
 
@@ -147,14 +161,14 @@ const workspacePayloadSchema = z
     application: z.literal('veridone'),
     exportedAt: isoDate,
     data: z.object({
-      approvedRoots: z.array(approvedRootSchema).max(10_000),
-      repositories: z.array(repositorySchema).max(10_000),
-      receipts: z.array(receiptSchema).max(100_000),
-      workItems: z.array(workItemSchema).max(100_000),
-      contracts: z.array(contractSchema).max(10_000),
-      checks: z.array(checkSchema).max(100_000),
-      evidence: z.array(evidenceSchema).max(500_000),
-      verdicts: z.array(verdictSchema).max(500_000),
+      approvedRoots: z.array(approvedRootSchema),
+      repositories: z.array(repositorySchema),
+      receipts: z.array(receiptSchema),
+      workItems: z.array(workItemSchema),
+      contracts: z.array(contractSchema),
+      checks: z.array(checkSchema),
+      evidence: z.array(evidenceSchema),
+      verdicts: z.array(verdictSchema),
     }),
   })
   .strict();
@@ -191,44 +205,37 @@ export interface RestoreResult {
 /** Ends a preview's transaction so that everything it inserted rolls back. */
 class RestorePreviewed extends Error {}
 
-/**
- * Receipts imported before import normalized their times may hold a local time without an offset;
- * the backup carries it as an ISO 8601 timestamp.
- */
-function exportableReceipt(receipt: ReceiptRecord): ReceiptRecord {
-  const timestamp = (value: string) => {
-    const normalized = normalizeReceiptTimestamp(value);
-    if (normalized === null) {
-      throw new Error(
-        `Receipt ${receipt.runId} records the time "${value}", which is not a timestamp. Import the receipt again with an ISO 8601 time.`,
-      );
-    }
-    return normalized;
-  };
-  return {
-    ...receipt,
-    startedAt: timestamp(receipt.startedAt),
-    completedAt: receipt.completedAt === null ? null : timestamp(receipt.completedAt),
-  };
+/** The first thing a schema refused, for a reader who has no way to see the schema. */
+function firstIssue(error: z.ZodError): string {
+  const issue = error.issues[0];
+  return `${issue?.path.join('.') || 'the file'}: ${issue?.message ?? 'unreadable'}`;
 }
 
 export async function exportWorkspace(database: VeriDoneDatabase): Promise<WorkspaceDocument> {
-  const payload = workspacePayloadSchema.parse({
-    schemaVersion: 2,
-    application: 'veridone',
-    exportedAt: new Date().toISOString(),
-    data: {
-      // Every root goes into the backup; a restore marks each one pending again.
-      approvedRoots: database.listRoots().map(({ status: _status, ...root }) => root),
-      repositories: database.listRepositories(),
-      receipts: database.listReceipts().map(exportableReceipt),
-      workItems: database.listWorkItems(),
-      contracts: database.listContracts(),
-      checks: database.listChecks(),
-      evidence: database.listEvidence(),
-      verdicts: database.listVerdicts(),
-    },
-  });
+  let payload: z.infer<typeof workspacePayloadSchema>;
+  try {
+    payload = workspacePayloadSchema.parse({
+      schemaVersion: 2,
+      application: 'veridone',
+      exportedAt: new Date().toISOString(),
+      data: {
+        // Every root goes into the backup; a restore marks each one pending again.
+        approvedRoots: database.listRoots().map(({ status: _status, ...root }) => root),
+        repositories: database.listRepositories(),
+        receipts: database.listReceipts(),
+        workItems: database.listWorkItems(),
+        contracts: database.listContracts(),
+        checks: database.listChecks(),
+        evidence: database.listEvidence(),
+        verdicts: database.listVerdicts(),
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) throw error;
+    throw new Error(
+      `A stored record does not fit the backup format (${firstIssue(error)}). To keep a copy of everything, stop VeriDone and copy its data directory.`,
+    );
+  }
   return {
     ...payload,
     integrity: {
@@ -348,12 +355,20 @@ export async function importWorkspace(
   input: unknown,
   options: { dryRun?: boolean } = {},
 ): Promise<RestoreResult> {
-  // The checksum covers the payload exactly as the file carries it, before defaults fill gaps.
-  const { integrity, ...rawPayload } = z.looseObject({ integrity: integritySchema }).parse(input);
-  if ((await sha256Hex(canonicalJson(rawPayload))) !== integrity.payloadHash) {
-    throw new Error('The workspace integrity hash does not match its payload.');
+  let document: WorkspaceDocument;
+  try {
+    // The checksum covers the payload exactly as the file carries it, before defaults fill gaps.
+    const { integrity, ...rawPayload } = z.looseObject({ integrity: integritySchema }).parse(input);
+    if ((await sha256Hex(canonicalJson(rawPayload))) !== integrity.payloadHash) {
+      throw new Error('The workspace integrity hash does not match its payload.');
+    }
+    document = workspaceDocumentSchema.parse(input);
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) throw error;
+    throw new Error(
+      `This file is not a VeriDone workspace backup this version can read (${firstIssue(error)}).`,
+    );
   }
-  const document = workspaceDocumentSchema.parse(input);
   const data = document.data;
   const verdicts = verdictHistory(document);
   // Verdicts recorded before claim hashes were kept judged the claim their backup carries.
@@ -384,6 +399,8 @@ export async function importWorkspace(
         ...definition,
         id: record.id,
         approvedAt: record.approvedAt,
+        retiredAt: record.retiredAt,
+        retiredReason: record.retiredReason,
         definitionHash: await checkDefinitionHash(definition),
       };
     }),
@@ -496,12 +513,12 @@ export async function importWorkspace(
           id, repository_id, label, kind, executable, args_json, cwd_relative,
           timeout_ms, max_output_bytes, definition_hash, approved_at,
           version_args_json, scope_paths_json, resolved_executable, executable_sha256,
-          setup_args_json, setup_timeout_ms
+          setup_args_json, setup_timeout_ms, retired_at, retired_reason
         ) VALUES (
           @id, @repositoryId, @label, @kind, @executable, @argsJson, @cwdRelative,
           @timeoutMs, @maxOutputBytes, @definitionHash, @approvedAt,
           @versionArgsJson, @scopePathsJson, @resolvedExecutable, @executableSha256,
-          @setupArgsJson, @setupTimeoutMs
+          @setupArgsJson, @setupTimeoutMs, @retiredAt, @retiredReason
         ) ON CONFLICT(id) DO NOTHING
       `);
         for (const record of checks) {

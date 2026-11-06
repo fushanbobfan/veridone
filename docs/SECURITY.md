@@ -70,6 +70,12 @@ Packets are signed with an Ed25519 key that the workspace creates on first use a
 
 **Control:** the service computes each work item's readiness in one place. The verdict gate refuses an acceptance without an override reason unless every condition holds, and the review view shows the readiness the service computed.
 
+### Retiring a check to pass a gate
+
+**Threat:** a check that fails is taken out of the gate so that the work item can be accepted without an override.
+
+**Control:** retiring takes the anti-CSRF token and the definition hash the operator saw, and requires a reason. Evidence counts only under the set of checks it ran with, so the other checks need a run under the new set unless they already have one on this commit, and a capture that began before the change cannot write the older set back. With every check retired the gate stays closed. A retired check stays on record with its evidence, every packet lists it with the time and the reason, and a restore never retires a check the workspace holds. Nothing imported can retire a check. Choosing the policy stays the operator's call: VeriDone records a retirement and leaves the judgment to whoever reads the packet.
+
 ### Restored access
 
 **Threat:** a backup made on another machine, or by someone else, grants read access to directories on this one.
@@ -81,6 +87,8 @@ Packets are signed with an Ed25519 key that the workspace creates on first use a
 **Threat:** the repository, the claim, or the verdict history changes between the moment a reviewer opens a verdict and the moment it is recorded.
 
 **Control:** the verdict request carries the fingerprint, claim hash, and latest verdict the reviewer saw. The server captures the repository again and records the verdict in one immediate transaction only if all three still match; otherwise it answers 409. A receipt cannot change the claim of a work item that already has a verdict.
+
+When the repository cannot be read at decision time, there is no current state to compare or bind to. The verdict still compares the fingerprint, claim, and latest verdict the reviewer saw with those on record, and binds to the last state captured. A plain acceptance is refused; a rejection, a change request, and an acceptance with an override reason record.
 
 ### Rewritten history
 

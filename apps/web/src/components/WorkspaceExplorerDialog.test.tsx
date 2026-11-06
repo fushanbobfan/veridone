@@ -37,6 +37,8 @@ const bootstrap: BootstrapDto = {
       approvedAt: '2026-10-22T10:00:00.000Z',
       setupArgs: [],
       setupTimeoutMs: 600_000,
+      retiredAt: null,
+      retiredReason: null,
     },
   ],
   evidence: [],
@@ -82,6 +84,158 @@ describe('workspace explorer checks', () => {
 
     await user.click(screen.getByRole('button', { name: 'Pin this file' }));
     expect(onPinTool).toHaveBeenCalledWith('check', candidate);
+  });
+
+  it('retires a check only with a reason, and offers to replace it', async () => {
+    const user = userEvent.setup();
+    const onRetireCheck = vi.fn(async () => undefined);
+    const onReplaceCheck = vi.fn();
+    render(
+      <WorkspaceExplorerDialog
+        open
+        section="checks"
+        bootstrap={bootstrap}
+        onSection={() => undefined}
+        onClose={() => undefined}
+        onRetireCheck={onRetireCheck}
+        onReplaceCheck={onReplaceCheck}
+        onReviewTool={vi.fn()}
+        onPinTool={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Replace Unit tests' }));
+    expect(onReplaceCheck).toHaveBeenCalledWith(bootstrap.checks[0]);
+
+    await user.click(screen.getByRole('button', { name: 'Retire Unit tests' }));
+    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: 'Retire this check' });
+    expect(confirm.disabled).toBe(true);
+    await user.type(screen.getByLabelText('Why it retires'), '  It had a typo.  ');
+    expect(confirm.disabled).toBe(false);
+    await user.click(confirm);
+    expect(onRetireCheck).toHaveBeenCalledWith(bootstrap.checks[0], 'It had a typo.');
+  });
+
+  it('shows why a check could not retire', async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkspaceExplorerDialog
+        open
+        section="checks"
+        bootstrap={bootstrap}
+        onSection={() => undefined}
+        onClose={() => undefined}
+        onRetireCheck={vi.fn(async () => {
+          throw new Error('The check changed after you opened it.');
+        })}
+        onReviewTool={vi.fn()}
+        onPinTool={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Retire Unit tests' }));
+    await user.type(screen.getByLabelText('Why it retires'), 'A reason.');
+    await user.click(screen.getByRole('button', { name: 'Retire this check' }));
+    expect(await screen.findByText('The check changed after you opened it.')).toBeTruthy();
+  });
+
+  it('lists a retired check with its reason and offers nothing on it', () => {
+    const retired: BootstrapDto = {
+      ...bootstrap,
+      checks: bootstrap.checks.map((check) => ({
+        ...check,
+        retiredAt: '2026-11-05T10:00:00.000Z',
+        retiredReason: 'It had a typo.',
+      })),
+    };
+    render(
+      <WorkspaceExplorerDialog
+        open
+        section="checks"
+        bootstrap={retired}
+        onSection={() => undefined}
+        onClose={() => undefined}
+        onRetireCheck={vi.fn()}
+        onReplaceCheck={vi.fn()}
+        onReviewTool={vi.fn()}
+        onPinTool={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('It had a typo.')).toBeTruthy();
+    expect(screen.getByText('Retired 2026-11-05')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retire Unit tests' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Replace Unit tests' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pin tool again for Unit tests' })).toBeNull();
+  });
+});
+
+describe('workspace explorer folders that are gone', () => {
+  it('marks a missing root and shows a repository that cannot be read', async () => {
+    const user = userEvent.setup();
+    const withMissing: BootstrapDto = {
+      ...bootstrap,
+      sourceIssues: [{ repositoryId: 'repo', message: 'VeriDone cannot read the repository app.' }],
+      roots: [
+        {
+          id: 'gone',
+          path: '/work/gone',
+          label: 'Gone',
+          createdAt: '2026-10-22T10:00:00.000Z',
+          status: 'approved',
+          missing: true,
+        },
+      ],
+      repositories: [
+        {
+          id: 'repo',
+          path: '/work/gone/app',
+          name: 'app',
+          snapshot: {
+            repositoryId: 'repo',
+            head: 'c'.repeat(40),
+            branch: 'main',
+            statusEntries: [],
+            worktreeHash: 'd'.repeat(64),
+            diffStats: {
+              changedFiles: 0,
+              additions: 0,
+              deletions: 0,
+              binaryFiles: 0,
+              untrackedFiles: 0,
+            },
+            fingerprint: 'a'.repeat(64),
+            contractVersion: 'default-v1',
+            checkDefinitionVersion: 'checks-v1',
+            capturedAt: '2026-10-22T10:00:00.000Z',
+          },
+          updatedAt: '2026-10-22T10:00:00.000Z',
+        },
+      ],
+    };
+    const onSection = vi.fn();
+    const { rerender } = render(
+      <WorkspaceExplorerDialog
+        open
+        section="roots"
+        bootstrap={withMissing}
+        onSection={onSection}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByText('Approved · folder missing')).toBeTruthy();
+    expect(screen.getByText(/add the new location as a new root/u)).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Repositories' }));
+    expect(onSection).toHaveBeenCalledWith('repositories');
+    rerender(
+      <WorkspaceExplorerDialog
+        open
+        section="repositories"
+        bootstrap={withMissing}
+        onSection={onSection}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByText('VeriDone cannot read the repository app.')).toBeTruthy();
   });
 });
 

@@ -27,11 +27,14 @@ export const checkResultSchema = z.enum([
 
 export type CheckResult = z.infer<typeof checkResultSchema>;
 
+/** The most changed paths a repository snapshot records. */
+export const maxStatusEntries = 10_000;
+
 export const repositorySnapshotSchema = z.object({
   repositoryId: z.string().min(1),
   head: z.string().regex(/^[0-9a-f]{7,64}$/i),
   branch: z.string().min(1).nullable(),
-  statusEntries: z.array(z.string()).max(10_000),
+  statusEntries: z.array(z.string()).max(maxStatusEntries),
   submoduleEntries: z.array(z.string()).max(1_000).default([]),
   worktreeHash: z.string().regex(/^[0-9a-f]{64}$/i),
   diffStats: z.object({

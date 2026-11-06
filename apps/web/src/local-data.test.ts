@@ -85,6 +85,8 @@ function workspace(options: {
         approvedAt: '2026-10-22T10:00:00.000Z',
         setupArgs: [],
         setupTimeoutMs: 600_000,
+        retiredAt: null,
+        retiredReason: null,
       },
     ],
     evidence: options.evidence
@@ -132,6 +134,7 @@ function workspace(options: {
     readiness: {
       work: {
         ready: passing && !options.degraded,
+        repositoryIssue: null,
         bound: true,
         bindingFresh: true,
         degraded: options.degraded ?? false,
@@ -184,6 +187,60 @@ describe('local review state', () => {
     expect(restored).toMatchObject({ state: 'blocked', gatesReady: false });
     expect(restored.criteria.find((criterion) => criterion.id === 'check')?.detail).toMatch(
       /Restored from a backup/u,
+    );
+  });
+
+  it('leaves a retired check out of the gate rows', () => {
+    const bootstrap = workspace({ evidence: true });
+    const item = bootstrap.workItems[0];
+    if (!item) throw new Error('fixture has no work item');
+    const retired = {
+      ...bootstrap,
+      checks: bootstrap.checks.map((check) => ({
+        ...check,
+        retiredAt: '2026-11-05T10:00:00.000Z',
+        retiredReason: 'It had a typo.',
+      })),
+    };
+    const row = workItemToReview(item, retired).criteria.map((criterion) => criterion.id);
+    expect(row).not.toContain('check');
+    expect(row).toContain('checks');
+  });
+
+  it('gives the run behind a check row, whose output the review can read', () => {
+    const row = review({ evidence: true }).criteria.find((criterion) => criterion.id === 'check');
+    expect(row?.evidenceId).toBe('evidence');
+    const none = review({ evidence: false }).criteria.find((item) => item.id === 'check');
+    expect(none?.evidenceId).toBeUndefined();
+  });
+
+  it('leads with the reason a repository cannot be read', () => {
+    const bootstrap = workspace({ evidence: true });
+    const item = bootstrap.workItems[0];
+    const readiness = bootstrap.readiness.work;
+    if (!item || !readiness) throw new Error('fixture has no work item');
+    const issue = 'VeriDone cannot read the repository app.';
+    const unreadable = {
+      ...bootstrap,
+      readiness: { work: { ...readiness, ready: false, repositoryIssue: issue } },
+    };
+    expect(workItemToReview(item, unreadable)).toMatchObject({
+      reason: issue,
+      gatesReady: false,
+      state: 'blocked',
+    });
+  });
+
+  it('names the way out when a check needs fresh evidence', () => {
+    expect(review({ evidence: false }).reason).toMatch(/replace or retire it under Checks/u);
+  });
+
+  it('copes with a stored time that is no timestamp', () => {
+    const bootstrap = workspace({ evidence: true });
+    const item = bootstrap.workItems[0];
+    if (!item) throw new Error('fixture has no work item');
+    expect(workItemToReview({ ...item, updatedAt: 'yesterday' }, bootstrap).updatedLabel).toBe(
+      'time unknown',
     );
   });
 

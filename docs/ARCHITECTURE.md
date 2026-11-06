@@ -45,7 +45,7 @@ A normalized, hashed record of repository identity, HEAD, branch, index and work
 
 ### Acceptance contract
 
-VeriDone ships one default contract: every approved check for the repository needs fresh passing evidence, and claim text never satisfies it.
+VeriDone ships one default contract: every approved check for the repository that is not retired needs fresh passing evidence, and claim text never satisfies it.
 
 ### Evidence
 
@@ -98,6 +98,8 @@ Checks are declared locally with an executable and argument array. Approval reso
 9. stores evidence with its isolation, tool path, and tool hash.
 
 The setup arguments and timeout are part of the check definition. A check without setup keeps the definition hash it had before setup existed.
+
+A check's command never changes once approved; pinning its tool again is the one change on record. Retiring a check records a time and a reason on it and takes it out of the aggregate check version, of readiness, and of declared scope; the record and its evidence stay. Replacing a check approves a new definition and retires the old one in one transaction. The repository's stored check version is computed from the active checks whenever a repository or a check is written, so a capture that began before a change cannot bring an older set back. A missing root is skipped when a path is resolved against the approved roots, so it affects only what lies under it, and a repository that cannot be captured is reported with the bootstrap and keeps its last snapshot, against which a verdict can still be recorded.
 
 ## Acceptance packets
 

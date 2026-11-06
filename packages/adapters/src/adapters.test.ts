@@ -6,10 +6,13 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { maxStatusEntries } from '@veridone/core';
+
 import {
   absolutePathEntries,
   captureGitSnapshot,
   createCleanCheckout,
+  discoverGitRepositories,
   environmentValue,
   findOnPath,
   pinExecutable,
@@ -23,6 +26,7 @@ import {
   readReceiptCollection,
   receiptFieldSchemas,
   repositorySettings,
+  resolveGitExecutable,
   resolveWithinApprovedRoots,
   runBoundedProcess,
 } from './index.js';
@@ -69,6 +73,81 @@ describe('path boundaries', () => {
       'outside the approved roots',
     );
   });
+});
+
+describe('folders that are gone', () => {
+  const raw = /ENOENT|realpath/u;
+
+  it('lets one missing root stop nothing under the others', async () => {
+    const root = await temporaryDirectory();
+    const missing = path.join(await temporaryDirectory(), 'gone');
+    const child = path.join(root, 'child');
+    await mkdir(child);
+
+    await expect(resolveWithinApprovedRoots(child, [missing, root])).resolves.toBe(
+      await realpath(child),
+    );
+    await expect(resolveWithinApprovedRoots(child, [missing])).rejects.toThrow(
+      'outside the approved roots',
+    );
+  });
+
+  it('names a missing path in plain words', async () => {
+    const root = await temporaryDirectory();
+    const missing = path.join(root, 'gone');
+
+    const refusal = await resolveWithinApprovedRoots(missing, [root]).catch(
+      (error: unknown) => error as Error,
+    );
+    expect((refusal as Error).message).toContain(`${missing} does not exist on this machine`);
+    expect((refusal as Error).message).not.toMatch(raw);
+    await expect(resolveWithinApprovedRoots(root, [])).rejects.toThrow('under Roots');
+  });
+
+  it('answers discovery on a missing root in plain words', async () => {
+    const root = await temporaryDirectory();
+    const missing = path.join(root, 'gone');
+    const refusal = await discoverGitRepositories(missing).catch(
+      (error: unknown) => error as Error,
+    );
+    expect((refusal as Error).message).toContain(`${missing} does not exist on this machine`);
+    expect((refusal as Error).message).not.toMatch(raw);
+  });
+
+  it('names VERIDONE_GIT when it points at nothing', async () => {
+    const missing = path.join(await temporaryDirectory(), 'no-such-git');
+    const refusal = await resolveGitExecutable({ VERIDONE_GIT: missing }).catch(
+      (error: unknown) => error as Error,
+    );
+    expect((refusal as Error).message).toContain('VERIDONE_GIT');
+    expect((refusal as Error).message).toContain(missing);
+    expect((refusal as Error).message).not.toMatch(raw);
+  });
+
+  it('says so when pinning for a repository folder that is gone', async () => {
+    const missing = path.join(await temporaryDirectory(), 'gone');
+    await expect(pinExecutable(process.execPath, { repositoryPath: missing })).rejects.toThrow(
+      `${missing} does not exist on this machine`,
+    );
+  });
+
+  it('refuses a work tree past the snapshot limit in plain words', async () => {
+    const root = await temporaryDirectory();
+    const repository = path.join(root, 'wide');
+    await mkdir(repository);
+    await execFileAsync('git', ['init', '-b', 'main'], { cwd: repository });
+    await mkdir(path.join(repository, 'many'));
+    for (let index = 0; index <= maxStatusEntries; index += 1) {
+      await writeFile(path.join(repository, 'many', `${index}.txt`), '');
+    }
+    await expect(
+      captureGitSnapshot(repository, {
+        approvedRoots: [root],
+        contractVersion: 'test',
+        checkDefinitionVersion: 'test',
+      }),
+    ).rejects.toThrow(/changed files.*Commit or ignore them/u);
+  }, 120_000);
 });
 
 describe('bounded process execution', () => {
@@ -126,7 +205,8 @@ describe('bounded process execution', () => {
       cwd,
     });
     expect(spawnFailure).toMatchObject({ state: 'spawn-error', exitCode: null });
-  });
+    // Two kills, each a taskkill run on Windows, which takes seconds on a busy machine.
+  }, 30_000);
 });
 
 async function committedRepository(

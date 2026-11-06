@@ -107,7 +107,15 @@ export async function pinExecutable(
   if (!resolved) {
     throw new ExecutableResolutionError(`No executable file was found for ${executable}.`);
   }
-  if (isWithin(resolved, await realpath(options.repositoryPath))) {
+  let repositoryPath: string;
+  try {
+    repositoryPath = await realpath(options.repositoryPath);
+  } catch {
+    throw new ExecutableResolutionError(
+      `${options.repositoryPath} does not exist on this machine, so VeriDone cannot tell whether the tool lies inside it.`,
+    );
+  }
+  if (isWithin(resolved, repositoryPath)) {
     throw new ExecutableResolutionError(
       'The tool resolves inside the repository under review. Approve a tool installed outside it.',
     );

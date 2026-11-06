@@ -12,6 +12,9 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Restoring a backup first lists the roots, repositories, checks, and work items it would add, with the evidence and verdict counts, and writes nothing until the operator confirms; `POST /api/v1/workspace/preview` returns the same list.
 - **Roots** in the workspace explorer lists each root with its state and approves a root restored from a backup.
 - Packets name each check's command, setup command, working directory, and tool hash, and give the test counts from the last summary that node:test, Vitest, Jest, or pytest printed. A pytest summary that reports `157 subtests passed` is read with that part left out of the counts.
+- **Replace** and **Retire** under **Checks** change a repository's policy. A definition stays fixed once approved, apart from pinning its tool again, so Replace opens the approval form filled in from the old check, then approves the new one and retires the old one in one step, and Retire takes a check out of the gate with a reason. The record and its evidence stay, packets show when it retired and why, and evidence counts only under the set of checks it ran with. A check that cannot be pinned, that needs a setup step in the clean checkout, or that was approved by mistake no longer holds the gate for good.
+- The review shows what a check's latest run printed: **Show output** reads the end of each stream from `GET /api/v1/evidence/:id/output`. The bootstrap leaves output out, so polling no longer carries every run's output.
+- The check dialog sets the timeout and the output limit, and **Manage checks** in the review opens **Checks**.
 
 ### Changed
 
@@ -34,6 +37,14 @@ All notable changes are documented here. This project follows Semantic Versionin
 - A receipt time with a UTC offset that stops at the minute, such as `2026-07-21T13:00Z`, still imports, exports, and restores: zod 4.5 and later require seconds, so VeriDone adds `:00`.
 - The source dialog kept the previous discovery list while a new discovery ran, so a repository chosen from it could be replaced by the first repository of the new answer, and the dialog connected a repository other than the one chosen. Discovery now hides the previous list until it answers, drops an answer that a newer discovery replaced, and keeps a chosen repository that the new list still contains.
 - The source dialog opens idle after an add closed it during a discovery; the button used to read "Discovering…" until it was pressed again.
+- One approved root whose folder is gone stops nothing under the other roots. **Roots** marks it, and repositories under it report the reason in plain words.
+- A verdict records while the repository cannot be read: a rejection, a change request, and an override bind to the last state captured, and a plain acceptance is refused with the reason.
+- A backup restores up to 500 MB, up from 25 MB, and export refuses to write a larger one and names the data directory to copy. Evidence is never deleted, so a backup used to outgrow what restore read.
+- An agent that writes each run's receipt to one file can import every run. The second used to fail with a database error, since a receipt's file path had to be unique.
+- A backup carries what earlier versions stored and today's import refuses: a long run id, status, or task type, or a time that is no timestamp. One such record used to stop export altogether.
+- Refusals say what to do next: a missing path, `VERIDONE_GIT` naming nothing, no approved root, more than 10,000 changed files, and a tool that cannot be pinned, which used to send the operator back to pin it.
+- One check that refuses to start no longer keeps the review's other checks from running, and an empty workspace offers **Restore a backup** on its first screen.
+- The built app loads every font subset from a file. Vite inlined the two smallest, Cyrillic Extended for Manrope and JetBrains Mono, as data URLs, which the content security policy blocks, so each page load logged two console errors and characters only those subsets cover fell back to another font. `pnpm smoke:built` now fails on an inlined font.
 
 ### Security
 
