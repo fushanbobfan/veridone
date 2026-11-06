@@ -263,6 +263,21 @@ const migrationThirteen = `
   CREATE INDEX receipts_started_at_idx ON receipts(started_at DESC);
 `;
 
+// SQLite's REPLACE removes a conflicting row without firing delete triggers unless the connection enables recursive
+// triggers, which each connection chooses for itself. A row that would conflict is refused before that can happen.
+const migrationFourteen = `
+  CREATE TRIGGER verdicts_no_replace BEFORE INSERT ON verdicts
+  WHEN EXISTS (SELECT 1 FROM verdicts WHERE id = NEW.id OR rowid = NEW.rowid)
+  BEGIN
+    SELECT RAISE(ABORT, 'Verdict history is append-only.');
+  END;
+  CREATE TRIGGER evidence_no_replace BEFORE INSERT ON evidence
+  WHEN EXISTS (SELECT 1 FROM evidence WHERE id = NEW.id OR rowid = NEW.rowid)
+  BEGIN
+    SELECT RAISE(ABORT, 'Evidence is append-only.');
+  END;
+`;
+
 export type WorkspaceKeyPurpose = 'packet-pseudonyms' | 'packet-signing';
 
 const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
@@ -479,6 +494,7 @@ export class VeriDoneDatabase {
       { version: 11, sql: migrationEleven },
       { version: 12, sql: migrationTwelve },
       { version: 13, sql: migrationThirteen },
+      { version: 14, sql: migrationFourteen },
     ];
 
     for (const migration of migrations) {
