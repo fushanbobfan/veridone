@@ -278,6 +278,18 @@ const migrationFourteen = `
   END;
 `;
 
+// A root, repository or work item leaves the workspace by removal, with a reason. Evidence and verdicts point at
+// repository and work item rows and refuse deletion, and packets redact the paths root and repository rows hold, so
+// the rows stay.
+const migrationFifteen = `
+  ALTER TABLE approved_roots ADD COLUMN removed_at TEXT;
+  ALTER TABLE approved_roots ADD COLUMN removed_reason TEXT;
+  ALTER TABLE repositories ADD COLUMN removed_at TEXT;
+  ALTER TABLE repositories ADD COLUMN removed_reason TEXT;
+  ALTER TABLE work_items ADD COLUMN removed_at TEXT;
+  ALTER TABLE work_items ADD COLUMN removed_reason TEXT;
+`;
+
 export type WorkspaceKeyPurpose = 'packet-pseudonyms' | 'packet-signing';
 
 const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
@@ -313,7 +325,34 @@ export class VerdictConflictError extends Error {
   }
 }
 
-export interface ApprovedRootRecord {
+/** A record the operator took out of the workspace, and why; both null while it is in. Its row and history stay. */
+export interface Removable {
+  removedAt: string | null;
+  removedReason: string | null;
+}
+
+/** A removed record refuses what needs it in the workspace, and the message says how to bring it back. */
+export class RemovedRecordError extends Error {
+  override readonly name = 'RemovedRecordError';
+}
+
+export function assertWorkItemInWorkspace(workItem: Removable & { title: string }): void {
+  if (workItem.removedAt) {
+    throw new RemovedRecordError(
+      `The work item "${workItem.title}" was removed. Put it back under Removed first.`,
+    );
+  }
+}
+
+export function assertRepositoryInWorkspace(repository: Removable & { name: string }): void {
+  if (repository.removedAt) {
+    throw new RemovedRecordError(
+      `The repository ${repository.name} was removed. Put it back under Removed first.`,
+    );
+  }
+}
+
+export interface ApprovedRootRecord extends Removable {
   id: string;
   path: string;
   label: string;
@@ -328,9 +367,11 @@ interface RootRow {
   label: string;
   created_at: string;
   status: string;
+  removed_at: string | null;
+  removed_reason: string | null;
 }
 
-const rootColumns = 'id, canonical_path, label, created_at, status';
+const rootColumns = 'id, canonical_path, label, created_at, status, removed_at, removed_reason';
 
 function rootFromRow(row: RootRow): ApprovedRootRecord {
   return {
@@ -339,10 +380,12 @@ function rootFromRow(row: RootRow): ApprovedRootRecord {
     label: row.label,
     createdAt: row.created_at,
     status: row.status === 'pending' ? 'pending' : 'approved',
+    removedAt: row.removed_at,
+    removedReason: row.removed_reason,
   };
 }
 
-export interface RepositoryRecord {
+export interface RepositoryRecord extends Removable {
   id: string;
   path: string;
   name: string;
@@ -359,7 +402,7 @@ export interface ReceiptRecord extends Omit<
   importedAt: string;
 }
 
-export interface WorkItemRecord {
+export interface WorkItemRecord extends Removable {
   id: string;
   repositoryId: string | null;
   sourceType: string;
@@ -495,6 +538,7 @@ export class VeriDoneDatabase {
       { version: 12, sql: migrationTwelve },
       { version: 13, sql: migrationThirteen },
       { version: 14, sql: migrationFourteen },
+      { version: 15, sql: migrationFifteen },
     ];
 
     for (const migration of migrations) {
@@ -545,13 +589,17 @@ export class VeriDoneDatabase {
     return (select.get(purpose) as { material: string }).material;
   }
 
-  /** Adds a root the operator chose; adding a restored root's path again approves it. */
+  /** Adds a root the operator chose; adding the path of a restored or a removed root again approves it. */
   addApprovedRoot(canonicalPath: string, label = path.basename(canonicalPath)): ApprovedRootRecord {
     this.connection
       .prepare(
         `INSERT INTO approved_roots (id, canonical_path, label, created_at, status)
          VALUES (@id, @path, @label, @createdAt, 'approved')
-         ON CONFLICT(canonical_path) DO UPDATE SET label = excluded.label, status = 'approved'`,
+         ON CONFLICT(canonical_path) DO UPDATE SET
+           label = excluded.label,
+           status = 'approved',
+           removed_at = NULL,
+           removed_reason = NULL`,
       )
       .run({
         id: randomUUID(),
@@ -568,10 +616,18 @@ export class VeriDoneDatabase {
 
   /** The roots that bound what VeriDone reads. */
   listApprovedRoots(): ApprovedRootRecord[] {
-    return this.listRoots().filter((root) => root.status === 'approved');
+    return this.listActiveRoots().filter((root) => root.status === 'approved');
   }
 
-  /** Every root, restored ones still waiting for approval included. */
+  /** The roots in the workspace, restored ones still waiting for approval included. */
+  listActiveRoots(): ApprovedRootRecord[] {
+    return this.listRoots().filter((root) => root.removedAt === null);
+  }
+
+  /**
+   * Every root, removed ones included: packets redact their paths, and backups carry them. What acts on a root reads
+   * `listActiveRoots` or `listApprovedRoots`.
+   */
   listRoots(): ApprovedRootRecord[] {
     return (
       this.connection
@@ -589,15 +645,65 @@ export class VeriDoneDatabase {
 
   getApprovedRoot(id: string): ApprovedRootRecord | null {
     const root = this.getRoot(id);
-    return root?.status === 'approved' ? root : null;
+    return root?.status === 'approved' && root.removedAt === null ? root : null;
   }
 
+  /** Approves a restored root, or puts a removed one back. */
   approveRoot(id: string): ApprovedRootRecord | null {
-    this.connection.prepare("UPDATE approved_roots SET status = 'approved' WHERE id = ?").run(id);
+    this.connection
+      .prepare(
+        "UPDATE approved_roots SET status = 'approved', removed_at = NULL, removed_reason = NULL WHERE id = ?",
+      )
+      .run(id);
     return this.getRoot(id);
   }
 
-  upsertRepository(canonicalPath: string, captured: RepositorySnapshot): RepositoryRecord {
+  /** Takes a root out of what VeriDone reads, with the repositories named that the operator removes along with it. */
+  removeRoot(
+    id: string,
+    reason: string,
+    repositoryIds: readonly string[] = [],
+  ): { root: ApprovedRootRecord; repositories: RepositoryRecord[] } {
+    return this.connection.transaction(() => {
+      const removedAt = new Date().toISOString();
+      const result = this.connection
+        .prepare(
+          'UPDATE approved_roots SET removed_at = ?, removed_reason = ? WHERE id = ? AND removed_at IS NULL',
+        )
+        .run(removedAt, reason, id);
+      const root = this.getRoot(id);
+      if (!root) throw new Error('The root does not exist.');
+      if (result.changes !== 1) {
+        throw new RemovedRecordError(`The root ${root.label} is already removed.`);
+      }
+      return {
+        root,
+        repositories: repositoryIds.map((item) => this.removeRepository(item, reason)),
+      };
+    })();
+  }
+
+  /** The stored row of a repository the operator removed; such a row keeps its last captured state. */
+  private removedRepositoryAt(canonicalPath: string): RepositoryRecord | null {
+    const row = this.connection
+      .prepare('SELECT * FROM repositories WHERE canonical_path = ? AND removed_at IS NOT NULL')
+      .get(canonicalPath) as Record<string, unknown> | undefined;
+    return row ? this.repositoryFromRow(row) : null;
+  }
+
+  /**
+   * Stores what a capture read. A capture can finish after the operator removed the repository, which it then leaves
+   * as it is; only the operator adding the repository again, with `putBack`, brings it back.
+   */
+  upsertRepository(
+    canonicalPath: string,
+    captured: RepositorySnapshot,
+    options: { putBack?: boolean } = {},
+  ): RepositoryRecord {
+    if (!options.putBack) {
+      const removed = this.removedRepositoryAt(canonicalPath);
+      if (removed) return removed;
+    }
     // A capture can finish after the check set changed. The version comes from the set as it stands now, so that
     // a slow capture never writes an older version back and lets evidence from that older set count again.
     const snapshot: RepositorySnapshot = {
@@ -645,7 +751,9 @@ export class VeriDoneDatabase {
           contract_version = excluded.contract_version,
           check_definition_version = excluded.check_definition_version,
           captured_at = excluded.captured_at,
-          updated_at = excluded.updated_at`,
+          updated_at = excluded.updated_at,
+          removed_at = NULL,
+          removed_reason = NULL`,
       )
       .run(values);
     return {
@@ -654,9 +762,15 @@ export class VeriDoneDatabase {
       name: values.name,
       snapshot,
       updatedAt,
+      removedAt: null,
+      removedReason: null,
     };
   }
 
+  /**
+   * Every repository, removed ones included: their work items, evidence and packets read them, packets redact their
+   * paths, and backups carry them. What acts on a repository reads `listActiveRepositories`.
+   */
   listRepositories(): RepositoryRecord[] {
     return (
       this.connection.prepare('SELECT * FROM repositories ORDER BY updated_at DESC').all() as Array<
@@ -665,10 +779,41 @@ export class VeriDoneDatabase {
     ).map((row) => this.repositoryFromRow(row));
   }
 
+  listActiveRepositories(): RepositoryRecord[] {
+    return this.listRepositories().filter((repository) => repository.removedAt === null);
+  }
+
   getRepository(id: string): RepositoryRecord | null {
     const row = this.connection.prepare('SELECT * FROM repositories WHERE id = ?').get(id) as
       Record<string, unknown> | undefined;
     return row ? this.repositoryFromRow(row) : null;
+  }
+
+  /** Stops reading a repository. Its checks and the work items bound to it stay, on the last state captured. */
+  removeRepository(id: string, reason: string): RepositoryRecord {
+    const result = this.connection
+      .prepare(
+        'UPDATE repositories SET removed_at = ?, removed_reason = ? WHERE id = ? AND removed_at IS NULL',
+      )
+      .run(new Date().toISOString(), reason, id);
+    const repository = this.getRepository(id);
+    if (!repository) throw new Error('The repository does not exist.');
+    if (result.changes !== 1) {
+      throw new RemovedRecordError(`The repository ${repository.name} is already removed.`);
+    }
+    return repository;
+  }
+
+  putBackRepository(id: string): RepositoryRecord {
+    const result = this.connection
+      .prepare(
+        'UPDATE repositories SET removed_at = NULL, removed_reason = NULL WHERE id = ? AND removed_at IS NOT NULL',
+      )
+      .run(id);
+    if (result.changes !== 1) throw new Error('The repository is not removed.');
+    const repository = this.getRepository(id);
+    if (!repository) throw new Error('The repository could not be read.');
+    return repository;
   }
 
   private repositoryFromRow(row: Record<string, unknown>): RepositoryRecord {
@@ -691,6 +836,8 @@ export class VeriDoneDatabase {
       name: String(row.name),
       snapshot,
       updatedAt: String(row.updated_at),
+      removedAt: row.removed_at === null ? null : String(row.removed_at),
+      removedReason: row.removed_reason === null ? null : String(row.removed_reason),
     };
   }
 
@@ -713,15 +860,22 @@ export class VeriDoneDatabase {
       snapshotFingerprint: null,
       humanVerdict: null,
       claimHash: claimHash(preview),
+      removedAt: null,
+      removedReason: null,
     };
 
     this.connection.transaction(() => {
-      // A verdict judged the claim it was recorded on; a re-import must not change that claim.
       const existing = this.connection
-        .prepare('SELECT id, title, claim FROM work_items WHERE source_ref = ?')
-        .get(workItem.sourceRef) as { id: string; title: string; claim: string } | undefined;
+        .prepare('SELECT id, title, claim, removed_at FROM work_items WHERE source_ref = ?')
+        .get(workItem.sourceRef) as
+        { id: string; title: string; claim: string; removed_at: string | null } | undefined;
+      // A work item the operator removed stays as it is, with its receipt, whatever the run reports now: a receipt
+      // changed behind it could clear what holds its gate when it goes back.
+      const removed = Boolean(existing?.removed_at);
+      // A verdict judged the claim it was recorded on; a re-import must not change that claim.
       if (
         existing &&
+        !removed &&
         claimHash(existing) !== workItem.claimHash &&
         this.latestVerdict(existing.id)
       ) {
@@ -737,7 +891,10 @@ export class VeriDoneDatabase {
           ) VALUES (
             @id, @runId, @sourcePath, @taskType, @status, @startedAt, @completedAt,
             @stageCount, @degraded, @importedAt
-          ) ON CONFLICT(run_id) DO UPDATE SET
+          ) ON CONFLICT(run_id) DO ${
+            removed
+              ? 'NOTHING'
+              : `UPDATE SET
             source_path = excluded.source_path,
             task_type = excluded.task_type,
             status = excluded.status,
@@ -745,9 +902,11 @@ export class VeriDoneDatabase {
             completed_at = excluded.completed_at,
             stage_count = excluded.stage_count,
             degraded = excluded.degraded,
-            imported_at = excluded.imported_at`,
+            imported_at = excluded.imported_at`
+          }`,
         )
         .run({ ...receipt, degraded: receipt.degraded ? 1 : 0 });
+      if (removed) return;
       this.connection
         .prepare(
           `INSERT INTO work_items (
@@ -801,6 +960,10 @@ export class VeriDoneDatabase {
     }));
   }
 
+  /**
+   * Every work item, removed ones included: packets and backups read them. What acts on a work item reads
+   * `listActiveWorkItems`.
+   */
   listWorkItems(): WorkItemRecord[] {
     return (
       this.connection.prepare('SELECT * FROM work_items ORDER BY updated_at DESC').all() as Array<
@@ -822,11 +985,44 @@ export class VeriDoneDatabase {
           ? null
           : (String(row.human_verdict) as WorkItemRecord['humanVerdict']),
       claimHash: claimHash({ title: String(row.title), claim: String(row.claim) }),
+      removedAt: row.removed_at === null ? null : String(row.removed_at),
+      removedReason: row.removed_reason === null ? null : String(row.removed_reason),
     }));
+  }
+
+  listActiveWorkItems(): WorkItemRecord[] {
+    return this.listWorkItems().filter((item) => item.removedAt === null);
   }
 
   getWorkItem(id: string): WorkItemRecord | null {
     return this.listWorkItems().find((item) => item.id === id) ?? null;
+  }
+
+  /** Takes a work item out of the inbox and the gates. Its receipt, evidence and verdicts stay. */
+  removeWorkItem(id: string, reason: string): WorkItemRecord {
+    const result = this.connection
+      .prepare(
+        'UPDATE work_items SET removed_at = ?, removed_reason = ? WHERE id = ? AND removed_at IS NULL',
+      )
+      .run(new Date().toISOString(), reason, id);
+    const workItem = this.getWorkItem(id);
+    if (!workItem) throw new Error('The work item does not exist.');
+    if (result.changes !== 1) {
+      throw new RemovedRecordError(`The work item "${workItem.title}" is already removed.`);
+    }
+    return workItem;
+  }
+
+  putBackWorkItem(id: string): WorkItemRecord {
+    const result = this.connection
+      .prepare(
+        'UPDATE work_items SET removed_at = NULL, removed_reason = NULL WHERE id = ? AND removed_at IS NOT NULL',
+      )
+      .run(id);
+    if (result.changes !== 1) throw new Error('The work item is not removed.');
+    const workItem = this.getWorkItem(id);
+    if (!workItem) throw new Error('The work item could not be read.');
+    return workItem;
   }
 
   listContracts(): ContractRecord[] {
@@ -846,6 +1042,9 @@ export class VeriDoneDatabase {
   linkWorkItem(workItemId: string, repositoryId: string): WorkItemRecord {
     const repository = this.getRepository(repositoryId);
     if (!repository) throw new Error('The repository does not exist.');
+    assertRepositoryInWorkspace(repository);
+    const current = this.getWorkItem(workItemId);
+    if (current) assertWorkItemInWorkspace(current);
     const result = this.connection
       .prepare(
         `UPDATE work_items
@@ -862,7 +1061,9 @@ export class VeriDoneDatabase {
   addCheck(
     input: Omit<CheckRecord, 'id' | 'approvedAt' | 'retiredAt' | 'retiredReason'>,
   ): CheckRecord {
-    if (!this.getRepository(input.repositoryId)) throw new Error('The repository does not exist.');
+    const repository = this.getRepository(input.repositoryId);
+    if (!repository) throw new Error('The repository does not exist.');
+    assertRepositoryInWorkspace(repository);
     const record: CheckRecord = {
       ...input,
       id: randomUUID(),
@@ -1113,6 +1314,7 @@ export class VeriDoneDatabase {
   ): { workItem: WorkItemRecord; head: VerdictRecord | null } {
     const workItem = this.getWorkItem(workItemId);
     if (!workItem) throw new Error('The work item does not exist.');
+    assertWorkItemInWorkspace(workItem);
     const repository = workItem.repositoryId ? this.getRepository(workItem.repositoryId) : null;
     const head = this.latestVerdict(workItemId);
     const current: VerdictExpectation = {

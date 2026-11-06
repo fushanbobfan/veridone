@@ -1,4 +1,10 @@
-export interface ApprovedRootDto {
+/** A record the operator took out of the workspace, and why; both null while it is in. */
+export interface Removable {
+  removedAt: string | null;
+  removedReason: string | null;
+}
+
+export interface ApprovedRootDto extends Removable {
   id: string;
   path: string;
   label: string;
@@ -7,9 +13,11 @@ export interface ApprovedRootDto {
   status: 'approved' | 'pending';
   /** The folder is not on this machine right now. */
   missing?: boolean;
+  /** The repositories in the workspace that only this root lets VeriDone read. */
+  onlyCovers?: string[];
 }
 
-export interface RepositoryDto {
+export interface RepositoryDto extends Removable {
   id: string;
   path: string;
   name: string;
@@ -60,9 +68,11 @@ export interface ReceiptPreviewDto {
   sourceLabel: string;
   title: string;
   claim: string;
+  /** The run's work item was removed, and an import leaves it as it is. */
+  removedAt: string | null;
 }
 
-export interface WorkItemDto {
+export interface WorkItemDto extends Removable {
   id: string;
   repositoryId: string | null;
   sourceType: string;
@@ -154,10 +164,19 @@ export interface BootstrapDto {
   mode: 'local' | 'demo';
   csrfToken: string;
   sourceIssues: Array<{ repositoryId: string; message: string }>;
+  /** The roots in the workspace. */
   roots: ApprovedRootDto[];
+  /** The repositories in the workspace; a work item may be bound to a removed one, which `repositoryOf` finds. */
   repositories: RepositoryDto[];
   receipts: ReceiptDto[];
+  /** The work items in the workspace. */
   workItems: WorkItemDto[];
+  /** Out of the workspace and still on record. */
+  removed: {
+    roots: ApprovedRootDto[];
+    repositories: RepositoryDto[];
+    workItems: WorkItemDto[];
+  };
   contracts: ContractDto[];
   checks: CheckDto[];
   evidence: EvidenceDto[];
@@ -201,26 +220,31 @@ export function fetchBootstrap(signal?: AbortSignal): Promise<BootstrapDto> {
 
 export type SourceKind = 'root' | 'repository' | 'receipt';
 
+/** Connects a source. An import leaves a removed run's work item as it is; the answer counts those runs. */
 export async function addLocalSource(
   kind: SourceKind,
   path: string,
   csrfToken: string,
   label?: string,
-): Promise<void> {
+): Promise<{ stillRemoved: number }> {
   const endpoint =
     kind === 'root'
       ? '/api/v1/roots'
       : kind === 'repository'
         ? '/api/v1/repositories'
         : '/api/v1/receipts/import';
-  await request(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-VeriDone-CSRF': csrfToken,
+  const answer = await request<{ imported?: Array<{ workItem: Pick<WorkItemDto, 'removedAt'> }> }>(
+    endpoint,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-VeriDone-CSRF': csrfToken,
+      },
+      body: JSON.stringify(kind === 'root' ? { path, label: label || undefined } : { path }),
     },
-    body: JSON.stringify(kind === 'root' ? { path, label: label || undefined } : { path }),
-  });
+  );
+  return { stillRemoved: (answer.imported ?? []).filter((item) => item.workItem.removedAt).length };
 }
 
 export async function discoverRepositories(rootId: string, csrfToken: string): Promise<string[]> {
@@ -340,9 +364,57 @@ export async function pinCheckTool(
   await mutate(`/api/v1/checks/${checkId}/pin`, csrfToken, { expected });
 }
 
-/** Approves a root restored from a backup; the service checks the directory again first. */
+/** Approves a root restored from a backup, or puts a removed one back; the service checks the directory again first. */
 export async function approveRoot(rootId: string, csrfToken: string): Promise<void> {
   await mutate(`/api/v1/roots/${rootId}/approve`, csrfToken, {});
+}
+
+/** Takes a root out of what VeriDone reads, with the repositories the operator left ticked. */
+export async function removeRoot(
+  rootId: string,
+  reason: string,
+  repositoryIds: string[],
+  csrfToken: string,
+): Promise<void> {
+  await mutate(`/api/v1/roots/${rootId}/remove`, csrfToken, { reason, repositoryIds });
+}
+
+/** Stops reading a repository; its checks and work items stay on record. */
+export async function removeRepository(
+  repositoryId: string,
+  reason: string,
+  csrfToken: string,
+): Promise<void> {
+  await mutate(`/api/v1/repositories/${repositoryId}/remove`, csrfToken, { reason });
+}
+
+/** Puts a repository back and reads it; the answer says why when it cannot be read. */
+export async function putBackRepository(
+  repositoryId: string,
+  csrfToken: string,
+): Promise<string | null> {
+  const { issue } = await mutate<{ issue: string | null }>(
+    `/api/v1/repositories/${repositoryId}/put-back`,
+    csrfToken,
+    {},
+  );
+  return issue;
+}
+
+/** Takes a work item out of the inbox, if its claim is still the one the operator saw. */
+export async function removeWorkItem(
+  workItem: Pick<WorkItemDto, 'id' | 'claimHash'>,
+  reason: string,
+  csrfToken: string,
+): Promise<void> {
+  await mutate(`/api/v1/work-items/${workItem.id}/remove`, csrfToken, {
+    reason,
+    expected: { claimHash: workItem.claimHash },
+  });
+}
+
+export async function putBackWorkItem(workItemId: string, csrfToken: string): Promise<void> {
+  await mutate(`/api/v1/work-items/${workItemId}/put-back`, csrfToken, {});
 }
 
 export async function runCheck(
@@ -383,6 +455,8 @@ export interface RestoreResultDto {
     repositories: Array<{ name: string; path: string }>;
     checks: Array<{ label: string; executable: string }>;
     workItems: Array<{ title: string }>;
+    /** Records the backup holds as removed, which join the workspace removed. */
+    removed: Array<{ kind: string; name: string }>;
   };
 }
 

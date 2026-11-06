@@ -28,11 +28,18 @@ const storedTime = z.string().transform((value) => normalizeReceiptTimestamp(val
 
 // Import and approval limit new data. A backup carries whatever the workspace holds, so that export never fails on
 // a stored record, and it bounds text and lists only by the size of the whole file.
+// A backup from before removals existed names none, and its records read as in the workspace.
+const removalFields = {
+  removedAt: isoDate.nullable().default(null),
+  removedReason: z.string().min(1).nullable().default(null),
+};
+
 const approvedRootSchema = z.object({
   id: z.string().uuid(),
   path: z.string().min(1),
   label: z.string().min(1),
   createdAt: isoDate,
+  ...removalFields,
 });
 
 const repositorySchema = z.object({
@@ -44,6 +51,7 @@ const repositorySchema = z.object({
     submoduleEntries: z.array(z.string()).default([]),
   }),
   updatedAt: isoDate,
+  ...removalFields,
 });
 
 const receiptSchema = z.object({
@@ -70,6 +78,7 @@ const workItemSchema = z.object({
   updatedAt: storedTime,
   snapshotFingerprint: sha256.nullable(),
   humanVerdict: z.enum(['accepted', 'changes-requested', 'rejected']).nullable(),
+  ...removalFields,
 });
 
 // A restore validates each check again as a new definition, with the approval's limits.
@@ -194,6 +203,8 @@ export interface RestoreAdditions {
   repositories: Array<{ name: string; path: string }>;
   checks: Array<{ label: string; executable: string }>;
   workItems: Array<{ title: string }>;
+  /** Records the backup holds as removed, which join the workspace removed. */
+  removed: Array<{ kind: 'root' | 'repository' | 'workItem'; name: string }>;
 }
 
 export interface RestoreResult {
@@ -413,21 +424,30 @@ export async function importWorkspace(
     else unchanged[kind] += 1;
     return added;
   };
-  const added: RestoreAdditions = { roots: [], repositories: [], checks: [], workItems: [] };
+  const added: RestoreAdditions = {
+    roots: [],
+    repositories: [],
+    checks: [],
+    workItems: [],
+    removed: [],
+  };
   const connection = database.connection;
 
   try {
     connection
       .transaction(() => {
-        // A backup cannot vouch for a directory on this machine; a restored root waits for the operator.
+        // A backup cannot vouch for a directory on this machine; a restored root waits for the operator. A record that
+        // exists stays as it is, so a backup neither removes it nor brings it back.
         const insertRoot = connection.prepare(`
-        INSERT INTO approved_roots (id, canonical_path, label, created_at, status)
-        VALUES (@id, @path, @label, @createdAt, 'pending')
+        INSERT INTO approved_roots (
+          id, canonical_path, label, created_at, status, removed_at, removed_reason
+        ) VALUES (@id, @path, @label, @createdAt, 'pending', @removedAt, @removedReason)
         ON CONFLICT DO NOTHING
       `);
         for (const record of data.approvedRoots) {
           if (tally('approvedRoots', insertRoot.run(record).changes === 1)) {
-            added.roots.push({ path: record.path, label: record.label });
+            if (record.removedAt) added.removed.push({ kind: 'root', name: record.label });
+            else added.roots.push({ path: record.path, label: record.label });
           }
         }
 
@@ -435,11 +455,11 @@ export async function importWorkspace(
         INSERT INTO repositories (
           id, canonical_path, name, branch, head, fingerprint, status_entries_json,
           submodule_entries_json, worktree_hash, diff_stats_json, contract_version,
-          check_definition_version, captured_at, updated_at
+          check_definition_version, captured_at, updated_at, removed_at, removed_reason
         ) VALUES (
           @id, @path, @name, @branch, @head, @fingerprint, @statusEntries,
           @submoduleEntries, @worktreeHash, @diffStats, @contractVersion,
-          @checkDefinitionVersion, @capturedAt, @updatedAt
+          @checkDefinitionVersion, @capturedAt, @updatedAt, @removedAt, @removedReason
         ) ON CONFLICT DO NOTHING
       `);
         for (const record of data.repositories) {
@@ -452,7 +472,8 @@ export async function importWorkspace(
             diffStats: JSON.stringify(record.snapshot.diffStats),
           });
           if (tally('repositories', result.changes === 1)) {
-            added.repositories.push({ name: record.name, path: record.path });
+            if (record.removedAt) added.removed.push({ kind: 'repository', name: record.name });
+            else added.repositories.push({ name: record.name, path: record.path });
           }
         }
 
@@ -478,10 +499,10 @@ export async function importWorkspace(
         const insertWorkItem = connection.prepare(`
         INSERT INTO work_items (
           id, repository_id, source_type, source_ref, title, claim, source_label,
-          updated_at, snapshot_fingerprint, human_verdict
+          updated_at, snapshot_fingerprint, human_verdict, removed_at, removed_reason
         ) VALUES (
           @id, @repositoryId, @sourceType, @sourceRef, @title, @claim, @sourceLabel,
-          @updatedAt, @snapshotFingerprint, NULL
+          @updatedAt, @snapshotFingerprint, NULL, @removedAt, @removedReason
         ) ON CONFLICT(id) DO NOTHING
       `);
         for (const record of data.workItems) {
@@ -491,7 +512,8 @@ export async function importWorkspace(
             );
           }
           if (tally('workItems', insertWorkItem.run(record).changes === 1)) {
-            added.workItems.push({ title: record.title });
+            if (record.removedAt) added.removed.push({ kind: 'workItem', name: record.title });
+            else added.workItems.push({ title: record.title });
           }
         }
 

@@ -119,10 +119,14 @@ export async function boundWorkspace(
       repositories: Array<{ id: string; snapshot: { fingerprint: string } }>;
       workItems: Array<{ id: string; repositoryId: string | null; claimHash: string }>;
       verdicts: Array<{ id: string; workItemId: string; sequence: number }>;
+      removed: { repositories: Array<{ id: string; snapshot: { fingerprint: string } }> };
     }>('/api/v1/bootstrap');
     const workItem = body.workItems.find((item) => item.id === workItemId);
     if (!workItem) throw new Error('The work item is missing.');
-    const repository = body.repositories.find((item) => item.id === workItem.repositoryId);
+    // A removed repository's work items stay bound to its last state.
+    const repository = [...body.repositories, ...body.removed.repositories].find(
+      (item) => item.id === workItem.repositoryId,
+    );
     const latest = body.verdicts
       .filter((verdict) => verdict.workItemId === workItemId)
       .sort((left, right) => right.sequence - left.sequence)[0];

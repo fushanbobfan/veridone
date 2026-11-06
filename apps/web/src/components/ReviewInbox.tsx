@@ -71,7 +71,9 @@ export function ReviewInbox({
           <span>Updated now</span>
         </div>
         <div className="inbox-title-line">
-          <h1 id="inbox-title">Review inbox</h1>
+          <h1 id="inbox-title" tabIndex={-1}>
+            Review inbox
+          </h1>
           {onAddSource && (
             <button className="add-source-button" type="button" onClick={onAddSource}>
               <Plus aria-hidden="true" size={14} />

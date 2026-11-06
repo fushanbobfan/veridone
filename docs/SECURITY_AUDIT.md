@@ -19,14 +19,14 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 ### VDS-002 — Medium — workspace body limit trusted a request header
 
-- **Location:** `apps/server/src/app.ts:343-373`
+- **Location:** `apps/server/src/app.ts:400-430`
 - **Evidence:** the import route uses Hono's streaming `bodyLimit` middleware before JSON parsing, at the 500 MB limit export also applies.
 - **Impact before fix:** a chunked request without `Content-Length` could force an unexpectedly large allocation.
 - **Fix:** enforce the limit for declared and streamed body sizes and return 413 before schema/import work.
 
 ### VDS-003 — Medium — app shell lacked an enforceable CSP baseline
 
-- **Location:** `apps/web/index.html:5-8`, `apps/web/public/_headers:1-6`, `apps/server/src/app.ts:105-118`
+- **Location:** `apps/web/index.html:5-8`, `apps/web/public/_headers:1-6`, `apps/server/src/app.ts:119-132`
 - **Evidence:** the static shell has an early CSP meta policy, supported edge hosts receive CSP/clickjacking/nosniff/privacy headers, and the API uses Hono secure headers. Script policy is self-only with no `unsafe-inline` or `unsafe-eval`. The meta policy permits Vite's development style elements and inline Motion styles; production edge headers narrow style elements back to self-only assets.
 - **Impact before fix:** an unrelated rendering mistake would have had less browser defense in depth.
 - **Fix:** add static and response-header policies while explicitly disabling HSTS for loopback HTTP.
@@ -40,20 +40,20 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 ### VDS-005 — Medium — portable evidence needed deterministic privacy verification
 
-- **Location:** `apps/server/src/packet.ts:88-111`, `apps/server/src/packet.ts:333-436`, `apps/server/src/packet.ts:159-271`
+- **Location:** `apps/server/src/packet.ts:88-111`, `apps/server/src/packet.ts:333-439`, `apps/server/src/packet.ts:159-271`
 - **Evidence:** packet text is credential/path-redacted, raw stdout/stderr are excluded, generation time derives from stable review state, and the verifier recomputes the payload hash and compares the manifest's artifact hashes with the evidence records.
 - **Impact before fix:** packets could expose common local paths and repeated exports of unchanged state produced different hashes.
 - **Fix:** strict privacy payloads, deterministic serialization, three-format parity tests, and a standalone verifier.
 
 ## Verified controls
 
-- Origin allowlist and per-process anti-CSRF token: `apps/server/src/app.ts:232-259`.
-- Canonical approved-root and symlink boundary: `packages/adapters/src/path-boundary.ts:22-51`.
+- Origin allowlist and per-process anti-CSRF token: `apps/server/src/app.ts:281-308`.
+- Canonical approved-root and symlink boundary: `packages/adapters/src/path-boundary.ts:22-53`.
 - Direct spawn with `shell: false`: `packages/adapters/src/process.ts:35-42`.
-- Minimal check environment, redaction, tool version, exit code, and before/after mutation classification: `apps/server/src/check-runner.ts:17-31`, `apps/server/src/check-runner.ts:66-270`.
-- Full workspace schema/hash validation before a single import transaction: `apps/server/src/workspace.ts:353-421`.
+- Minimal check environment, redaction, tool version, exit code, and before/after mutation classification: `apps/server/src/check-runner.ts:25-39`, `apps/server/src/check-runner.ts:74-287`.
+- Full workspace schema/hash validation before a single import transaction: `apps/server/src/workspace.ts:364-438`.
 - Frontend audit found no `dangerouslySetInnerHTML`, DOM HTML sink, string-to-code execution, dynamic script, postMessage, auth-token storage, or third-party remote script.
-- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:62-66`, `apps/web/src/App.tsx:207-210`.
+- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:69-73`, `apps/web/src/App.tsx:214-217`.
 
 ## Residual, documented boundaries
 

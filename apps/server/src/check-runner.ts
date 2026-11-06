@@ -4,6 +4,7 @@ import {
   absolutePathEntries,
   captureGitSnapshot,
   createCleanCheckout,
+  PathBoundaryError,
   resolveWithinApprovedRoots,
   runBoundedProcess,
   sha256File,
@@ -11,7 +12,14 @@ import {
 } from '@veridone/adapters';
 import { assessDeclaredScope, canonicalJson, sha256Hex, type CheckResult } from '@veridone/core';
 
-import type { CheckRecord, EvidenceRecord, EvidenceSummary, VeriDoneDatabase } from './database.js';
+import {
+  assertRepositoryInWorkspace,
+  assertWorkItemInWorkspace,
+  type CheckRecord,
+  type EvidenceRecord,
+  type EvidenceSummary,
+  type VeriDoneDatabase,
+} from './database.js';
 import { redactSecrets } from './redaction.js';
 
 function minimalEnvironment(): Record<string, string> {
@@ -76,11 +84,13 @@ export async function runApprovedCheck(
   }
   const workItem = database.getWorkItem(workItemId);
   if (!workItem) throw new Error('The work item does not exist.');
+  assertWorkItemInWorkspace(workItem);
   if (workItem.repositoryId !== check.repositoryId) {
     throw new Error('The work item and check are not bound to the same repository.');
   }
   const repository = database.getRepository(check.repositoryId);
   if (!repository) throw new Error('The repository does not exist.');
+  assertRepositoryInWorkspace(repository);
   const checkDefinitionVersion =
     database.activeCheckVersion(repository.id) ?? repository.snapshot.checkDefinitionVersion;
   const approvedRoots = database.listApprovedRoots().map((root) => root.path);
@@ -181,12 +191,19 @@ export async function runApprovedCheck(
   } finally {
     await checkout.remove();
   }
-  const after = await captureGitSnapshot(repository.path, {
-    approvedRoots,
-    contractVersion: 'default-v1',
-    checkDefinitionVersion,
-  });
-  database.upsertRepository(after.repositoryPath, after.snapshot);
+  // A removal during the run cancels it. The run stays on record, and VeriDone reads no further than the removal lets it.
+  if (!database.getRepository(repository.id)?.removedAt) {
+    try {
+      const after = await captureGitSnapshot(repository.path, {
+        approvedRoots: database.listApprovedRoots().map((root) => root.path),
+        contractVersion: 'default-v1',
+        checkDefinitionVersion,
+      });
+      database.upsertRepository(after.repositoryPath, after.snapshot);
+    } catch (error) {
+      if (!(error instanceof PathBoundaryError)) throw error;
+    }
+  }
 
   let checkResult: CheckResult =
     result.state === 'completed' ? (result.exitCode === 0 ? 'passed' : 'failed') : result.state;
@@ -296,12 +313,19 @@ export interface AcceptanceReadiness {
   checks: CheckReadiness[];
 }
 
+/** Why a removed repository's work items hold at its last state, and what the operator can do next. */
+export function removedRepositoryIssue(repository: {
+  name: string;
+  removedReason: string | null;
+}): string {
+  return `The repository ${repository.name} was removed: "${repository.removedReason ?? 'no reason recorded'}" Link this work item to another repository, or put the repository back under Removed. You can also reject it, request changes, accept with an override reason, or remove the work item.`;
+}
+
 export function acceptanceReadiness(
   database: VeriDoneDatabase,
   workItemId: string,
   options: { repositoryIssue?: string | null } = {},
 ): AcceptanceReadiness {
-  const repositoryIssue = options.repositoryIssue ?? null;
   const workItem = database.getWorkItem(workItemId);
   // A receipt's work item has the source reference `<source type>:<run id>`, and no source type holds a colon, so
   // the run id is all that follows the first colon. Run ids may hold colons themselves: a suffix match would let the
@@ -311,6 +335,9 @@ export function acceptanceReadiness(
     .listReceipts()
     .some((receipt) => receipt.degraded && receipt.runId === runId);
   const repository = workItem?.repositoryId ? database.getRepository(workItem.repositoryId) : null;
+  // Refresh skips a removed repository, so no caller knows of an issue with it: the gate closes here.
+  const repositoryIssue =
+    options.repositoryIssue ?? (repository?.removedAt ? removedRepositoryIssue(repository) : null);
   if (!workItem || !repository) {
     return {
       ready: false,

@@ -401,6 +401,9 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
           worktreeHash: pseudonym('worktree', repository.snapshot.worktreeHash),
           diffStats: repository.snapshot.diffStats,
           statusEntries: repository.snapshot.statusEntries,
+          // A removed repository stays named by its last state, so a reader sees what the work was decided on.
+          removedAt: repository.removedAt,
+          removedReason: repository.removedReason,
         }
       : null,
     contract,
@@ -443,12 +446,20 @@ function commandLine(check: { executable: string; args: string[] }): string {
 
 /** The parts of a built packet that its readable formats show. */
 interface PacketViewInput {
-  workItem: { title: string; sourceLabel: string; claim: string };
+  workItem: {
+    title: string;
+    sourceLabel: string;
+    claim: string;
+    removedAt: string | null;
+    removedReason: string | null;
+  };
   repository: {
     name: string;
     branch: string | null;
     head: string;
     fingerprint: string | null;
+    removedAt: string | null;
+    removedReason: string | null;
   } | null;
   contract: { title: string; version: string; criteria: unknown[] } | null;
   checks: Array<{
@@ -484,6 +495,11 @@ interface PacketViewInput {
  * apart. Every string in it is already sanitized.
  */
 function packetView(packet: PacketViewInput) {
+  const removal = (record: { removedAt: string | null; removedReason: string | null } | null) =>
+    // One line whatever the reason holds: a line break in it could otherwise pass for a line of the packet.
+    record?.removedAt
+      ? `${record.removedAt}: ${(record.removedReason ?? 'no reason').replace(/\s+/gu, ' ')}`
+      : null;
   const clauses = (packet.contract?.criteria ?? []).map((clause) => {
     const record = (clause ?? {}) as { title?: unknown; required?: unknown };
     return {
@@ -495,7 +511,9 @@ function packetView(packet: PacketViewInput) {
     title: packet.workItem.title,
     source: packet.workItem.sourceLabel,
     claim: packet.workItem.claim,
+    removed: removal(packet.workItem),
     repository: packet.repository?.name ?? 'Unlinked',
+    repositoryRemoved: removal(packet.repository),
     branch: packet.repository?.branch ?? 'none',
     head: packet.repository?.head ?? 'Unbound',
     fingerprint: packet.repository?.fingerprint ?? 'Unbound',
@@ -543,7 +561,7 @@ function renderMarkdown(view: PacketView): string {
 ## ${escapeMarkdown(view.title)}
 
 - Source: ${escapeMarkdown(view.source)}
-- Repository: ${escapeMarkdown(view.repository)} (branch ${escapeMarkdown(view.branch)})
+- Repository: ${escapeMarkdown(view.repository)} (branch ${escapeMarkdown(view.branch)})${view.repositoryRemoved ? `\n- Repository removed: ${escapeMarkdown(view.repositoryRemoved)}` : ''}${view.removed ? `\n- Removed from review: ${escapeMarkdown(view.removed)}` : ''}
 - HEAD: ${view.head}
 - Fingerprint: ${view.fingerprint}
 - Contract: ${escapeMarkdown(view.contract)}
@@ -607,7 +625,7 @@ function renderHtml(view: PacketView): string {
 <style>body{max-width:780px;margin:48px auto;padding:0 24px;font:16px/1.55 system-ui;color:#171914;background:#f5f4ed;overflow-wrap:anywhere}code{font-family:ui-monospace,monospace;word-break:break-all}.meta{padding:18px 0;border-block:1px solid #bbb}.status{font-weight:700}.hash{word-break:break-all;color:#555}li{margin:8px 0}small{color:#555}</style></head>
 <body><small>VERIDONE ACCEPTANCE PACKET · STRICT PRIVACY</small><h1>${escapeHtml(view.title)}</h1>
 <div class="meta"><p>Source: ${escapeHtml(view.source)}</p>
-<p>Repository: <strong>${escapeHtml(view.repository)}</strong> (branch ${escapeHtml(view.branch)})</p>
+<p>Repository: <strong>${escapeHtml(view.repository)}</strong> (branch ${escapeHtml(view.branch)})</p>${view.repositoryRemoved ? `\n<p>Repository removed: ${escapeHtml(view.repositoryRemoved)}</p>` : ''}${view.removed ? `\n<p>Removed from review: ${escapeHtml(view.removed)}</p>` : ''}
 <p>HEAD: <code>${escapeHtml(view.head)}</code></p>
 <p>Fingerprint: <code>${escapeHtml(view.fingerprint)}</code></p>
 <p>Contract: ${escapeHtml(view.contract)}</p>

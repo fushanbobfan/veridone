@@ -31,6 +31,8 @@ const repositories: RepositoryDto[] = [
       capturedAt: '2026-07-22T19:00:00.000Z',
     },
     updatedAt: '2026-07-22T19:00:00.000Z',
+    removedAt: null,
+    removedReason: null,
   },
   {
     id: 'repo-b',
@@ -55,6 +57,8 @@ const repositories: RepositoryDto[] = [
       capturedAt: '2026-07-22T19:00:00.000Z',
     },
     updatedAt: '2026-07-22T19:00:00.000Z',
+    removedAt: null,
+    removedReason: null,
   },
 ];
 

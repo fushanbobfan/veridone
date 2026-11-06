@@ -9,6 +9,17 @@ const focusableSelector = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
+/**
+ * Moves focus to what the page shows now, when the element that held it has left with its record: the selected review,
+ * the inbox where a phone shows it instead, or the empty page.
+ */
+export function focusCurrentView(): void {
+  ['#review-detail', '#inbox-title', '.empty-workspace h1']
+    .map((selector) => document.querySelector<HTMLElement>(selector))
+    .find((element) => element && element.offsetParent !== null)
+    ?.focus();
+}
+
 export function useDialogFocus(
   open: boolean,
   onClose: () => void,
@@ -54,6 +65,7 @@ export function useDialogFocus(
       window.removeEventListener('keydown', keydown);
       window.requestAnimationFrame(() => {
         if (returnTarget?.isConnected) returnTarget.focus();
+        else focusCurrentView();
       });
     };
   }, [dialog, initialFocus, open]);

@@ -47,6 +47,8 @@ function workspace(options: {
           capturedAt: '2026-10-22T10:00:00.000Z',
         },
         updatedAt: '2026-10-22T10:00:00.000Z',
+        removedAt: null,
+        removedReason: null,
       },
     ],
     receipts: [],
@@ -63,8 +65,11 @@ function workspace(options: {
         snapshotFingerprint: currentFingerprint,
         humanVerdict: options.verdict?.decision ?? null,
         claimHash: '9'.repeat(64),
+        removedAt: null,
+        removedReason: null,
       },
     ],
+    removed: { roots: [], repositories: [], workItems: [] },
     contracts: [],
     checks: [
       {
@@ -228,6 +233,60 @@ describe('local review state', () => {
       reason: issue,
       gatesReady: false,
       state: 'blocked',
+    });
+  });
+
+  describe('a work item whose repository was removed', () => {
+    const issue =
+      'The repository repo was removed: "Moved." Link this work item to another repository.';
+    const afterRemoval = (options: Parameters<typeof workspace>[0]) => {
+      const bootstrap = workspace(options);
+      const [repository] = bootstrap.repositories;
+      const item = bootstrap.workItems[0];
+      const readiness = bootstrap.readiness.work;
+      if (!repository || !item || !readiness) throw new Error('fixture is incomplete');
+      return workItemToReview(item, {
+        ...bootstrap,
+        repositories: [],
+        removed: {
+          ...bootstrap.removed,
+          repositories: [
+            { ...repository, removedAt: '2026-11-06T10:00:00.000Z', removedReason: 'Moved.' },
+          ],
+        },
+        readiness: { work: { ...readiness, ready: false, repositoryIssue: issue } },
+      });
+    };
+
+    it('stays on the last state captured and says what to do next', () => {
+      expect(afterRemoval({ evidence: true })).toMatchObject({
+        repository: 'repo',
+        branch: 'main',
+        head: 'c'.repeat(8),
+        reason: issue,
+        gatesReady: false,
+        state: 'blocked',
+      });
+    });
+
+    it('shows no current state, and counts the missing repository as an open gate', () => {
+      const removed = afterRemoval({ evidence: true });
+      expect(removed.requiredSatisfied).toBeLessThan(removed.requiredTotal);
+      expect(removed.criteria.find((criterion) => criterion.id === 'repository')).toMatchObject({
+        state: 'failed',
+      });
+      expect(removed.criteria.find((criterion) => criterion.id === 'binding')?.detail).toMatch(
+        /last state captured/u,
+      );
+    });
+
+    it('stays decided when its verdict is on that state', () => {
+      expect(
+        afterRemoval({
+          evidence: true,
+          verdict: { decision: 'accepted', snapshotFingerprint: currentFingerprint },
+        }).state,
+      ).toBe('decided');
     });
   });
 

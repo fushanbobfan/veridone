@@ -6,7 +6,14 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ### Added
 
-- `pnpm walk:first-workspace`, `pnpm walk:upgrade`, and `pnpm walk:dead-ends` rerun the release walks from a clone, and `pnpm walk:release` runs the local gates and the walks at one commit. The **Release walks** workflow runs the three walks on Ubuntu, Windows, and macOS after each merge and every Monday.
+- `pnpm walk:first-workspace`, `pnpm walk:upgrade`, and `pnpm walk:dead-ends` rerun the release walks from a clone, and `pnpm walk:release` runs the local gates and the walks at one commit. The **Release walks** workflow runs the walks on Ubuntu, Windows, and macOS after each merge and every Monday.
+- **Remove** takes an approved or restored root, a repository, or a work item out of the workspace with a reason, and **Removed** in the navigation lists each one and puts it back. A removed repository's work items stay in the inbox on its last captured state, with acceptance locked, and can move to another repository or be decided as they can when a repository cannot be read. Verdict and evidence rows do not change, packets state the removal of their work item and its repository, backups carry a removal, and a restore neither removes a local record nor undoes a local removal. Migration 15 adds the state; `schemaVersion` 2 backups and packets gain fields that older backups can leave out, so those still restore. `pnpm walk:removal` walks it in the built app, on a workspace and a backup from the real v1.2.0 build.
+
+### Fixed
+
+- A check approved while its folder exists and VeriDone still cannot read the repository, as when its root is removed or waits for approval, is added once, and the answer is 201. It used to be written and answered with a 400, so a retry added it again.
+- In the light theme, warning text such as the notice that a repository source is unavailable now meets the 4.5:1 contrast ratio.
+- On a phone, the workspace explorer's tabs wrap, so each one can be reached without the dialog sliding sideways.
 
 ### Fixed
 

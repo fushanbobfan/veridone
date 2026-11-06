@@ -11,16 +11,21 @@ import {
   captureGitSnapshot,
   discoverGitRepositories,
   ExecutableResolutionError,
+  isWithin,
   pinExecutable,
   readReceiptCollection,
 } from '@veridone/adapters';
 
 import { CheckCapacityError, CheckExecutionManager } from './check-execution.js';
 import { checkDefinitionHash, checkRequestSchema } from './check-policy.js';
-import { acceptanceReadiness } from './check-runner.js';
+import { acceptanceReadiness, removedRepositoryIssue } from './check-runner.js';
 import { allowedHosts, type ServerConfig } from './config.js';
 import {
+  assertRepositoryInWorkspace,
+  assertWorkItemInWorkspace,
+  RemovedRecordError,
   VerdictConflictError,
+  type ApprovedRootRecord,
   type CheckRecord,
   type RepositoryRecord,
   type VeriDoneDatabase,
@@ -56,6 +61,15 @@ const retireRequestSchema = z.object({
   expected: z.object({ definitionHash: z.string().regex(/^[0-9a-f]{64}$/iu) }).strict(),
 });
 const replaceRequestSchema = retireRequestSchema.extend({ check: checkRequestSchema });
+const removeRequestSchema = z.object({ reason: z.string().trim().min(1).max(2_000) });
+// The repositories the operator saw listed under the root and left ticked.
+const removeRootRequestSchema = removeRequestSchema.extend({
+  repositoryIds: z.array(z.string().min(1).max(128)).max(10_000).default([]),
+});
+// The claim the operator saw; a work item leaves only while it is still the one on record.
+const removeWorkItemRequestSchema = removeRequestSchema.extend({
+  expected: z.object({ claimHash: z.string().regex(/^[0-9a-f]{64}$/u) }).strict(),
+});
 const runCheckRequestSchema = z.object({
   workItemId: z.string().uuid(),
   runId: z.string().uuid().optional(),
@@ -140,6 +154,14 @@ export function createApp(options: AppOptions): Hono {
     return options.database.upsertRepository(captured.repositoryPath, captured.snapshot);
   };
 
+  /** The removed root a repository sat under, when no approved root covers it now. */
+  const removedRootOver = (repository: RepositoryRecord) =>
+    options.database.listApprovedRoots().some((root) => isWithin(repository.path, root.path))
+      ? undefined
+      : options.database
+          .listRoots()
+          .find((root) => root.removedAt !== null && isWithin(repository.path, root.path));
+
   /**
    * Captures a repository again, or says why it cannot be read: a folder that went away, a root waiting for
    * approval, or Git that will not start. The last known state stays on record, so decisions can still be made.
@@ -147,30 +169,57 @@ export function createApp(options: AppOptions): Hono {
   const captureOrExplain = async (
     repository: RepositoryRecord,
   ): Promise<{ repository: RepositoryRecord; issue: string | null }> => {
+    if (repository.removedAt) return { repository, issue: removedRepositoryIssue(repository) };
     try {
       return { repository: await recaptureRepository(repository), issue: null };
     } catch (error) {
-      const reason =
-        error instanceof z.ZodError
+      const leftWithRoot = removedRootOver(repository);
+      const reason = leftWithRoot
+        ? `Its root ${leftWithRoot.label} was removed. Put it back under Removed.`
+        : error instanceof z.ZodError
           ? 'Its state does not fit a repository snapshot.'
           : error instanceof Error
             ? error.message
             : 'It could not be read.';
       return {
         repository,
-        issue: `VeriDone cannot read the repository ${repository.name}. ${reason} Until it can, you can still reject its work items, request changes, or accept with an override reason.`,
+        issue: `VeriDone cannot read the repository ${repository.name}. ${reason} Until it can, you can still reject its work items, request changes, or accept with an override reason. To stop reading it, remove it under Repositories.`,
       };
     }
   };
 
   const refreshKnownRepositories = async () => {
     const results = await Promise.all(
-      options.database.listRepositories().map(async (repository) => {
+      options.database.listActiveRepositories().map(async (repository) => {
         const { issue } = await captureOrExplain(repository);
         return issue === null ? null : { repositoryId: repository.id, message: issue };
       }),
     );
     return results.filter((result) => result !== null);
+  };
+
+  /** The repositories in the workspace that only this root lets VeriDone read. */
+  const repositoriesOnlyUnder = (root: ApprovedRootRecord) => {
+    const others = options.database.listApprovedRoots().filter((other) => other.id !== root.id);
+    return options.database
+      .listActiveRepositories()
+      .filter(
+        (repository) =>
+          isWithin(repository.path, root.path) &&
+          !others.some((other) => isWithin(repository.path, other.path)),
+      );
+  };
+
+  /** Stops the checks running on repositories VeriDone no longer reads; a run past its checkout stays on record as cancelled. */
+  const cancelChecksOn = (repositoryIds: string[]) => {
+    const repositories = new Set(repositoryIds);
+    const checks = new Set(
+      options.database
+        .listChecks()
+        .filter((check) => repositories.has(check.repositoryId))
+        .map((check) => check.id),
+    );
+    checkExecutionManager.cancelWhere((run) => checks.has(run.checkId));
   };
 
   /** The tool file a check's executable resolves to now, for a check already on record. */
@@ -270,13 +319,21 @@ export function createApp(options: AppOptions): Hono {
       csrfToken,
       sourceIssues,
       roots: await Promise.all(
-        options.database
-          .listRoots()
-          .map(async (root) => ({ ...root, missing: !(await isFolder(root.path)) })),
+        options.database.listActiveRoots().map(async (root) => ({
+          ...root,
+          missing: !(await isFolder(root.path)),
+          onlyCovers: repositoriesOnlyUnder(root).map((repository) => repository.id),
+        })),
       ),
-      repositories: options.database.listRepositories(),
+      repositories: options.database.listActiveRepositories(),
       receipts: options.database.listReceipts(),
-      workItems: options.database.listWorkItems(),
+      workItems: options.database.listActiveWorkItems(),
+      // Out of the desk and still on record: their work items, packets and history read them, and each can go back.
+      removed: {
+        roots: options.database.listRoots().filter((root) => root.removedAt !== null),
+        repositories: options.database.listRepositories().filter((item) => item.removedAt !== null),
+        workItems: options.database.listWorkItems().filter((item) => item.removedAt !== null),
+      },
       contracts: options.database.listContracts(),
       checks: options.database.listChecks(),
       // This answers every few seconds, so a run's output stays out of it and reads on demand.
@@ -285,7 +342,7 @@ export function createApp(options: AppOptions): Hono {
       signingKey: { keyId: workspaceSigningKey(options.database).keyId },
       // The same readiness the verdict gate applies, so the review view and the service agree.
       readiness: Object.fromEntries(
-        options.database.listWorkItems().map((item) => [
+        options.database.listActiveWorkItems().map((item) => [
           item.id,
           acceptanceReadiness(options.database, item.id, {
             repositoryIssue: issueOf.get(item.repositoryId ?? '') ?? null,
@@ -421,10 +478,36 @@ export function createApp(options: AppOptions): Hono {
     return context.json({ root: options.database.approveRoot(root.id) });
   });
 
+  // VeriDone stops reading what only this root covered, running checks included. The repositories the operator left
+  // ticked leave with it; any other stays listed and says why it cannot be read.
+  app.post('/api/v1/roots/:id/remove', async (context) => {
+    const request = removeRootRequestSchema.parse(await context.req.json());
+    const root = options.database.getRoot(context.req.param('id'));
+    if (!root) return context.json({ error: 'approved_root_not_found' }, 404);
+    const uncovered = repositoriesOnlyUnder(root).map((repository) => repository.id);
+    const ticked = new Set(request.repositoryIds);
+    const removed = options.database.removeRoot(
+      root.id,
+      request.reason,
+      uncovered.filter((id) => ticked.has(id)),
+    );
+    cancelChecksOn(uncovered);
+    return context.json(removed);
+  });
+
   app.post('/api/v1/repositories/discover', async (context) => {
     const request = rootIdSchema.parse(await context.req.json());
     const root = options.database.getRoot(request.rootId);
     if (!root) return context.json({ error: 'approved_root_not_found' }, 404);
+    if (root.removedAt) {
+      return context.json(
+        {
+          error: 'root_removed',
+          message: `The root ${root.label} was removed. Put it back under Removed, or add its folder again.`,
+        },
+        409,
+      );
+    }
     if (root.status !== 'approved') return context.json({ error: 'root_pending_approval' }, 409);
     const repositories = await discoverGitRepositories(root.path);
     return context.json({ repositories });
@@ -433,6 +516,14 @@ export function createApp(options: AppOptions): Hono {
   app.post('/api/v1/repositories', async (context) => {
     const request = repositoryRequestSchema.parse(await context.req.json());
     const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
+    // The operator adding a removed repository's path again brings it back. A removal that arrives during this capture
+    // is the later word, so it stands.
+    const alreadyRemoved = new Set(
+      options.database
+        .listRepositories()
+        .filter((repository) => repository.removedAt !== null)
+        .map((repository) => repository.path),
+    );
     const captured = await captureGitSnapshot(request.path, {
       approvedRoots,
       contractVersion: 'default-v1',
@@ -441,13 +532,41 @@ export function createApp(options: AppOptions): Hono {
     const repository = options.database.upsertRepository(
       captured.repositoryPath,
       captured.snapshot,
+      { putBack: alreadyRemoved.has(captured.repositoryPath) },
     );
     return context.json({ repository }, 201);
+  });
+
+  // VeriDone stops reading the repository, running checks included. Its checks and its work items stay on record.
+  app.post('/api/v1/repositories/:id/remove', async (context) => {
+    const request = removeRequestSchema.parse(await context.req.json());
+    const existing = options.database.getRepository(context.req.param('id'));
+    if (!existing) return context.json({ error: 'repository_not_found' }, 404);
+    const repository = options.database.removeRepository(existing.id, request.reason);
+    cancelChecksOn([repository.id]);
+    return context.json({ repository });
+  });
+
+  // The next capture runs at once, and if the repository cannot be read the answer says why.
+  app.post('/api/v1/repositories/:id/put-back', async (context) => {
+    const existing = options.database.getRepository(context.req.param('id'));
+    if (!existing) return context.json({ error: 'repository_not_found' }, 404);
+    if (!existing.removedAt) {
+      return context.json(
+        {
+          error: 'repository_not_removed',
+          message: `The repository ${existing.name} is not removed.`,
+        },
+        409,
+      );
+    }
+    return context.json(await captureOrExplain(options.database.putBackRepository(existing.id)));
   });
 
   app.post('/api/v1/repositories/:id/refresh', async (context) => {
     const existing = options.database.getRepository(context.req.param('id'));
     if (!existing) return context.json({ error: 'repository_not_found' }, 404);
+    assertRepositoryInWorkspace(existing);
     const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
     const captured = await captureGitSnapshot(existing.path, {
       approvedRoots,
@@ -462,8 +581,15 @@ export function createApp(options: AppOptions): Hono {
   app.post('/api/v1/receipts/preview', async (context) => {
     const request = receiptRequestSchema.parse(await context.req.json());
     const approvedRoots = options.database.listApprovedRoots().map((root) => root.path);
+    const removedAt = new Map(
+      options.database.listWorkItems().map((item) => [item.sourceRef, item.removedAt]),
+    );
+    // An import leaves a removed work item as it is, so the preview says which runs those are.
     const previews = (await readReceiptCollection(request.path, approvedRoots)).map(
-      (result) => result.preview,
+      ({ preview }) => ({
+        ...preview,
+        removedAt: removedAt.get(`${preview.sourceType}:${preview.runId}`) ?? null,
+      }),
     );
     return context.json({ preview: previews[0], previews });
   });
@@ -484,12 +610,48 @@ export function createApp(options: AppOptions): Hono {
     });
   });
 
+  // The work item leaves the inbox and the gates, running checks included. Its evidence and verdicts stay on record.
+  app.post('/api/v1/work-items/:id/remove', async (context) => {
+    const request = removeWorkItemRequestSchema.parse(await context.req.json());
+    const existing = options.database.getWorkItem(context.req.param('id'));
+    if (!existing) return context.json({ error: 'work_item_not_found' }, 404);
+    if (existing.claimHash !== request.expected.claimHash) {
+      return context.json(
+        {
+          error: 'work_item_changed',
+          message: `The claim of "${existing.title}" changed after you opened this. Close it and review the new claim, then remove the work item if you still mean to.`,
+        },
+        409,
+      );
+    }
+    const workItem = options.database.removeWorkItem(existing.id, request.reason);
+    checkExecutionManager.cancelWhere((run) => run.workItemId === workItem.id);
+    return context.json({ workItem });
+  });
+
+  app.post('/api/v1/work-items/:id/put-back', (context) => {
+    const existing = options.database.getWorkItem(context.req.param('id'));
+    if (!existing) return context.json({ error: 'work_item_not_found' }, 404);
+    if (!existing.removedAt) {
+      return context.json(
+        {
+          error: 'work_item_not_removed',
+          message: `The work item "${existing.title}" is not removed.`,
+        },
+        409,
+      );
+    }
+    return context.json({ workItem: options.database.putBackWorkItem(existing.id) });
+  });
+
   app.post('/api/v1/checks', async (context) => {
     const request = checkRequestSchema.parse(await context.req.json());
     const repository = options.database.getRepository(request.repositoryId);
     if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    assertRepositoryInWorkspace(repository);
     const check = options.database.addCheck(await pinnedDefinition(request, repository));
-    await recaptureRepository(repository);
+    // A check can be approved while its repository cannot be read; the next bootstrap says why.
+    await captureOrExplain(repository);
     return context.json({ check }, 201);
   });
 
@@ -500,6 +662,7 @@ export function createApp(options: AppOptions): Hono {
     if (existing.retiredAt) return context.json(retiredCheck(existing), 409);
     const repository = options.database.getRepository(existing.repositoryId);
     if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    assertRepositoryInWorkspace(repository);
     return context.json({ tool: await resolveCheckTool(existing, repository) });
   });
 
@@ -535,6 +698,7 @@ export function createApp(options: AppOptions): Hono {
     }
     const repository = options.database.getRepository(existing.repositoryId);
     if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    assertRepositoryInWorkspace(repository);
     const definition = await pinnedDefinition(request.check, repository);
     // Pinning awaited, so look at the old check again; nothing awaits from here to the write.
     const late = retireRefusal(options.database.getCheck(checkId), request.expected.definitionHash);
@@ -551,6 +715,7 @@ export function createApp(options: AppOptions): Hono {
     if (existing.retiredAt) return context.json(retiredCheck(existing), 409);
     const repository = options.database.getRepository(existing.repositoryId);
     if (!repository) return context.json({ error: 'repository_not_found' }, 404);
+    assertRepositoryInWorkspace(repository);
     const tool = await resolveCheckTool(existing, repository);
     if (tool.path !== request.expected.path || tool.sha256 !== request.expected.sha256) {
       return context.json(
@@ -572,7 +737,7 @@ export function createApp(options: AppOptions): Hono {
         executableSha256: tool.sha256,
       }),
     );
-    await recaptureRepository(repository);
+    await captureOrExplain(repository);
     return context.json({ check });
   });
 
@@ -602,6 +767,7 @@ export function createApp(options: AppOptions): Hono {
     const workItemId = context.req.param('id');
     const request = verdictRequestSchema.parse(await context.req.json());
     const workItem = options.database.getWorkItem(workItemId);
+    if (workItem) assertWorkItemInWorkspace(workItem);
     if (!workItem?.repositoryId) {
       return context.json(
         {
@@ -680,6 +846,9 @@ export function createApp(options: AppOptions): Hono {
     }
     if (error instanceof CheckCapacityError) {
       return context.json({ error: 'check_capacity_reached', limit: error.limit }, 429);
+    }
+    if (error instanceof RemovedRecordError) {
+      return context.json({ error: 'record_removed', message: error.message }, 409);
     }
     if (error instanceof WorkspaceConflictError) {
       return context.json({ error: 'workspace_conflict', message: error.message }, 409);

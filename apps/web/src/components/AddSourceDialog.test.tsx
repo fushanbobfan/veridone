@@ -18,6 +18,8 @@ const roots = [
     label: 'Work',
     createdAt: '2026-10-22T00:00:00.000Z',
     status: 'approved' as const,
+    removedAt: null,
+    removedReason: null,
   },
 ];
 const repositories = ['D:\\work\\alpha', 'D:\\work\\beta'];
@@ -103,6 +105,78 @@ describe('add source dialog', () => {
     expect((screen.getByLabelText('Absolute local path') as HTMLInputElement).value).toBe(
       repositories[0],
     );
+  });
+
+  it('leaves a root that left for one that is still there', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ repositories }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const props = {
+      open: true,
+      csrfToken: 'token',
+      onClose: () => undefined,
+      onAdded: async () => undefined,
+    };
+    const { rerender } = render(<AddSourceDialog {...props} roots={roots} />);
+    const moved = [{ ...roots[0]!, id: 'root-2', path: 'D:\\moved', label: 'Moved' }];
+    rerender(<AddSourceDialog {...props} roots={moved} />);
+
+    await user.click(screen.getByText('Git repository'));
+    await user.click(screen.getByRole('button', { name: 'Discover repositories' }));
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ rootId: 'root-2' });
+  });
+
+  it('says which runs stay removed, in the preview and after the import', async () => {
+    const user = userEvent.setup();
+    const preview = {
+      runId: 'run',
+      taskType: 'implementation',
+      status: 'complete',
+      startedAt: '2026-11-06T10:00:00.000Z',
+      completedAt: null,
+      stageCount: 0,
+      degraded: false,
+      sourcePath: 'D:\\work\\receipt.json',
+      sourceType: 'codex',
+      sourceLabel: 'Codex',
+      title: 'Fix the importer',
+      claim: 'The importer is fixed.',
+      removedAt: '2026-11-06T11:00:00.000Z',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).endsWith('/preview')
+          ? new Response(JSON.stringify({ preview, previews: [preview] }), { status: 200 })
+          : new Response(
+              JSON.stringify({
+                imported: [{ workItem: { id: 'item', removedAt: '2026-11-06T11:00:00.000Z' } }],
+              }),
+              { status: 201 },
+            ),
+      ),
+    );
+    const onClose = vi.fn();
+    const onAdded = vi.fn(async () => undefined);
+    render(
+      <AddSourceDialog open csrfToken="token" roots={roots} onClose={onClose} onAdded={onAdded} />,
+    );
+    await user.click(screen.getByText('Agent receipt'));
+    await user.type(screen.getByLabelText('Absolute local path'), 'D:\\work\\receipt.json');
+    await user.click(screen.getByRole('button', { name: 'Preview import' }));
+    expect(await screen.findByText(/removed earlier/u)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Import 1' }));
+    expect(await screen.findByText(/Put it back under Removed/u)).toBeTruthy();
+    expect(onAdded).toHaveBeenCalled();
+    // The dialog stays open, since the inbox shows nothing new.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('shows discovery as idle when the dialog opens again after an add', async () => {

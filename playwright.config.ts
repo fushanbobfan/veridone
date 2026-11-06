@@ -94,6 +94,14 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
     {
+      // Shares the local service too, and ends by clearing its inbox, so it runs last of the three.
+      name: 'chromium-removal',
+      testMatch: /removal\.spec\.ts/u,
+      dependencies: ['chromium-verdicts'],
+      retries: 0,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
       name: 'chromium-demo',
       testMatch: /demo\.spec\.ts/u,
       use: { ...devices['Desktop Chrome'] },

@@ -57,19 +57,29 @@ export function AddSourceDialog({
   } | null>(null);
   const [state, setState] = useState<'idle' | 'saving' | 'success'>('idle');
   const [error, setError] = useState<string | null>(null);
+  // An import that left removed runs as they are; the dialog stays open to say so.
+  const [stillRemoved, setStillRemoved] = useState(0);
 
   useDialogFocus(open, onClose, dialog, firstButton);
 
   useEffect(() => {
-    if (!discoveryRootId && roots[0]) setDiscoveryRootId(roots[0].id);
+    if (!open) setStillRemoved(0);
+  }, [open]);
+
+  useEffect(() => {
+    // A root can leave while the dialog is closed, and the list then shows another one.
+    if (!roots.some((root) => root.id === discoveryRootId)) setDiscoveryRootId(roots[0]?.id ?? '');
   }, [discoveryRootId, roots]);
 
   if (!open) return null;
+
+  const removedRuns = receiptPreview?.receipts.filter((receipt) => receipt.removedAt).length ?? 0;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setState('saving');
     setError(null);
+    setStillRemoved(0);
     try {
       if (kind === 'receipt' && receiptPreview?.path !== path) {
         const receipts = await previewReceipts(path, csrfToken);
@@ -77,8 +87,13 @@ export function AddSourceDialog({
         setState('idle');
         return;
       }
-      await addLocalSource(kind, path, csrfToken, label);
+      const added = await addLocalSource(kind, path, csrfToken, label);
       await onAdded();
+      if (added.stillRemoved > 0) {
+        setStillRemoved(added.stillRemoved);
+        setState('idle');
+        return;
+      }
       setState('success');
       window.setTimeout(() => {
         // A discovery still running is dropped with its answer, so nothing else would clear its flag.
@@ -264,17 +279,31 @@ export function AddSourceDialog({
               {receiptPreview.receipts.length > 5 && (
                 <small>+ {receiptPreview.receipts.length - 5} more validated receipts</small>
               )}
+              {removedRuns > 0 && (
+                <small>
+                  {removedRuns === 1
+                    ? '1 of these runs was removed earlier, and it stays out of the inbox.'
+                    : `${removedRuns} of these runs were removed earlier, and they stay out of the inbox.`}
+                </small>
+              )}
             </section>
           )}
 
           <div className="dialog-message" aria-live="polite">
             {error && <span className="error-message">{error}</span>}
             {state === 'success' && <span className="success-message">Source connected.</span>}
+            {stillRemoved > 0 && (
+              <span className="success-message">
+                {stillRemoved === 1
+                  ? 'This run was removed earlier, so its work item stays out of the inbox. Put it back under Removed.'
+                  : `${stillRemoved} of these runs were removed earlier, so their work items stay out of the inbox. Put them back under Removed.`}
+              </span>
+            )}
           </div>
 
           <footer>
             <button className="secondary-action" type="button" onClick={onClose}>
-              Cancel
+              {stillRemoved > 0 ? 'Close' : 'Cancel'}
             </button>
             <button className="primary-action" type="submit" disabled={state !== 'idle'}>
               <Plus aria-hidden="true" size={15} />

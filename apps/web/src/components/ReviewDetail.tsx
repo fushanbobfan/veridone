@@ -87,6 +87,7 @@ export function ReviewDetail({
   onViewContract,
   onManageChecks,
   onChangeRepository,
+  onRemove,
   onReadOutput,
 }: {
   item: ReviewItem;
@@ -105,6 +106,8 @@ export function ReviewDetail({
   onManageChecks?: () => void;
   /** Binds the work item to another repository, for one that moved or cannot be read. */
   onChangeRepository?: () => void;
+  /** Takes the work item out of the inbox, with a reason; its history stays. */
+  onRemove?: () => void;
   onReadOutput?: (evidenceId: string) => Promise<EvidenceOutput>;
 }) {
   const ready = item.gatesReady;
@@ -219,6 +222,11 @@ export function ReviewDetail({
                   {onExport && (
                     <button className="text-button" type="button" onClick={onExport}>
                       Export packet <ArrowUpRight aria-hidden="true" size={14} />
+                    </button>
+                  )}
+                  {onRemove && (
+                    <button className="text-button" type="button" onClick={onRemove}>
+                      Remove work item <ArrowUpRight aria-hidden="true" size={14} />
                     </button>
                   )}
                 </div>

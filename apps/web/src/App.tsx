@@ -8,6 +8,10 @@ import {
   fetchToolCandidate,
   linkWorkItem,
   pinCheckTool,
+  putBackRepository,
+  putBackWorkItem,
+  removeRepository,
+  removeRoot,
   retireCheck,
   runCheck,
   type BootstrapDto,
@@ -15,19 +19,22 @@ import {
   type ToolCandidate,
   type VerdictDto,
   type VerdictExpectation,
+  type WorkItemDto,
 } from './api.js';
 import { AddSourceDialog } from './components/AddSourceDialog.js';
 import { CheckDialog } from './components/CheckDialog.js';
 import { Navigation } from './components/Navigation.js';
+import { RemoveWorkItemDialog } from './components/RemoveWorkItemDialog.js';
 import { RepositoryLinkDialog } from './components/RepositoryLinkDialog.js';
 import type { WorkspaceSection } from './components/Navigation.js';
 import { ReviewDetail } from './components/ReviewDetail.js';
 import { ReviewInbox } from './components/ReviewInbox.js';
 import { VerdictDialog } from './components/VerdictDialog.js';
+import { focusCurrentView } from './components/useDialogFocus.js';
 import { WorkspaceDialog } from './components/WorkspaceDialog.js';
 import { WorkspaceExplorerDialog } from './components/WorkspaceExplorerDialog.js';
 import { demoReviews, type ReviewState } from './data.js';
-import { latestVerdict, workItemToReview } from './local-data.js';
+import { latestVerdict, repositoryOf, workItemToReview } from './local-data.js';
 
 type Theme = 'light' | 'dark';
 type ThemePreference = Theme | 'system';
@@ -77,9 +84,7 @@ function selectionAfterRefresh(current: string, next: BootstrapDto): string {
 
 function verdictSubject(bootstrap: BootstrapDto, workItemId: string) {
   const workItem = bootstrap.workItems.find((item) => item.id === workItemId);
-  const repository = bootstrap.repositories.find(
-    (candidate) => candidate.id === workItem?.repositoryId,
-  );
+  const repository = repositoryOf(bootstrap, workItem?.repositoryId);
   return {
     title: workItem?.title ?? 'Unknown work item',
     repository: repository?.name ?? 'Unlinked',
@@ -91,9 +96,7 @@ function verdictSubject(bootstrap: BootstrapDto, workItemId: string) {
 /** The state a verdict is decided on: repository fingerprint, latest verdict, and claim. */
 function verdictExpectation(bootstrap: BootstrapDto, workItemId: string): VerdictExpectation {
   const workItem = bootstrap.workItems.find((item) => item.id === workItemId);
-  const repository = bootstrap.repositories.find(
-    (candidate) => candidate.id === workItem?.repositoryId,
-  );
+  const repository = repositoryOf(bootstrap, workItem?.repositoryId);
   return {
     fingerprint: repository?.snapshot.fingerprint ?? null,
     verdictId: latestVerdict(bootstrap.verdicts, workItemId)?.id ?? null,
@@ -144,6 +147,7 @@ export function App() {
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [checkDialogOpen, setCheckDialogOpen] = useState(false);
   const [replacingCheck, setReplacingCheck] = useState<CheckDto | null>(null);
+  const [removingWorkItem, setRemovingWorkItem] = useState<WorkItemDto | null>(null);
   const [repositoryDialogOpen, setRepositoryDialogOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [workspaceSection, setWorkspaceSection] = useState<WorkspaceSection | null>(null);
@@ -168,6 +172,9 @@ export function App() {
     () => reviews.find((item) => item.id === selectedId) ?? reviews[0],
     [reviews, selectedId],
   );
+
+  // The link dialog names the work item it binds, and a removal elsewhere can move the selection under it.
+  useEffect(() => setRepositoryDialogOpen(false), [selected?.id]);
 
   const reloadWorkspace = async () => {
     const next = await fetchBootstrap();
@@ -248,18 +255,150 @@ export function App() {
     );
   }
 
-  // Rendered at one place in both views, so that its message survives a restore bringing in the first work item.
-  const workspaceDialog =
-    bootstrap?.mode === 'local' ? (
-      <WorkspaceDialog
-        open={workspaceDialogOpen}
-        bootstrap={bootstrap}
-        onClose={() => setWorkspaceDialogOpen(false)}
-        onImported={reloadWorkspace}
+  // The next item takes its place, or the empty page does; the button that opened the dialog left with the old review.
+  const afterWorkItemRemoved = async () => {
+    await reloadWorkspace();
+    setMobilePane('inbox');
+    window.clearTimeout(focusTimer.current);
+    focusTimer.current = window.setTimeout(focusCurrentView, 240);
+  };
+
+  // Rendered at one place in both views, so that their messages survive the first work item arriving or the last one
+  // leaving.
+  const sharedDialogs = (
+    <>
+      {bootstrap && (
+        <AddSourceDialog
+          open={sourceDialogOpen}
+          csrfToken={bootstrap.csrfToken}
+          roots={bootstrap.roots.filter((root) => root.status === 'approved')}
+          onClose={() => setSourceDialogOpen(false)}
+          onAdded={reloadWorkspace}
+        />
+      )}
+      {bootstrap && verdictIntent && (
+        <VerdictDialog
+          open
+          workItemId={verdictIntent.workItemId}
+          subject={verdictIntent.subject}
+          expected={verdictIntent.expected}
+          changedSinceOpened={
+            bootstrap.workItems.some((item) => item.id === verdictIntent.workItemId)
+              ? describeChange(
+                  verdictIntent.expected,
+                  verdictExpectation(bootstrap, verdictIntent.workItemId),
+                )
+              : 'This work item was removed after this dialog opened.'
+          }
+          decision={verdictIntent.decision}
+          overrideRequired={verdictIntent.overrideRequired}
+          csrfToken={bootstrap.csrfToken}
+          onClose={() => setVerdictIntent(null)}
+          onRecorded={reloadWorkspace}
+        />
+      )}
+      {bootstrap && removingWorkItem && (
+        <RemoveWorkItemDialog
+          open
+          workItem={removingWorkItem}
+          evidenceCount={
+            bootstrap.evidence.filter((record) => record.workItemId === removingWorkItem.id).length
+          }
+          verdictCount={
+            bootstrap.verdicts.filter((verdict) => verdict.workItemId === removingWorkItem.id)
+              .length
+          }
+          csrfToken={bootstrap.csrfToken}
+          onClose={() => setRemovingWorkItem(null)}
+          onRemoved={afterWorkItemRemoved}
+        />
+      )}
+      {bootstrap?.mode === 'local' && (
+        <WorkspaceDialog
+          open={workspaceDialogOpen}
+          bootstrap={bootstrap}
+          onClose={() => setWorkspaceDialogOpen(false)}
+          onImported={reloadWorkspace}
+        />
+      )}
+      {bootstrap && (
+        <WorkspaceExplorerDialog
+          open={workspaceSection !== null}
+          section={workspaceSection ?? 'repositories'}
+          bootstrap={bootstrap}
+          onSection={setWorkspaceSection}
+          onClose={() => setWorkspaceSection(null)}
+          {...(bootstrap.mode === 'local'
+            ? {
+                onReviewTool: fetchToolCandidate,
+                onPinTool: async (checkId: string, expected: ToolCandidate) => {
+                  await pinCheckTool(checkId, expected, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+                onApproveRoot: async (rootId: string) => {
+                  await approveRoot(rootId, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+                onReplaceCheck: (check: CheckDto) => {
+                  setWorkspaceSection(null);
+                  setReplacingCheck(check);
+                  setCheckDialogOpen(true);
+                },
+                onRetireCheck: async (check: CheckDto, reason: string) => {
+                  await retireCheck(check, reason, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+                onRemoveRoot: async (rootId: string, reason: string, repositoryIds: string[]) => {
+                  await removeRoot(rootId, reason, repositoryIds, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+                onRemoveRepository: async (repositoryId: string, reason: string) => {
+                  await removeRepository(repositoryId, reason, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+                onPutBackRepository: async (repositoryId: string) => {
+                  const issue = await putBackRepository(repositoryId, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                  return issue;
+                },
+                onPutBackWorkItem: async (workItemId: string) => {
+                  await putBackWorkItem(workItemId, bootstrap.csrfToken);
+                  await reloadWorkspace();
+                },
+              }
+            : {})}
+        />
+      )}
+    </>
+  );
+
+  // The form for a new check on this repository, or for the check being replaced.
+  const checkDialog = (repositoryId: string | undefined) =>
+    bootstrap && repositoryId ? (
+      <CheckDialog
+        // A new key starts the form over from the check being replaced, or from the defaults.
+        key={replacingCheck?.id ?? repositoryId}
+        open={checkDialogOpen}
+        repositoryId={repositoryId}
+        csrfToken={bootstrap.csrfToken}
+        replacing={replacingCheck}
+        onClose={() => {
+          setCheckDialogOpen(false);
+          setReplacingCheck(null);
+        }}
+        onAdded={reloadWorkspace}
       />
     ) : null;
 
   if (!selected) {
+    const recorded = Boolean(
+      bootstrap &&
+      (bootstrap.roots.length > 0 ||
+        bootstrap.repositories.length > 0 ||
+        bootstrap.removed.roots.length > 0 ||
+        bootstrap.removed.repositories.length > 0 ||
+        bootstrap.removed.workItems.length > 0),
+    );
     return (
       <>
         <div className="empty-workspace">
@@ -270,15 +409,30 @@ export function App() {
             <span>VeriDone</span>
           </div>
           <span className="section-label">Local workspace</span>
-          <h1>No evidence sources yet</h1>
-          <p>Approve a root, then add a Git repository or agent receipt.</p>
+          <h1 tabIndex={-1}>{recorded ? 'Nothing to review' : 'No evidence sources yet'}</h1>
+          <p>
+            {recorded
+              ? 'Import an agent receipt to create a work item. The workspace explorer lists your roots, repositories, and what was removed.'
+              : 'Approve a root, then add a Git repository or agent receipt.'}
+          </p>
           <button
             className="primary-action"
             type="button"
             onClick={() => setSourceDialogOpen(true)}
           >
-            Add first source
+            {recorded ? 'Add source' : 'Add first source'}
           </button>
+          {recorded && bootstrap?.mode === 'local' && (
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() =>
+                setWorkspaceSection(bootstrap.removed.workItems.length > 0 ? 'removed' : 'roots')
+              }
+            >
+              Open workspace explorer
+            </button>
+          )}
           {bootstrap?.mode === 'local' && (
             <button
               className="secondary-action"
@@ -288,26 +442,21 @@ export function App() {
               Restore a backup
             </button>
           )}
-          {bootstrap && (
-            <AddSourceDialog
-              open={sourceDialogOpen}
-              csrfToken={bootstrap.csrfToken}
-              roots={bootstrap.roots.filter((root) => root.status === 'approved')}
-              onClose={() => setSourceDialogOpen(false)}
-              onAdded={reloadWorkspace}
-            />
-          )}
+          {checkDialog(replacingCheck?.repositoryId)}
         </div>
-        {workspaceDialog}
+        {sharedDialogs}
       </>
     );
   }
 
   const localWorkItem = bootstrap?.workItems.find((item) => item.id === selected.id);
   const localVerdict = bootstrap ? latestVerdict(bootstrap.verdicts, selected.id) : undefined;
-  const localRepository = localWorkItem?.repositoryId
-    ? bootstrap?.repositories.find((repository) => repository.id === localWorkItem.repositoryId)
-    : null;
+  const localRepository =
+    bootstrap && localWorkItem?.repositoryId
+      ? repositoryOf(bootstrap, localWorkItem.repositoryId)
+      : null;
+  // A removed repository's work item waits on its last state until it moves to another repository.
+  const needsRepository = !localRepository || Boolean(localRepository.removedAt);
   const localChecks = localRepository
     ? (bootstrap?.checks.filter(
         (check) => check.repositoryId === localRepository.id && !check.retiredAt,
@@ -334,7 +483,7 @@ export function App() {
   const performEvidenceAction = async () => {
     if (!bootstrap || !localWorkItem) return;
     setActionError(null);
-    if (!localWorkItem.repositoryId) {
+    if (needsRepository) {
       if (bootstrap.repositories.length === 0) {
         setSourceDialogOpen(true);
         return;
@@ -345,7 +494,7 @@ export function App() {
     if (localWorkItem.snapshotFingerprint !== localRepository?.snapshot.fingerprint) {
       setActionBusy(true);
       try {
-        await linkWorkItem(localWorkItem.id, localWorkItem.repositoryId, bootstrap.csrfToken);
+        await linkWorkItem(localWorkItem.id, localRepository.id, bootstrap.csrfToken);
         await reloadWorkspace();
       } catch (caught) {
         setActionError(
@@ -401,11 +550,11 @@ export function App() {
 
   const evidenceActionLabel =
     isLocal && bootstrap
-      ? !localWorkItem?.repositoryId
+      ? needsRepository
         ? bootstrap.repositories.length > 0
           ? 'Link to repository'
           : 'Add a repository'
-        : localWorkItem.snapshotFingerprint !== localRepository?.snapshot.fingerprint
+        : localWorkItem?.snapshotFingerprint !== localRepository.snapshot.fingerprint
           ? 'Rebind to current state'
           : localChecks.length === 0
             ? 'Approve a check'
@@ -482,15 +631,6 @@ export function App() {
           onSort={setSort}
           onSelect={selectReview}
         />
-        {bootstrap && (
-          <AddSourceDialog
-            open={sourceDialogOpen}
-            csrfToken={bootstrap.csrfToken}
-            roots={bootstrap.roots.filter((root) => root.status === 'approved')}
-            onClose={() => setSourceDialogOpen(false)}
-            onAdded={reloadWorkspace}
-          />
-        )}
         <ReviewDetail
           item={selected}
           decision={
@@ -508,9 +648,10 @@ export function App() {
                 onExport: exportPacket,
                 onManageChecks: () => setWorkspaceSection('checks'),
                 onReadOutput: fetchEvidenceOutput,
-                ...(localWorkItem?.repositoryId && (bootstrap?.repositories.length ?? 0) > 1
+                ...(!needsRepository && (bootstrap?.repositories.length ?? 0) > 1
                   ? { onChangeRepository: () => setRepositoryDialogOpen(true) }
                   : {}),
+                ...(localWorkItem ? { onRemove: () => setRemovingWorkItem(localWorkItem) } : {}),
               }
             : {})}
           onViewContract={() => setWorkspaceSection('contracts')}
@@ -550,21 +691,7 @@ export function App() {
               }
             : {})}
         />
-        {bootstrap && (replacingCheck ?? localRepository) && (
-          <CheckDialog
-            // A new key starts the form over from the check being replaced, or from the defaults.
-            key={replacingCheck?.id ?? localRepository?.id ?? 'new-check'}
-            open={checkDialogOpen}
-            repositoryId={replacingCheck?.repositoryId ?? localRepository?.id ?? ''}
-            csrfToken={bootstrap.csrfToken}
-            replacing={replacingCheck}
-            onClose={() => {
-              setCheckDialogOpen(false);
-              setReplacingCheck(null);
-            }}
-            onAdded={reloadWorkspace}
-          />
-        )}
+        {checkDialog(replacingCheck?.repositoryId ?? localRepository?.id)}
         {bootstrap && localWorkItem && (
           <RepositoryLinkDialog
             open={repositoryDialogOpen}
@@ -577,54 +704,6 @@ export function App() {
             }}
           />
         )}
-        {bootstrap && verdictIntent && (
-          <VerdictDialog
-            open
-            workItemId={verdictIntent.workItemId}
-            subject={verdictIntent.subject}
-            expected={verdictIntent.expected}
-            changedSinceOpened={describeChange(
-              verdictIntent.expected,
-              verdictExpectation(bootstrap, verdictIntent.workItemId),
-            )}
-            decision={verdictIntent.decision}
-            overrideRequired={verdictIntent.overrideRequired}
-            csrfToken={bootstrap.csrfToken}
-            onClose={() => setVerdictIntent(null)}
-            onRecorded={reloadWorkspace}
-          />
-        )}
-        {bootstrap && (
-          <WorkspaceExplorerDialog
-            open={workspaceSection !== null}
-            section={workspaceSection ?? 'repositories'}
-            bootstrap={bootstrap}
-            onSection={setWorkspaceSection}
-            onClose={() => setWorkspaceSection(null)}
-            {...(bootstrap.mode === 'local'
-              ? {
-                  onReviewTool: fetchToolCandidate,
-                  onPinTool: async (checkId: string, expected: ToolCandidate) => {
-                    await pinCheckTool(checkId, expected, bootstrap.csrfToken);
-                    await reloadWorkspace();
-                  },
-                  onApproveRoot: async (rootId: string) => {
-                    await approveRoot(rootId, bootstrap.csrfToken);
-                    await reloadWorkspace();
-                  },
-                  onReplaceCheck: (check: CheckDto) => {
-                    setWorkspaceSection(null);
-                    setReplacingCheck(check);
-                    setCheckDialogOpen(true);
-                  },
-                  onRetireCheck: async (check: CheckDto, reason: string) => {
-                    await retireCheck(check, reason, bootstrap.csrfToken);
-                    await reloadWorkspace();
-                  },
-                }
-              : {})}
-          />
-        )}
         {actionError && (
           <div className="action-toast" role="alert">
             <span>{actionError}</span>
@@ -634,7 +713,7 @@ export function App() {
           </div>
         )}
       </div>
-      {workspaceDialog}
+      {sharedDialogs}
     </>
   );
 }
