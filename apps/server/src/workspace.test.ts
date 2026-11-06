@@ -348,7 +348,12 @@ describe('receipt times in backups', () => {
       'D:/receipts/legacy-unreadable.json',
       'yesterday',
     );
-    await expect(exportWorkspace(database)).rejects.toThrow(/legacy-unreadable/u);
+    // A time that cannot be read travels as it was stored; it must not stop the whole backup.
+    const withUnreadable = await exportWorkspace(database);
+    expect(
+      withUnreadable.data.receipts.find((receipt) => receipt.runId === 'legacy-unreadable')
+        ?.startedAt,
+    ).toBe('yesterday');
   });
 });
 

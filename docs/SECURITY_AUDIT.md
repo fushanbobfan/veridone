@@ -20,7 +20,7 @@ This review followed the local JavaScript/TypeScript and React security specific
 ### VDS-002 — Medium — workspace body limit trusted a request header
 
 - **Location:** `apps/server/src/app.ts:190-204`
-- **Evidence:** the import route uses Hono's streaming `bodyLimit` middleware at 25 MB before JSON parsing.
+- **Evidence:** the import route uses Hono's streaming `bodyLimit` middleware before JSON parsing, at the 500 MB limit export also applies.
 - **Impact before fix:** a chunked request without `Content-Length` could force an unexpectedly large allocation.
 - **Fix:** enforce the limit for declared and streamed body sizes and return 413 before schema/import work.
 

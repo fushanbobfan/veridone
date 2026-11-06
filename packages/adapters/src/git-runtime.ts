@@ -200,7 +200,14 @@ export async function resolveGitExecutable(
     if (!path.isAbsolute(configured)) {
       throw new GitAdapterError('VERIDONE_GIT must be an absolute path to the Git executable.');
     }
-    const resolved = await realpath(configured);
+    let resolved: string;
+    try {
+      resolved = await realpath(configured);
+    } catch {
+      throw new GitAdapterError(
+        `VERIDONE_GIT names ${configured}, which does not exist. Set it to the Git executable, or unset it to use Git on PATH.`,
+      );
+    }
     if (!(await isExecutableFile(resolved))) {
       throw new GitAdapterError('VERIDONE_GIT does not name an executable file.');
     }

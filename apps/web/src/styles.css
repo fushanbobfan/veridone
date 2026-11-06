@@ -710,6 +710,12 @@ a:focus-visible {
   margin: 43px auto 0;
 }
 
+/* A long path in a reason must wrap inside its column. */
+.evidence-aside {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .section-heading {
   display: flex;
   align-items: flex-start;
@@ -793,6 +799,36 @@ a:focus-visible {
 
 .criterion-copy {
   min-width: 0;
+}
+
+.run-output {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.run-output .error-message {
+  margin-left: 10px;
+}
+
+.run-output-text small {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-faint);
+}
+
+.run-output-text pre {
+  overflow: auto;
+  max-height: 240px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font:
+    500 11px/1.45 'JetBrains Mono Variable',
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .criterion-copy strong,
@@ -1608,8 +1644,31 @@ textarea.text-field.compact-code-field {
 
 .explorer-list .pin-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+
+.explorer-list .pin-actions .pin-action {
+  margin-top: 0;
+}
+
+.explorer-list .retire-review {
+  margin-top: 13px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.explorer-list .retire-review p {
+  margin-bottom: 10px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.explorer-list .retire-review textarea {
+  width: 100%;
+  min-height: 64px;
 }
 
 .explorer-list ul {

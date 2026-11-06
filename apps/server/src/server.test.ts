@@ -75,14 +75,14 @@ describe('local API security and persistence', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': '25000001',
+        'Content-Length': '500000001',
         'X-VeriDone-CSRF': csrfToken,
         Origin: 'http://127.0.0.1:4173',
       },
       body: '{}',
     });
     expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toEqual({ error: 'workspace_too_large' });
+    await expect(response.json()).resolves.toMatchObject({ error: 'workspace_too_large' });
   });
 
   it('requires a per-process token for mutations', async () => {

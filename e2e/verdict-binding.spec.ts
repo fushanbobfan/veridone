@@ -141,6 +141,79 @@ test('a verdict stays on the work item the reviewer opened, across background re
   ).toEqual([{ title: 'Binding item B', decision: 'rejected' }]);
 });
 
+test('a check approved by mistake can be diagnosed, replaced and left behind', async ({ page }) => {
+  test.setTimeout(180_000);
+  const ids = await seedLinkedItems(page.request, [
+    { repository: 'lifecycle-d', runId: 'lifecycle-d', title: 'Lifecycle item D' },
+  ]);
+  const itemD = ids['Lifecycle item D'];
+  const bootstrap = await readBootstrap(page.request);
+  const repositoryId = bootstrap.repositories.find((entry) => entry.name === 'lifecycle-d')?.id;
+  await post(page.request, '/api/v1/checks', {
+    repositoryId,
+    label: 'Mistaken check',
+    kind: 'test',
+    executable: process.execPath,
+    args: ['-e', 'process.stderr.write("the check has a typo"); process.exit(3)'],
+    cwdRelative: '.',
+    timeoutMs: 10_000,
+    maxOutputBytes: 10_000,
+  });
+
+  await page.goto(`/?review=${itemD}`);
+  await expect(page.locator('#review-detail h2').first()).toHaveText('Lifecycle item D');
+  await page.getByRole('button', { name: 'Run approved checks' }).click();
+  await expect(page.getByText(/failed · /u).first()).toBeVisible({ timeout: 60_000 });
+
+  // The review shows why the check failed.
+  await page.getByRole('button', { name: 'Show output of Mistaken check' }).click();
+  await expect(page.getByText('the check has a typo')).toBeVisible();
+
+  // Replacing starts from the old definition, and the gate moves to the new check.
+  await page.getByRole('button', { name: 'Manage checks' }).click();
+  await page.getByRole('button', { name: 'Replace Mistaken check' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Replace Mistaken check' });
+  await dialog.getByLabel('Label').fill('Corrected check');
+  await dialog
+    .getByLabel('Literal argument array')
+    .fill('["-e", "process.stdout.write(\\"ok\\")"]');
+  await dialog.getByLabel('Why it changes').fill('The arguments had a typo.');
+  await expectNoWcagViolations(page);
+  await dialog.getByRole('button', { name: 'Approve and retire the old' }).click();
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole('button', { name: 'Run approved checks' }).click();
+  await expect(page.getByText('All required evidence is current')).toBeVisible({
+    timeout: 60_000,
+  });
+  const accept = page.getByRole('button', { name: 'Accept work' });
+  await expect(accept).toBeEnabled();
+
+  // The old check stays on record as retired, with its reason, and offers nothing more.
+  await page.getByRole('button', { name: 'Manage checks' }).click();
+  await expect(page.getByText('The arguments had a typo.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retire Mistaken check' })).toHaveCount(0);
+  await expectNoWcagViolations(page);
+  await page.getByRole('button', { name: 'Close workspace explorer' }).click();
+
+  await accept.click();
+  await page.getByLabel('Decision note').fill('The corrected check passes.');
+  await page.getByRole('button', { name: 'Record acceptance' }).click();
+  await expect(page.getByRole('dialog')).toBeHidden();
+
+  const after = await readBootstrap(page.request);
+  expect(
+    after.verdicts
+      .filter((verdict) => verdict.workItemId === itemD)
+      .map(({ decision, overrideReason }) => ({ decision, overrideReason })),
+  ).toEqual([{ decision: 'accepted', overrideReason: null }]);
+  const packet = await page.request.get(`/api/v1/work-items/${itemD}/packet/md`);
+  const text = await packet.text();
+  expect(text).toContain('Mistaken check');
+  expect(text).toContain('retired');
+  expect(text).toContain('The arguments had a typo.');
+});
+
 test('a reviewer can accept normally after requesting changes on an earlier state', async ({
   page,
 }) => {
@@ -164,7 +237,7 @@ test('a reviewer can accept normally after requesting changes on an earlier stat
 
   await page.goto(`/?review=${itemC}`);
   await expect(page.locator('#review-detail h2').first()).toHaveText('Revision item C');
-  await page.getByRole('button', { name: 'Request changes' }).click();
+  await page.getByRole('button', { name: 'Request changes', exact: true }).click();
   await page.getByLabel('Decision note').fill('Add the missing regression test.');
   await page.getByRole('button', { name: 'Record request' }).click();
   await expect(page.getByRole('dialog')).toBeHidden();
@@ -177,7 +250,9 @@ test('a reviewer can accept normally after requesting changes on an earlier stat
   await expect(page.getByText(/superseded/i).first()).toBeVisible();
   await page.getByRole('button', { name: 'Rebind to current state' }).click();
   await page.getByRole('button', { name: 'Run approved checks' }).click();
-  await expect(page.getByText('All required evidence is current')).toBeVisible();
+  await expect(page.getByText('All required evidence is current')).toBeVisible({
+    timeout: 60_000,
+  });
 
   const accept = page.getByRole('button', { name: 'Accept work' });
   await expect(accept).toBeEnabled();

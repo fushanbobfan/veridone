@@ -5,6 +5,8 @@ export interface ApprovedRootDto {
   createdAt: string;
   /** `pending` for a root restored from a backup until the operator approves it. */
   status: 'approved' | 'pending';
+  /** The folder is not on this machine right now. */
+  missing?: boolean;
 }
 
 export interface RepositoryDto {
@@ -100,6 +102,9 @@ export interface CheckDto {
   approvedAt: string;
   setupArgs: string[];
   setupTimeoutMs: number;
+  /** When the operator took this check out of the gate, and why; null while it counts. */
+  retiredAt: string | null;
+  retiredReason: string | null;
 }
 
 export interface EvidenceDto {
@@ -165,6 +170,8 @@ export interface BootstrapDto {
 
 export interface ReadinessDto {
   ready: boolean;
+  /** Why the bound repository cannot be read right now; null when it can. */
+  repositoryIssue: string | null;
   bound: boolean;
   bindingFresh: boolean;
   degraded: boolean;
@@ -264,6 +271,7 @@ export interface NewCheckInput {
   args: string[];
   /** Arguments the same tool runs in the checkout before the check; empty for no setup. */
   setupArgs: string[];
+  setupTimeoutMs?: number;
   versionArgs: string[];
   scopePaths: string[];
   cwdRelative: string;
@@ -273,6 +281,44 @@ export interface NewCheckInput {
 
 export async function createCheck(input: NewCheckInput, csrfToken: string): Promise<void> {
   await mutate('/api/v1/checks', csrfToken, input);
+}
+
+/** Takes a check out of the gate, if it is still the definition the operator saw. */
+export async function retireCheck(
+  check: Pick<CheckDto, 'id' | 'definitionHash'>,
+  reason: string,
+  csrfToken: string,
+): Promise<void> {
+  await mutate(`/api/v1/checks/${check.id}/retire`, csrfToken, {
+    reason,
+    expected: { definitionHash: check.definitionHash },
+  });
+}
+
+/** Approves a new definition in place of a check, in one step; a refusal leaves the old check counting. */
+export async function replaceCheck(
+  check: Pick<CheckDto, 'id' | 'definitionHash'>,
+  input: NewCheckInput,
+  reason: string,
+  csrfToken: string,
+): Promise<void> {
+  await mutate(`/api/v1/checks/${check.id}/replace`, csrfToken, {
+    check: input,
+    reason,
+    expected: { definitionHash: check.definitionHash },
+  });
+}
+
+export interface EvidenceOutput {
+  stdout: string;
+  stderr: string;
+  /** True when only the end of the output came back. */
+  truncated: boolean;
+}
+
+/** What a run printed, after redaction. */
+export function fetchEvidenceOutput(evidenceId: string): Promise<EvidenceOutput> {
+  return request<EvidenceOutput>(`/api/v1/evidence/${evidenceId}/output`);
 }
 
 export interface ToolCandidate {
@@ -340,17 +386,23 @@ export interface RestoreResultDto {
   };
 }
 
-/** Runs a restore and rolls it back, so the operator sees what it would add before confirming. */
-export async function previewWorkspaceDocument(
-  document: unknown,
-  csrfToken: string,
-): Promise<RestoreResultDto> {
-  return mutate('/api/v1/workspace/preview', csrfToken, document);
+/** The largest backup the service reads, in bytes; export writes nothing larger. */
+export const maxWorkspaceBackupBytes = 500_000_000;
+
+// The file goes up as it is, so a backup near the limit never has to fit in one string in the browser.
+function sendWorkspaceFile(url: string, file: Blob, csrfToken: string): Promise<RestoreResultDto> {
+  return request<RestoreResultDto>(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-VeriDone-CSRF': csrfToken },
+    body: file,
+  });
 }
 
-export async function importWorkspaceDocument(
-  document: unknown,
-  csrfToken: string,
-): Promise<RestoreResultDto> {
-  return mutate('/api/v1/workspace/import', csrfToken, document);
+/** Runs a restore and rolls it back, so the operator sees what it would add before confirming. */
+export function previewWorkspaceFile(file: Blob, csrfToken: string): Promise<RestoreResultDto> {
+  return sendWorkspaceFile('/api/v1/workspace/preview', file, csrfToken);
+}
+
+export function importWorkspaceFile(file: Blob, csrfToken: string): Promise<RestoreResultDto> {
+  return sendWorkspaceFile('/api/v1/workspace/import', file, csrfToken);
 }

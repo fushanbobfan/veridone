@@ -9,9 +9,67 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
+import { useState } from 'react';
 
+import type { EvidenceOutput } from '../api.js';
 import type { ReviewItem } from '../data.js';
 import { StatusMark } from './StatusMark.js';
+
+/** What a run printed, read when the operator asks; a failed check is diagnosed from this. */
+function RunOutput({
+  label,
+  evidenceId,
+  onReadOutput,
+}: {
+  label: string;
+  evidenceId: string;
+  onReadOutput: (evidenceId: string) => Promise<EvidenceOutput>;
+}) {
+  const [shown, setShown] = useState<{ id: string; output: EvidenceOutput } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const output = shown?.id === evidenceId ? shown.output : null;
+
+  const toggle = async () => {
+    if (output) {
+      setShown(null);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setShown({ id: evidenceId, output: await onReadOutput(evidenceId) });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The output could not be read.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="run-output">
+      <button
+        className="text-button"
+        type="button"
+        onClick={() => void toggle()}
+        disabled={busy}
+        aria-expanded={Boolean(output)}
+        aria-label={`${output ? 'Hide' : 'Show'} output of ${label}`}
+      >
+        {output ? 'Hide output' : busy ? 'Reading…' : 'Show output'}
+      </button>
+      {error && <span className="error-message">{error}</span>}
+      {output && (
+        <div className="run-output-text">
+          {output.truncated && <small>Only the end of the output is shown.</small>}
+          {output.stdout && <pre tabIndex={0}>{output.stdout}</pre>}
+          {output.stderr && <pre tabIndex={0}>{output.stderr}</pre>}
+          {!output.stdout && !output.stderr && <small>This run printed nothing.</small>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ReviewDetail({
   item,
@@ -27,6 +85,9 @@ export function ReviewDetail({
   onOverride,
   onExport,
   onViewContract,
+  onManageChecks,
+  onChangeRepository,
+  onReadOutput,
 }: {
   item: ReviewItem;
   decision: string | null;
@@ -41,6 +102,10 @@ export function ReviewDetail({
   onOverride?: () => void;
   onExport?: () => void;
   onViewContract?: () => void;
+  onManageChecks?: () => void;
+  /** Binds the work item to another repository, for one that moved or cannot be read. */
+  onChangeRepository?: () => void;
+  onReadOutput?: (evidenceId: string) => Promise<EvidenceOutput>;
 }) {
   const ready = item.gatesReady;
   const percentage = Math.round((item.requiredSatisfied / item.requiredTotal) * 100);
@@ -141,6 +206,16 @@ export function ReviewDetail({
                   <button className="text-button" type="button" onClick={onViewContract}>
                     View contract <ArrowUpRight aria-hidden="true" size={14} />
                   </button>
+                  {onManageChecks && (
+                    <button className="text-button" type="button" onClick={onManageChecks}>
+                      Manage checks <ArrowUpRight aria-hidden="true" size={14} />
+                    </button>
+                  )}
+                  {onChangeRepository && (
+                    <button className="text-button" type="button" onClick={onChangeRepository}>
+                      Change repository <ArrowUpRight aria-hidden="true" size={14} />
+                    </button>
+                  )}
                   {onExport && (
                     <button className="text-button" type="button" onClick={onExport}>
                       Export packet <ArrowUpRight aria-hidden="true" size={14} />
@@ -172,6 +247,13 @@ export function ReviewDetail({
                     </span>
                     <span className="criterion-evidence">{criterion.evidenceLabel}</span>
                     <StatusMark state={criterion.state} compact />
+                    {criterion.evidenceId && onReadOutput && (
+                      <RunOutput
+                        label={criterion.title}
+                        evidenceId={criterion.evidenceId}
+                        onReadOutput={onReadOutput}
+                      />
+                    )}
                   </motion.div>
                 ))}
               </div>

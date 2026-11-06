@@ -230,6 +230,39 @@ const migrationEleven = `
   ALTER TABLE checks ADD COLUMN setup_timeout_ms INTEGER NOT NULL DEFAULT 600000;
 `;
 
+// A check leaves the gate by retirement, with a reason; its record and evidence stay in the history.
+const migrationTwelve = `
+  ALTER TABLE checks ADD COLUMN retired_at TEXT;
+  ALTER TABLE checks ADD COLUMN retired_reason TEXT;
+`;
+
+// A receipt is identified by its run id, and one file can hold a new run each time an agent writes it.
+const migrationThirteen = `
+  CREATE TABLE receipts_by_run (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL UNIQUE,
+    source_path TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    stage_count INTEGER NOT NULL,
+    degraded INTEGER NOT NULL CHECK (degraded IN (0, 1)),
+    imported_at TEXT NOT NULL
+  );
+  INSERT INTO receipts_by_run (
+    id, run_id, source_path, task_type, status, started_at, completed_at, stage_count, degraded,
+    imported_at
+  )
+  SELECT
+    id, run_id, source_path, task_type, status, started_at, completed_at, stage_count, degraded,
+    imported_at
+  FROM receipts;
+  DROP TABLE receipts;
+  ALTER TABLE receipts_by_run RENAME TO receipts;
+  CREATE INDEX receipts_started_at_idx ON receipts(started_at DESC);
+`;
+
 export type WorkspaceKeyPurpose = 'packet-pseudonyms' | 'packet-signing';
 
 const createKeyMaterial: Record<WorkspaceKeyPurpose, () => string> = {
@@ -354,6 +387,9 @@ export interface CheckRecord {
   /** Arguments the pinned tool runs in the checkout before the check; empty for no setup. */
   setupArgs: string[];
   setupTimeoutMs: number;
+  /** When the operator took this check out of the gate, and why; null while it counts. */
+  retiredAt: string | null;
+  retiredReason: string | null;
 }
 
 export interface EvidenceRecord {
@@ -385,6 +421,15 @@ export interface EvidenceRecord {
   /** `imported` evidence came from a workspace backup; it stays history and satisfies no gate. */
   origin: 'local' | 'imported';
 }
+
+/** An evidence record without its output, which can run to millions of characters per record. */
+export type EvidenceSummary = Omit<EvidenceRecord, 'stdout' | 'stderr'>;
+
+const evidenceSummaryColumns = `
+  id, work_item_id, check_id, kind, label, result, repository_id, snapshot_fingerprint, head,
+  contract_version, check_definition_version, started_at, completed_at, duration_ms, tool_version,
+  exit_code, artifact_hashes_json, invalid_reason, isolation, tool_path, tool_sha256, origin
+`;
 
 export interface VerdictRecord {
   id: string;
@@ -432,6 +477,8 @@ export class VeriDoneDatabase {
       { version: 9, sql: migrationNine },
       { version: 10, sql: migrationTen },
       { version: 11, sql: migrationEleven },
+      { version: 12, sql: migrationTwelve },
+      { version: 13, sql: migrationThirteen },
     ];
 
     for (const migration of migrations) {
@@ -534,7 +581,14 @@ export class VeriDoneDatabase {
     return this.getRoot(id);
   }
 
-  upsertRepository(canonicalPath: string, snapshot: RepositorySnapshot): RepositoryRecord {
+  upsertRepository(canonicalPath: string, captured: RepositorySnapshot): RepositoryRecord {
+    // A capture can finish after the check set changed. The version comes from the set as it stands now, so that
+    // a slow capture never writes an older version back and lets evidence from that older set count again.
+    const snapshot: RepositorySnapshot = {
+      ...captured,
+      checkDefinitionVersion:
+        this.activeCheckVersion(captured.repositoryId) ?? captured.checkDefinitionVersion,
+    };
     const updatedAt = new Date().toISOString();
     const values = {
       id: snapshot.repositoryId,
@@ -789,12 +843,16 @@ export class VeriDoneDatabase {
     return workItem;
   }
 
-  addCheck(input: Omit<CheckRecord, 'id' | 'approvedAt'>): CheckRecord {
+  addCheck(
+    input: Omit<CheckRecord, 'id' | 'approvedAt' | 'retiredAt' | 'retiredReason'>,
+  ): CheckRecord {
     if (!this.getRepository(input.repositoryId)) throw new Error('The repository does not exist.');
     const record: CheckRecord = {
       ...input,
       id: randomUUID(),
       approvedAt: new Date().toISOString(),
+      retiredAt: null,
+      retiredReason: null,
     };
     this.connection
       .prepare(
@@ -817,7 +875,26 @@ export class VeriDoneDatabase {
         scopePathsJson: JSON.stringify(record.scopePaths),
         setupArgsJson: JSON.stringify(record.setupArgs),
       });
+    this.recordCheckVersion(record.repositoryId);
     return record;
+  }
+
+  /** The version of a repository's check set, which evidence must match to count; null with no check counting. */
+  activeCheckVersion(repositoryId: string): string | null {
+    const checks = this.listActiveChecks(repositoryId);
+    if (checks.length === 0) return null;
+    return createHash('sha256')
+      .update(canonicalJson(checks.map((check) => check.definitionHash).sort()))
+      .digest('hex');
+  }
+
+  /** Stores the check set's version as soon as the set changes, ahead of the next capture of the repository. */
+  private recordCheckVersion(repositoryId: string): void {
+    const version = this.activeCheckVersion(repositoryId);
+    if (version === null) return;
+    this.connection
+      .prepare('UPDATE repositories SET check_definition_version = ? WHERE id = ?')
+      .run(version, repositoryId);
   }
 
   /** Records a newly approved tool file for a check; its definition hash changes with it. */
@@ -836,7 +913,41 @@ export class VeriDoneDatabase {
     if (result.changes !== 1) throw new Error('The approved check does not exist.');
     const check = this.getCheck(checkId);
     if (!check) throw new Error('The pinned check could not be read.');
+    this.recordCheckVersion(check.repositoryId);
     return check;
+  }
+
+  /** Takes a check out of the gate. The record and its evidence stay in the history. */
+  retireCheck(checkId: string, reason: string): CheckRecord {
+    const result = this.connection
+      .prepare(
+        `UPDATE checks SET retired_at = ?, retired_reason = ? WHERE id = ? AND retired_at IS NULL`,
+      )
+      .run(new Date().toISOString(), reason, checkId);
+    if (result.changes !== 1) throw new Error('The check is already retired or does not exist.');
+    const check = this.getCheck(checkId);
+    if (!check) throw new Error('The retired check could not be read.');
+    this.recordCheckVersion(check.repositoryId);
+    return check;
+  }
+
+  /** Approves a new definition and retires the old check together, so a refusal leaves neither half done. */
+  replaceCheck(
+    checkId: string,
+    replacement: Parameters<VeriDoneDatabase['addCheck']>[0],
+    reason: string,
+  ): { check: CheckRecord; retired: CheckRecord } {
+    return this.connection.transaction(() => {
+      const check = this.addCheck(replacement);
+      return { check, retired: this.retireCheck(checkId, reason) };
+    })();
+  }
+
+  /** The checks that count toward a repository's gate. */
+  listActiveChecks(repositoryId: string): CheckRecord[] {
+    return this.listChecks().filter(
+      (check) => check.repositoryId === repositoryId && check.retiredAt === null,
+    );
   }
 
   listChecks(): CheckRecord[] {
@@ -862,6 +973,8 @@ export class VeriDoneDatabase {
       approvedAt: String(row.approved_at),
       setupArgs: JSON.parse(String(row.setup_args_json)) as string[],
       setupTimeoutMs: Number(row.setup_timeout_ms),
+      retiredAt: row.retired_at === null ? null : String(row.retired_at),
+      retiredReason: row.retired_reason === null ? null : String(row.retired_reason),
     }));
   }
 
@@ -900,6 +1013,17 @@ export class VeriDoneDatabase {
       .run({ ...record, artifactHashesJson: JSON.stringify(record.artifactHashes) });
   }
 
+  /** The bytes of stored check output, read without loading it. */
+  evidenceOutputBytes(): number {
+    const row = this.connection
+      .prepare(
+        `SELECT COALESCE(SUM(LENGTH(CAST(stdout AS BLOB)) + LENGTH(CAST(stderr AS BLOB))), 0) AS bytes
+         FROM evidence`,
+      )
+      .get() as { bytes: number };
+    return row.bytes;
+  }
+
   getEvidence(id: string): EvidenceRecord | null {
     const row = this.connection.prepare('SELECT * FROM evidence WHERE id = ?').get(id) as
       Record<string, unknown> | undefined;
@@ -917,7 +1041,29 @@ export class VeriDoneDatabase {
     return rows.map((row) => this.evidenceFromRow(row));
   }
 
+  /** Evidence without its output, for reads that run often or need only the result. */
+  listEvidenceSummaries(workItemId?: string): EvidenceSummary[] {
+    const rows = workItemId
+      ? (this.connection
+          .prepare(
+            `SELECT ${evidenceSummaryColumns} FROM evidence WHERE work_item_id = ? ORDER BY completed_at DESC`,
+          )
+          .all(workItemId) as Array<Record<string, unknown>>)
+      : (this.connection
+          .prepare(`SELECT ${evidenceSummaryColumns} FROM evidence ORDER BY completed_at DESC`)
+          .all() as Array<Record<string, unknown>>);
+    return rows.map((row) => this.evidenceSummaryFromRow(row));
+  }
+
   private evidenceFromRow(row: Record<string, unknown>): EvidenceRecord {
+    return {
+      ...this.evidenceSummaryFromRow(row),
+      stdout: String(row.stdout),
+      stderr: String(row.stderr),
+    };
+  }
+
+  private evidenceSummaryFromRow(row: Record<string, unknown>): EvidenceSummary {
     return {
       id: String(row.id),
       workItemId: String(row.work_item_id),
@@ -935,8 +1081,6 @@ export class VeriDoneDatabase {
       durationMs: Number(row.duration_ms),
       toolVersion: row.tool_version === null ? null : String(row.tool_version),
       exitCode: row.exit_code === null ? null : Number(row.exit_code),
-      stdout: String(row.stdout),
-      stderr: String(row.stderr),
       artifactHashes: JSON.parse(String(row.artifact_hashes_json)) as string[],
       invalidReason: row.invalid_reason === null ? null : String(row.invalid_reason),
       isolation: row.isolation === 'clean-checkout' ? 'clean-checkout' : null,

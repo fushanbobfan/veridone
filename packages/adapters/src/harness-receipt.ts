@@ -38,7 +38,7 @@ export function normalizeReceiptTimestamp(value: string): string | null {
   return matches ? date.toISOString() : null;
 }
 
-/** Field rules a receipt shares with the workspace backup, so a receipt that imports also exports. */
+/** Field rules for a newly imported receipt. A backup also carries what earlier versions accepted. */
 export const receiptFieldSchemas = {
   runId: z.string().min(1).max(512),
   status: z.string().min(1).max(200),

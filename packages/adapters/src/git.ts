@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   canonicalJson,
   createRepositorySnapshot,
+  maxStatusEntries,
   sha256Hex,
   type RepositorySnapshot,
 } from '@veridone/core';
@@ -155,6 +156,11 @@ export async function captureGitSnapshot(
       git(session, [...diff, '--cached', '--raw', '--full-index', '-z', '--']),
     ]);
   const statusEntries = parseNullDelimited(status);
+  if (statusEntries.length > maxStatusEntries) {
+    throw new GitAdapterError(
+      `${repositoryPath} has ${statusEntries.length} changed files, more than the ${maxStatusEntries} a snapshot records. Commit or ignore them, then refresh.`,
+    );
+  }
   const untracked = parseNullDelimited(untrackedPaths);
   const workingContent = await hashWorkingPaths(repositoryPath, [
     ...parseNullDelimited(unstagedPaths),

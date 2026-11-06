@@ -4,11 +4,14 @@ import {
   approveRoot,
   cancelCheck,
   fetchBootstrap,
+  fetchEvidenceOutput,
   fetchToolCandidate,
   linkWorkItem,
   pinCheckTool,
+  retireCheck,
   runCheck,
   type BootstrapDto,
+  type CheckDto,
   type ToolCandidate,
   type VerdictDto,
   type VerdictExpectation,
@@ -137,6 +140,7 @@ export function App() {
   const [serviceUnavailable, setServiceUnavailable] = useState(false);
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [checkDialogOpen, setCheckDialogOpen] = useState(false);
+  const [replacingCheck, setReplacingCheck] = useState<CheckDto | null>(null);
   const [repositoryDialogOpen, setRepositoryDialogOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [workspaceSection, setWorkspaceSection] = useState<WorkspaceSection | null>(null);
@@ -241,31 +245,58 @@ export function App() {
     );
   }
 
+  // Rendered at one place in both views, so that its message survives a restore bringing in the first work item.
+  const workspaceDialog =
+    bootstrap?.mode === 'local' ? (
+      <WorkspaceDialog
+        open={workspaceDialogOpen}
+        bootstrap={bootstrap}
+        onClose={() => setWorkspaceDialogOpen(false)}
+        onImported={reloadWorkspace}
+      />
+    ) : null;
+
   if (!selected) {
     return (
-      <div className="empty-workspace">
-        <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true">
-            V
-          </span>
-          <span>VeriDone</span>
+      <>
+        <div className="empty-workspace">
+          <div className="brand-lockup">
+            <span className="brand-mark" aria-hidden="true">
+              V
+            </span>
+            <span>VeriDone</span>
+          </div>
+          <span className="section-label">Local workspace</span>
+          <h1>No evidence sources yet</h1>
+          <p>Approve a root, then add a Git repository or agent receipt.</p>
+          <button
+            className="primary-action"
+            type="button"
+            onClick={() => setSourceDialogOpen(true)}
+          >
+            Add first source
+          </button>
+          {bootstrap?.mode === 'local' && (
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setWorkspaceDialogOpen(true)}
+            >
+              Restore a backup
+            </button>
+          )}
+          {bootstrap && (
+            <AddSourceDialog
+              open={sourceDialogOpen}
+              csrfToken={bootstrap.csrfToken}
+              roots={bootstrap.roots.filter((root) => root.status === 'approved')}
+              onClose={() => setSourceDialogOpen(false)}
+              onAdded={reloadWorkspace}
+            />
+          )}
         </div>
-        <span className="section-label">Local workspace</span>
-        <h1>No evidence sources yet</h1>
-        <p>Approve a root, then add a Git repository or agent receipt.</p>
-        <button className="primary-action" type="button" onClick={() => setSourceDialogOpen(true)}>
-          Add first source
-        </button>
-        {bootstrap && (
-          <AddSourceDialog
-            open={sourceDialogOpen}
-            csrfToken={bootstrap.csrfToken}
-            roots={bootstrap.roots.filter((root) => root.status === 'approved')}
-            onClose={() => setSourceDialogOpen(false)}
-            onAdded={reloadWorkspace}
-          />
-        )}
-      </div>
+        {workspaceDialog}
+      </>
     );
   }
 
@@ -275,7 +306,9 @@ export function App() {
     ? bootstrap?.repositories.find((repository) => repository.id === localWorkItem.repositoryId)
     : null;
   const localChecks = localRepository
-    ? (bootstrap?.checks.filter((check) => check.repositoryId === localRepository.id) ?? [])
+    ? (bootstrap?.checks.filter(
+        (check) => check.repositoryId === localRepository.id && !check.retiredAt,
+      ) ?? [])
     : [];
   const isLocal = bootstrap?.mode === 'local' && Boolean(localWorkItem);
 
@@ -327,12 +360,21 @@ export function App() {
 
     setActionBusy(true);
     try {
+      // One check that refuses to start must not keep the others from running.
+      const refusals: string[] = [];
       for (const check of localChecks) {
         const runId = crypto.randomUUID();
         setActiveRunId(runId);
-        await runCheck(check.id, localWorkItem.id, bootstrap.csrfToken, runId);
+        try {
+          await runCheck(check.id, localWorkItem.id, bootstrap.csrfToken, runId);
+        } catch (caught) {
+          refusals.push(
+            caught instanceof Error ? caught.message : `${check.label} could not be completed.`,
+          );
+        }
       }
       await reloadWorkspace();
+      if (refusals.length > 0) setActionError(refusals.join(' '));
     } catch (caught) {
       setActionError(
         caught instanceof Error ? caught.message : 'The checks could not be completed.',
@@ -389,187 +431,207 @@ export function App() {
   };
 
   return (
-    <div className={`app-shell mobile-${mobilePane}`}>
-      <a className="skip-link" href="#review-detail">
-        Skip to selected review
-      </a>
-      <Navigation
-        theme={theme}
-        reviewCount={reviews.length}
-        serviceMode={bootstrap?.mode ?? 'demo'}
-        themePreference={themePreference}
-        onToggleTheme={() =>
-          setThemePreference((current) =>
-            current === 'system'
-              ? theme === 'dark'
-                ? 'light'
-                : 'dark'
-              : current === 'light'
-                ? 'dark'
-                : 'system',
-          )
-        }
-        {...(bootstrap?.mode === 'local'
-          ? {
-              onOpenWorkspace: () => setWorkspaceDialogOpen(true),
-              onOpenSection: (section: WorkspaceSection) => setWorkspaceSection(section),
-            }
-          : {})}
-      />
-      <ReviewInbox
-        items={reviews}
-        selectedId={selected.id}
-        filter={filter}
-        query={query}
-        sort={sort}
-        dataLabel={
-          bootstrap?.mode === 'local'
-            ? 'Live local evidence'
-            : serviceUnavailable
-              ? 'Local service unavailable · synthetic demo'
-              : 'Synthetic demo data'
-        }
-        sourceIssues={bootstrap?.sourceIssues ?? []}
-        {...(bootstrap?.mode === 'local' ? { onAddSource: () => setSourceDialogOpen(true) } : {})}
-        onFilter={setFilter}
-        onQuery={setQuery}
-        onSort={setSort}
-        onSelect={selectReview}
-      />
-      {bootstrap && (
-        <AddSourceDialog
-          open={sourceDialogOpen}
-          csrfToken={bootstrap.csrfToken}
-          roots={bootstrap.roots.filter((root) => root.status === 'approved')}
-          onClose={() => setSourceDialogOpen(false)}
-          onAdded={reloadWorkspace}
-        />
-      )}
-      <ReviewDetail
-        item={selected}
-        decision={
-          localVerdict
-            ? verdictLabel(localVerdict, localRepository?.snapshot.fingerprint)
-            : (decisions[selected.id] ?? null)
-        }
-        {...(evidenceActionLabel ? { evidenceActionLabel } : {})}
-        evidenceActionBusy={actionBusy}
-        {...(activeRunId ? { onCancelEvidence: cancelEvidenceAction } : {})}
-        onBack={() => setMobilePane('inbox')}
-        {...(isLocal ? { onEvidenceAction: performEvidenceAction, onExport: exportPacket } : {})}
-        onViewContract={() => setWorkspaceSection('contracts')}
-        onAccept={() => {
-          if (isLocal) {
-            openVerdict('accepted');
-          } else {
-            setDecisions((current) => ({
-              ...current,
-              [selected.id]: 'Accepted by you',
-            }));
+    <>
+      <div className={`app-shell mobile-${mobilePane}`}>
+        <a className="skip-link" href="#review-detail">
+          Skip to selected review
+        </a>
+        <Navigation
+          theme={theme}
+          reviewCount={reviews.length}
+          serviceMode={bootstrap?.mode ?? 'demo'}
+          themePreference={themePreference}
+          onToggleTheme={() =>
+            setThemePreference((current) =>
+              current === 'system'
+                ? theme === 'dark'
+                  ? 'light'
+                  : 'dark'
+                : current === 'light'
+                  ? 'dark'
+                  : 'system',
+            )
           }
-        }}
-        onRequestChanges={() => {
-          if (isLocal) {
-            openVerdict('changes-requested');
-          } else {
-            setDecisions((current) => ({
-              ...current,
-              [selected.id]: 'Changes requested by you',
-            }));
-          }
-        }}
-        onReject={() => {
-          if (isLocal) {
-            openVerdict('rejected');
-          } else {
-            setDecisions((current) => ({
-              ...current,
-              [selected.id]: 'Rejected by you',
-            }));
-          }
-        }}
-        {...(isLocal
-          ? {
-              onOverride: () => openVerdict('accepted', true),
-            }
-          : {})}
-      />
-      {bootstrap && localRepository && (
-        <CheckDialog
-          open={checkDialogOpen}
-          repositoryId={localRepository.id}
-          csrfToken={bootstrap.csrfToken}
-          onClose={() => setCheckDialogOpen(false)}
-          onAdded={reloadWorkspace}
-        />
-      )}
-      {bootstrap && localWorkItem && (
-        <RepositoryLinkDialog
-          open={repositoryDialogOpen}
-          workItemTitle={localWorkItem.title}
-          repositories={bootstrap.repositories}
-          onClose={() => setRepositoryDialogOpen(false)}
-          onLink={async (repositoryId) => {
-            await linkWorkItem(localWorkItem.id, repositoryId, bootstrap.csrfToken);
-            await reloadWorkspace();
-          }}
-        />
-      )}
-      {bootstrap && verdictIntent && (
-        <VerdictDialog
-          open
-          workItemId={verdictIntent.workItemId}
-          subject={verdictIntent.subject}
-          expected={verdictIntent.expected}
-          changedSinceOpened={describeChange(
-            verdictIntent.expected,
-            verdictExpectation(bootstrap, verdictIntent.workItemId),
-          )}
-          decision={verdictIntent.decision}
-          overrideRequired={verdictIntent.overrideRequired}
-          csrfToken={bootstrap.csrfToken}
-          onClose={() => setVerdictIntent(null)}
-          onRecorded={reloadWorkspace}
-        />
-      )}
-      {bootstrap?.mode === 'local' && (
-        <WorkspaceDialog
-          open={workspaceDialogOpen}
-          bootstrap={bootstrap}
-          onClose={() => setWorkspaceDialogOpen(false)}
-          onImported={reloadWorkspace}
-        />
-      )}
-      {bootstrap && (
-        <WorkspaceExplorerDialog
-          open={workspaceSection !== null}
-          section={workspaceSection ?? 'repositories'}
-          bootstrap={bootstrap}
-          onSection={setWorkspaceSection}
-          onClose={() => setWorkspaceSection(null)}
-          {...(bootstrap.mode === 'local'
+          {...(bootstrap?.mode === 'local'
             ? {
-                onReviewTool: fetchToolCandidate,
-                onPinTool: async (checkId: string, expected: ToolCandidate) => {
-                  await pinCheckTool(checkId, expected, bootstrap.csrfToken);
-                  await reloadWorkspace();
-                },
-                onApproveRoot: async (rootId: string) => {
-                  await approveRoot(rootId, bootstrap.csrfToken);
-                  await reloadWorkspace();
-                },
+                onOpenWorkspace: () => setWorkspaceDialogOpen(true),
+                onOpenSection: (section: WorkspaceSection) => setWorkspaceSection(section),
               }
             : {})}
         />
-      )}
-      {actionError && (
-        <div className="action-toast" role="alert">
-          <span>{actionError}</span>
-          <button type="button" onClick={() => setActionError(null)}>
-            Dismiss
-          </button>
-        </div>
-      )}
-    </div>
+        <ReviewInbox
+          items={reviews}
+          selectedId={selected.id}
+          filter={filter}
+          query={query}
+          sort={sort}
+          dataLabel={
+            bootstrap?.mode === 'local'
+              ? 'Live local evidence'
+              : serviceUnavailable
+                ? 'Local service unavailable · synthetic demo'
+                : 'Synthetic demo data'
+          }
+          sourceIssues={bootstrap?.sourceIssues ?? []}
+          {...(bootstrap?.mode === 'local' ? { onAddSource: () => setSourceDialogOpen(true) } : {})}
+          onFilter={setFilter}
+          onQuery={setQuery}
+          onSort={setSort}
+          onSelect={selectReview}
+        />
+        {bootstrap && (
+          <AddSourceDialog
+            open={sourceDialogOpen}
+            csrfToken={bootstrap.csrfToken}
+            roots={bootstrap.roots.filter((root) => root.status === 'approved')}
+            onClose={() => setSourceDialogOpen(false)}
+            onAdded={reloadWorkspace}
+          />
+        )}
+        <ReviewDetail
+          item={selected}
+          decision={
+            localVerdict
+              ? verdictLabel(localVerdict, localRepository?.snapshot.fingerprint)
+              : (decisions[selected.id] ?? null)
+          }
+          {...(evidenceActionLabel ? { evidenceActionLabel } : {})}
+          evidenceActionBusy={actionBusy}
+          {...(activeRunId ? { onCancelEvidence: cancelEvidenceAction } : {})}
+          onBack={() => setMobilePane('inbox')}
+          {...(isLocal
+            ? {
+                onEvidenceAction: performEvidenceAction,
+                onExport: exportPacket,
+                onManageChecks: () => setWorkspaceSection('checks'),
+                onReadOutput: fetchEvidenceOutput,
+                ...(localWorkItem?.repositoryId && (bootstrap?.repositories.length ?? 0) > 1
+                  ? { onChangeRepository: () => setRepositoryDialogOpen(true) }
+                  : {}),
+              }
+            : {})}
+          onViewContract={() => setWorkspaceSection('contracts')}
+          onAccept={() => {
+            if (isLocal) {
+              openVerdict('accepted');
+            } else {
+              setDecisions((current) => ({
+                ...current,
+                [selected.id]: 'Accepted by you',
+              }));
+            }
+          }}
+          onRequestChanges={() => {
+            if (isLocal) {
+              openVerdict('changes-requested');
+            } else {
+              setDecisions((current) => ({
+                ...current,
+                [selected.id]: 'Changes requested by you',
+              }));
+            }
+          }}
+          onReject={() => {
+            if (isLocal) {
+              openVerdict('rejected');
+            } else {
+              setDecisions((current) => ({
+                ...current,
+                [selected.id]: 'Rejected by you',
+              }));
+            }
+          }}
+          {...(isLocal
+            ? {
+                onOverride: () => openVerdict('accepted', true),
+              }
+            : {})}
+        />
+        {bootstrap && (replacingCheck ?? localRepository) && (
+          <CheckDialog
+            // A new key starts the form over from the check being replaced, or from the defaults.
+            key={replacingCheck?.id ?? localRepository?.id ?? 'new-check'}
+            open={checkDialogOpen}
+            repositoryId={replacingCheck?.repositoryId ?? localRepository?.id ?? ''}
+            csrfToken={bootstrap.csrfToken}
+            replacing={replacingCheck}
+            onClose={() => {
+              setCheckDialogOpen(false);
+              setReplacingCheck(null);
+            }}
+            onAdded={reloadWorkspace}
+          />
+        )}
+        {bootstrap && localWorkItem && (
+          <RepositoryLinkDialog
+            open={repositoryDialogOpen}
+            workItemTitle={localWorkItem.title}
+            repositories={bootstrap.repositories}
+            onClose={() => setRepositoryDialogOpen(false)}
+            onLink={async (repositoryId) => {
+              await linkWorkItem(localWorkItem.id, repositoryId, bootstrap.csrfToken);
+              await reloadWorkspace();
+            }}
+          />
+        )}
+        {bootstrap && verdictIntent && (
+          <VerdictDialog
+            open
+            workItemId={verdictIntent.workItemId}
+            subject={verdictIntent.subject}
+            expected={verdictIntent.expected}
+            changedSinceOpened={describeChange(
+              verdictIntent.expected,
+              verdictExpectation(bootstrap, verdictIntent.workItemId),
+            )}
+            decision={verdictIntent.decision}
+            overrideRequired={verdictIntent.overrideRequired}
+            csrfToken={bootstrap.csrfToken}
+            onClose={() => setVerdictIntent(null)}
+            onRecorded={reloadWorkspace}
+          />
+        )}
+        {bootstrap && (
+          <WorkspaceExplorerDialog
+            open={workspaceSection !== null}
+            section={workspaceSection ?? 'repositories'}
+            bootstrap={bootstrap}
+            onSection={setWorkspaceSection}
+            onClose={() => setWorkspaceSection(null)}
+            {...(bootstrap.mode === 'local'
+              ? {
+                  onReviewTool: fetchToolCandidate,
+                  onPinTool: async (checkId: string, expected: ToolCandidate) => {
+                    await pinCheckTool(checkId, expected, bootstrap.csrfToken);
+                    await reloadWorkspace();
+                  },
+                  onApproveRoot: async (rootId: string) => {
+                    await approveRoot(rootId, bootstrap.csrfToken);
+                    await reloadWorkspace();
+                  },
+                  onReplaceCheck: (check: CheckDto) => {
+                    setWorkspaceSection(null);
+                    setReplacingCheck(check);
+                    setCheckDialogOpen(true);
+                  },
+                  onRetireCheck: async (check: CheckDto, reason: string) => {
+                    await retireCheck(check, reason, bootstrap.csrfToken);
+                    await reloadWorkspace();
+                  },
+                }
+              : {})}
+          />
+        )}
+        {actionError && (
+          <div className="action-toast" role="alert">
+            <span>{actionError}</span>
+            <button type="button" onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+      </div>
+      {workspaceDialog}
+    </>
   );
 }

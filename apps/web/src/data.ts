@@ -7,6 +7,8 @@ export interface ReviewCriterion {
   detail: string;
   state: CriterionState;
   evidenceLabel: string;
+  /** The run behind this row, whose output the review can read. */
+  evidenceId?: string;
 }
 
 export interface ReviewItem {

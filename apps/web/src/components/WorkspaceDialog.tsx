@@ -2,8 +2,9 @@ import { ArchiveRestore, Download, KeyRound, ShieldCheck, Upload, X } from 'luci
 import { useId, useRef, useState } from 'react';
 
 import {
-  importWorkspaceDocument,
-  previewWorkspaceDocument,
+  importWorkspaceFile,
+  maxWorkspaceBackupBytes,
+  previewWorkspaceFile,
   type BootstrapDto,
   type RestoreResultDto,
 } from '../api.js';
@@ -49,9 +50,7 @@ export function WorkspaceDialog({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A chosen backup and what restoring it would add; nothing is written until the operator confirms.
-  const [pending, setPending] = useState<{ document: unknown; preview: RestoreResultDto } | null>(
-    null,
-  );
+  const [pending, setPending] = useState<{ file: File; preview: RestoreResultDto } | null>(null);
 
   useDialogFocus(open, onClose, dialog, closeButton);
 
@@ -65,12 +64,12 @@ export function WorkspaceDialog({
     setError(null);
     setPending(null);
     try {
-      if (file.size > 25_000_000) throw new Error('Workspace backups must be smaller than 25 MB.');
-      const document = JSON.parse(await file.text()) as unknown;
-      setPending({
-        document,
-        preview: await previewWorkspaceDocument(document, bootstrap.csrfToken),
-      });
+      if (file.size > maxWorkspaceBackupBytes) {
+        throw new Error(
+          `This backup is larger than ${maxWorkspaceBackupBytes / 1_000_000} MB, the most a restore reads.`,
+        );
+      }
+      setPending({ file, preview: await previewWorkspaceFile(file, bootstrap.csrfToken) });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The workspace could not be read.');
     } finally {
@@ -84,7 +83,7 @@ export function WorkspaceDialog({
     setBusy(true);
     setError(null);
     try {
-      const result = await importWorkspaceDocument(pending.document, bootstrap.csrfToken);
+      const result = await importWorkspaceFile(pending.file, bootstrap.csrfToken);
       setPending(null);
       await onImported();
       setMessage(

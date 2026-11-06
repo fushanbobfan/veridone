@@ -21,6 +21,8 @@ export function latestVerdict(verdicts: VerdictDto[], workItemId: string): Verdi
 
 function relativeTime(iso: string): string {
   const difference = Date.now() - new Date(iso).getTime();
+  // An earlier version could store a receipt time that is no timestamp.
+  if (Number.isNaN(difference)) return 'time unknown';
   const minutes = Math.max(0, Math.round(difference / 60_000));
   if (minutes < 1) return 'now';
   if (minutes < 60) return `${minutes} min ago`;
@@ -31,6 +33,7 @@ function relativeTime(iso: string): string {
 
 const unreported: ReadinessDto = {
   ready: false,
+  repositoryIssue: null,
   bound: false,
   bindingFresh: false,
   degraded: false,
@@ -52,7 +55,9 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
   const isBound = readiness.bound;
   const bindingFresh = readiness.bindingFresh;
   const isDegraded = readiness.degraded;
-  const checks = bootstrap.checks.filter((check) => check.repositoryId === item.repositoryId);
+  const checks = bootstrap.checks.filter(
+    (check) => check.repositoryId === item.repositoryId && !check.retiredAt,
+  );
   const checkAssessments = checks.map((check) => {
     const gate = readiness.checks.find((candidate) => candidate.checkId === check.id);
     const evidence = bootstrap.evidence.find((candidate) => candidate.id === gate?.evidenceId);
@@ -112,21 +117,23 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
     updatedAt: item.updatedAt,
     reason:
       supersededNote +
-      (isDegraded
-        ? 'The imported run contains a degraded or failing stage.'
-        : gatesReady
-          ? 'Every approved check and declared scope gate has fresh evidence. Human review remains.'
-          : scope.declared && !scope.satisfied
-            ? `${scope.outsidePaths.length} changed file(s) fall outside the declared scope.`
-            : isBound && !bindingFresh
-              ? 'The repository changed after this claim was bound. Rebind before running checks.'
-              : bindingFresh
-                ? checks.length === 0
-                  ? 'The claim is bound, but no acceptance checks have been approved.'
-                  : (repository?.snapshot.statusEntries.length ?? 0) > 0
-                    ? 'The repository has uncommitted changes. Checks run on a clean checkout of the bound commit; commit the work and rebind.'
-                    : `${checks.length - passingChecks} approved check(s) need fresh passing evidence.`
-                : 'The receipt is valid, but its claim is not bound to a repository snapshot.'),
+      (readiness.repositoryIssue
+        ? readiness.repositoryIssue
+        : isDegraded
+          ? 'The imported run contains a degraded or failing stage.'
+          : gatesReady
+            ? 'Every approved check and declared scope gate has fresh evidence. Human review remains.'
+            : scope.declared && !scope.satisfied
+              ? `${scope.outsidePaths.length} changed file(s) fall outside the declared scope.`
+              : isBound && !bindingFresh
+                ? 'The repository changed after this claim was bound. Rebind before running checks.'
+                : bindingFresh
+                  ? checks.length === 0
+                    ? 'The claim is bound, but no acceptance checks have been approved.'
+                    : (repository?.snapshot.statusEntries.length ?? 0) > 0
+                      ? 'The repository has uncommitted changes. Checks run on a clean checkout of the bound commit; commit the work and rebind.'
+                      : `${checks.length - passingChecks} approved check(s) need fresh passing evidence. If one cannot pass as defined, replace or retire it under Checks.`
+                  : 'The receipt is valid, but its claim is not bound to a repository snapshot.'),
     requiredSatisfied,
     requiredTotal,
     changedFiles: repository?.snapshot.diffStats.changedFiles ?? 0,
@@ -172,7 +179,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
             id: check.id,
             title: check.label,
             detail: !check.executableSha256
-              ? 'Approved before tools were pinned; pin its tool again under Checks'
+              ? 'Approved before tools were pinned; pin, replace or retire it under Checks'
               : evidence?.origin === 'imported'
                 ? `Restored from a backup (${evidence.result}); run the check here to count it`
                 : evidence
@@ -180,6 +187,7 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
                   : 'Approved; run it for this work item to record evidence',
             state,
             evidenceLabel: check.kind,
+            ...(evidence ? { evidenceId: evidence.id } : {}),
           }))),
       ...(scope.declared
         ? [

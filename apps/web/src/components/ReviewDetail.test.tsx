@@ -1,0 +1,117 @@
+// @vitest-environment jsdom
+
+import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { demoReviews, type ReviewItem } from '../data.js';
+import { ReviewDetail } from './ReviewDetail.js';
+
+afterEach(cleanup);
+
+const base = demoReviews[0];
+if (!base) throw new Error('The demo has no review.');
+const item: ReviewItem = {
+  ...base,
+  criteria: [
+    {
+      id: 'check',
+      title: 'Unit tests',
+      detail: 'failed · 12 ms',
+      state: 'failed',
+      evidenceLabel: 'test',
+      evidenceId: 'evidence',
+    },
+  ],
+};
+const actions = {
+  decision: null,
+  onBack: () => undefined,
+  onAccept: () => undefined,
+  onRequestChanges: () => undefined,
+  onReject: () => undefined,
+};
+
+describe('reading what a check printed', () => {
+  it('reads the output on request, says when it is cut, and hides it again', async () => {
+    const user = userEvent.setup();
+    const onReadOutput = vi.fn(async () => ({
+      stdout: 'ran 1 test',
+      stderr: "Error: Cannot find module 'dep'",
+      truncated: true,
+    }));
+    render(<ReviewDetail item={item} {...actions} onReadOutput={onReadOutput} />);
+
+    expect(onReadOutput).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Show output of Unit tests' }));
+    expect(onReadOutput).toHaveBeenCalledWith('evidence');
+    expect(await screen.findByText("Error: Cannot find module 'dep'")).toBeTruthy();
+    expect(screen.getByText('ran 1 test')).toBeTruthy();
+    expect(screen.getByText('Only the end of the output is shown.')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Hide output of Unit tests' }));
+    expect(screen.queryByText('ran 1 test')).toBeNull();
+  });
+
+  it('says so when the output cannot be read', async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewDetail
+        item={item}
+        {...actions}
+        onReadOutput={vi.fn(async () => {
+          throw new Error('The service is not answering.');
+        })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Show output of Unit tests' }));
+    expect(await screen.findByText('The service is not answering.')).toBeTruthy();
+  });
+
+  it('offers no output for a row without a run, and the way to the checks', async () => {
+    const user = userEvent.setup();
+    const onManageChecks = vi.fn();
+    const withoutRun: ReviewItem = {
+      ...item,
+      criteria: item.criteria.map(({ evidenceId: _evidenceId, ...criterion }) => criterion),
+    };
+    render(
+      <ReviewDetail
+        item={withoutRun}
+        {...actions}
+        onReadOutput={vi.fn()}
+        onManageChecks={onManageChecks}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Show output of Unit tests' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Manage checks' }));
+    expect(onManageChecks).toHaveBeenCalled();
+  });
+
+  it('offers another repository when the caller can bind one', async () => {
+    const user = userEvent.setup();
+    const onChangeRepository = vi.fn();
+    render(<ReviewDetail item={item} {...actions} onChangeRepository={onChangeRepository} />);
+    await user.click(screen.getByRole('button', { name: 'Change repository' }));
+    expect(onChangeRepository).toHaveBeenCalled();
+  });
+
+  it('keeps every decision but plain acceptance open when gates are open', async () => {
+    const user = userEvent.setup();
+    const onReject = vi.fn();
+    render(
+      <ReviewDetail
+        item={{ ...item, gatesReady: false }}
+        {...actions}
+        onReject={onReject}
+        onOverride={() => undefined}
+      />,
+    );
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept work' }).disabled).toBe(
+      true,
+    );
+    expect(screen.getByRole('button', { name: 'Override lock' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(onReject).toHaveBeenCalled();
+  });
+});
