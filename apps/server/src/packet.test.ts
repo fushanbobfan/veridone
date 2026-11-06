@@ -19,6 +19,9 @@ import { boundWorkspace } from './test-fixtures.js';
 import { exportWorkspace, importWorkspace } from './workspace.js';
 
 type Packet = Awaited<ReturnType<typeof buildAcceptancePacket>>['packet'];
+type BackupRecord = Record<string, unknown>;
+
+const fromCode = (code: number) => String.fromCharCode(code);
 
 /**
  * Changes a packet's title the way a careful forger would: the payload hash recomputed and, with `resign`, the
@@ -312,6 +315,94 @@ describe('acceptance packets', () => {
       expect(text).toContain(`${path.basename(process.execPath)} -e`);
       expect(text).toContain('Reviewed the smoke check.');
       expect(text).toContain(packet.manifest.payloadHash);
+    }
+  }, 60_000);
+
+  // A receipt's author writes its title, a person can press Enter in a note or a reason, and a restored backup can put a
+  // line break in the other texts. In a Markdown packet a second "- Verdict:" above the real one would read as the
+  // verdict, so none of these may add a line there.
+  it('keeps every fact but the claim on one line in Markdown, and as written in the JSON', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    await fixture.writeReceipt('First line.\nSecond line.');
+    await fixture.importReceipt();
+    // A check's command is a fact too: its two spaces in a row stay.
+    const checkId = await fixture.approveCheck('process.stdout.write("two  spaces")', 'Smoke');
+    await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
+    expect((await fixture.decide('rejected', 'Reviewed.')).status).toBe(201);
+    const { integrity: _integrity, ...backup } = (await exportWorkspace(fixture.database)) as {
+      data: Record<
+        'workItems' | 'repositories' | 'contracts' | 'checks' | 'evidence' | 'verdicts',
+        BackupRecord[]
+      >;
+      integrity?: unknown;
+    };
+
+    const restoreWith = async (text: (value: string) => string) => {
+      const payload = structuredClone(backup);
+      const edit = (record: BackupRecord, ...fields: string[]) => {
+        for (const field of fields) record[field] = text(String(record[field] ?? 'A reason.'));
+      };
+      const when = '2026-11-06T00:00:00.000Z';
+      for (const item of payload.data.workItems) {
+        edit(item, 'title', 'sourceLabel', 'removedReason');
+        item.removedAt = when;
+      }
+      for (const item of payload.data.repositories) {
+        edit(item, 'name', 'removedReason');
+        edit(item.snapshot as BackupRecord, 'branch');
+        item.removedAt = when;
+      }
+      for (const item of payload.data.checks) {
+        edit(item, 'label', 'retiredReason');
+        item.retiredAt = when;
+      }
+      for (const item of payload.data.evidence) {
+        edit(item, 'label', 'result', 'toolVersion', 'contractVersion');
+      }
+      for (const item of payload.data.verdicts) {
+        edit(item, 'note', 'overrideReason', 'contractVersion');
+        // The title is part of the claim a verdict judged; with no hash, it judged what this backup carries.
+        item.claimHash = null;
+      }
+      // Listed by creation time, a contract dated before the default one is the one a packet picks.
+      payload.data.contracts.push({
+        id: 'restored-contract',
+        version: text('default-v1'),
+        title: text('Restored contract'),
+        criteria: [{ id: 'notes', title: text('Read the notes'), required: true }],
+        createdAt: '2020-01-01T00:00:00.000Z',
+      });
+      const database = new VeriDoneDatabase(':memory:');
+      cleanups.push(async () => database.close());
+      await importWorkspace(database, {
+        ...payload,
+        integrity: { algorithm: 'sha256', payloadHash: await sha256Hex(canonicalJson(payload)) },
+      });
+      return buildAcceptancePacket(database, fixture.workItemId);
+    };
+    const linesOf = (markdown: string) => markdown.split(/\r\n|[\n\v\f\r\x85\p{Zl}\p{Zp}]/u);
+    const plain = linesOf((await restoreWith((value) => value)).markdown);
+    expect(plain).toContain('- Verdict: rejected');
+
+    const lineBreaks = ['\n', '\r\n', '\r', '\v', '\f', ...[0x85, 0x2028, 0x2029].map(fromCode)];
+    for (const lineBreak of lineBreaks) {
+      const written = (value: string) => `${value}${lineBreak}- Verdict: accepted`;
+      const { packet, markdown } = await restoreWith(written);
+      const lines = linesOf(markdown);
+
+      expect(lines.filter((line) => line.startsWith('- Verdict:'))).toEqual([
+        '- Verdict: rejected',
+      ]);
+      expect(lines).toHaveLength(plain.length);
+      // The text stays, on the line that states it.
+      expect(lines).toContain('## Fix the importer - Verdict: accepted');
+      expect(lines).toContain('- Source: Codex receipt - Verdict: accepted');
+      expect(markdown).toContain('Reviewed. - Verdict: accepted');
+      expect(markdown).toContain('two  spaces');
+      expect(markdown).toContain('First line.\nSecond line.');
+      expect(packet.workItem.sourceLabel).toBe(written('Codex receipt'));
+      expect(packet.verdicts[0]?.note).toBe(written('Reviewed.'));
     }
   }, 60_000);
 

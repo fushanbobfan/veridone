@@ -156,7 +156,8 @@ export function AddSourceDialog({
         </header>
 
         <p className="dialog-intro">
-          VeriDone reads only approved roots. Imported text stays inert and never becomes a command.
+          Repositories and receipts must sit inside an approved root. Imported text stays inert and
+          never becomes a command.
         </p>
 
         <form onSubmit={submit}>

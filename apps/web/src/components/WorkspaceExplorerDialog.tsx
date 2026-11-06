@@ -307,7 +307,7 @@ export function WorkspaceExplorerDialog({
                     )}
                     {root.status === 'pending' && (
                       <p>
-                        Restored from a backup. VeriDone reads nothing under it until you approve it
+                        Restored from a backup. This root grants no read access until you approve it
                         on this machine.
                       </p>
                     )}
