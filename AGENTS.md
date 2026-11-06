@@ -28,4 +28,4 @@ VeriDone is a local-first acceptance desk for AI-assisted software work. It must
 
 ## Release definition
 
-A release is not complete until lint, typecheck, unit/integration tests, production build, Playwright tests, accessibility checks, dependency audit, secret scan, and a fresh-clone smoke test pass.
+A release is not complete until lint, typecheck, unit/integration tests, production build, Playwright tests, accessibility checks, dependency audit, secret scan, a fresh-clone smoke test, and the [release walks](scripts/walks/README.md) pass.
