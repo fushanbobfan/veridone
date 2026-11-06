@@ -205,7 +205,8 @@ describe('bounded process execution', () => {
       cwd,
     });
     expect(spawnFailure).toMatchObject({ state: 'spawn-error', exitCode: null });
-  });
+    // Two kills, each a taskkill run on Windows, which takes seconds on a busy machine.
+  }, 30_000);
 });
 
 async function committedRepository(

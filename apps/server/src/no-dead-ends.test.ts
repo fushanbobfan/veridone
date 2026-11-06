@@ -373,12 +373,14 @@ describe('decisions when the repository cannot be read', () => {
     });
     await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
     const expected: VerdictExpectation = await fixture.expectedState();
+    // The workspace records the canonical path, and tmpdir() may give another form of it.
+    const recordedPath = fixture.database.getRepository(fixture.repositoryId)!.path;
     await rm(fixture.repositoryPath, { recursive: true, force: true });
 
     const { body } = await fixture.get<BootstrapBody>('/api/v1/bootstrap');
     const readiness = body.readiness[fixture.workItemId];
     expect(readiness?.ready).toBe(false);
-    expect(readiness?.repositoryIssue).toContain(fixture.repositoryPath);
+    expect(readiness?.repositoryIssue).toContain(recordedPath);
     expect(readiness?.repositoryIssue).toMatch(/override reason/u);
     expect(readiness?.repositoryIssue).not.toMatch(rawErrors);
     expect(body.sourceIssues[0]?.message).not.toMatch(rawErrors);
@@ -386,7 +388,7 @@ describe('decisions when the repository cannot be read', () => {
     const plainly = await fixture.decide<ErrorBody>('accepted', 'No override.', { expected });
     expect(plainly.status).toBe(409);
     expect(plainly.body.error).toBe('required_gates_open');
-    expect(plainly.body.message).toContain(fixture.repositoryPath);
+    expect(plainly.body.message).toContain(recordedPath);
 
     expect((await fixture.decide('rejected', 'The folder is gone.')).status).toBe(201);
     expect((await fixture.decide('changes-requested', 'Restore the folder.')).status).toBe(201);
