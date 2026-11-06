@@ -100,7 +100,7 @@ function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
 
 /**
  * A text on one line: a line break in it could otherwise pass for a line of the packet, such as a second verdict.
- * Nothing else in it changes, so a check's command stays as it was written.
+ * Nothing else in it changes, so two spaces in a row stay.
  */
 const oneLine: Sanitize = (value) => value.replace(/[\n\v\f\r\x85\p{Zl}\p{Zp}]+/gu, ' ');
 
@@ -444,9 +444,20 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
   return { packet, json, markdown: renderMarkdown(view), html: renderHtml(view) };
 }
 
-/** A check's command as a reader would type it, each argument quoted when it holds spaces or quotes. */
+/**
+ * A check's command as a reader would type it, each argument quoted when it holds a space, a quote or a line break.
+ * JSON leaves three line breaks as they are, so they are escaped here: the packet view shows a line break as a space,
+ * which would change what the argument says.
+ */
 function commandLine(check: { executable: string; args: string[] }): string {
-  const quoted = check.args.map((arg) => (/[\s"'\\]/u.test(arg) ? JSON.stringify(arg) : arg));
+  const quoted = check.args.map((arg) =>
+    /[\s"'\\\x85]/u.test(arg)
+      ? JSON.stringify(arg).replace(
+          /[\x85\p{Zl}\p{Zp}]/gu,
+          (mark) => `\\u${mark.charCodeAt(0).toString(16).padStart(4, '0')}`,
+        )
+      : arg,
+  );
   return [check.executable, ...quoted].join(' ');
 }
 

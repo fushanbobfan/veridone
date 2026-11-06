@@ -326,8 +326,22 @@ describe('acceptance packets', () => {
     cleanups.push(fixture.cleanup);
     await fixture.writeReceipt('First line.\nSecond line.');
     await fixture.importReceipt();
-    // A check's command is a fact too: its two spaces in a row stay.
+    // A check's command is a fact too: two spaces in a row stay, and an argument with a line break stays one argument.
     const checkId = await fixture.approveCheck('process.stdout.write("two  spaces")', 'Smoke');
+    const marked = await fixture.post('/api/v1/checks', {
+      repositoryId: fixture.repositoryId,
+      label: 'Marked',
+      kind: 'test',
+      executable: process.execPath,
+      args: [0x85, 0x2028, 0x2029].map((code) => `a${fromCode(code)}b`),
+      cwdRelative: '.',
+      timeoutMs: 10_000,
+      maxOutputBytes: 10_000,
+    });
+    expect(marked.status).toBe(201);
+    const markedCommand = ['0085', '2028', '2029']
+      .map((code) => `"a${fromCode(0x5c)}u${code}b"`)
+      .join(' ');
     await fixture.post(`/api/v1/checks/${checkId}/run`, { workItemId: fixture.workItemId });
     expect((await fixture.decide('rejected', 'Reviewed.')).status).toBe(201);
     const { integrity: _integrity, ...backup } = (await exportWorkspace(fixture.database)) as {
@@ -400,6 +414,7 @@ describe('acceptance packets', () => {
       expect(lines).toContain('- Source: Codex receipt - Verdict: accepted');
       expect(markdown).toContain('Reviewed. - Verdict: accepted');
       expect(markdown).toContain('two  spaces');
+      expect(markdown).toContain(markedCommand);
       expect(markdown).toContain('First line.\nSecond line.');
       expect(packet.workItem.sourceLabel).toBe(written('Codex receipt'));
       expect(packet.verdicts[0]?.note).toBe(written('Reviewed.'));
