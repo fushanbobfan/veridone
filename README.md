@@ -104,7 +104,7 @@ CI repeats the core suite on Windows, macOS, and Linux. CodeQL, dependency updat
 
 ## Privacy and trust boundary
 
-VeriDone has no telemetry and does not upload repositories. Workspace backups intentionally contain approved local paths and check definitions; the UI says so before export. Acceptance packets use strict privacy mode: raw process output, detected credentials, the local paths the workspace knows, and other common absolute local paths are excluded or redacted, and identifiers computed from local data appear as pseudonyms keyed to the workspace.
+VeriDone has no telemetry and does not upload repositories. Workspace backups intentionally contain approved local paths and check definitions; the UI says so before export. Acceptance packets use strict privacy mode: raw process output, detected credentials, the local paths the workspace knows, and other common absolute local paths are excluded or redacted, and identifiers computed from local data appear as pseudonyms keyed to the workspace, apart from the commit and the pinned tool's SHA-256.
 
 VeriDone is not a sandbox for hostile executables. A check is a command the local operator explicitly authorizes, and it runs code from the commit under review with the operator's permissions. The clean checkout keeps uncommitted and ignored files out of the result. Run untrusted build tools in an OS/container sandbox appropriate to the repository.
 

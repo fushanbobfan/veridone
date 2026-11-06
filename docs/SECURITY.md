@@ -94,7 +94,7 @@ When the repository cannot be read at decision time, there is no current state t
 
 **Threat:** a restored backup or a direct write replaces a recorded verdict or evidence record.
 
-**Control:** SQLite triggers accept a verdict only as the successor of the latest verdict on its work item and refuse any update or deletion of verdicts and evidence. Restore adds the records the workspace lacks, requires evidence and verdicts with a known ID to match exactly, and replays verdicts through the same append path; a conflicting backup is refused as a whole.
+**Control:** SQLite triggers accept a verdict only as the successor of the latest verdict on its work item and refuse any update or deletion of verdicts and evidence, an insert that would replace one included. Restore adds the records the workspace lacks, requires evidence and verdicts with a known ID to match exactly, and replays verdicts through the same append path; a conflicting backup is refused as a whole.
 
 ### Check changes its own inputs
 
@@ -115,8 +115,10 @@ When the repository cannot be read at decision time, there is no current state t
 - The tool file is hashed immediately before it starts and again after the run; a file replaced and restored within the run goes unnoticed.
 - The checkout holds committed files only: submodules are not checked out, Git LFS content stays as pointer files, and a check installs any dependencies it needs.
 - The repository fingerprint reports uncommitted state as Git sees it. The repository's own comparison settings, such as an excludes file, and index flags such as assume-unchanged and skip-worktree can keep uncommitted changes out of it. Checks and verdicts bind to the commit, which these settings do not change.
+- Filter drivers are blanked by name, from one read of the repository's configuration each time VeriDone opens Git on it. A process that can write `.git/config` and adds a driver while that capture runs can have Git start it.
 - A setup step that installs dependencies fetches packages from the network and, depending on the package manager, may run their install scripts, with the operator's permissions.
 - A packet's signature shows which key signed it. Tying that key to a person or an organization is up to the operator, through the channel that publishes the public key. Anyone who can read the workspace database can sign with its key and recompute its pseudonyms.
+- The database's triggers refuse statements that change or remove a verdict or evidence row. A process that can write the database file can still drop the triggers or rewrite the file; the file's permissions decide who can.
 - Packets from one workspace share pseudonyms, so a reader can tell that two packets concern the same repository or state.
 - Beyond the paths the workspace knows, path redaction recognizes drive and UNC paths, home-relative paths, and POSIX paths under `/Users`, `/home`, `/var`, `/tmp`, `/opt`, `/etc`, `/mnt`, `/srv`, `/root`, `/Volumes`, `/private`, and `/media`. Any other POSIX path stays in the text, quoted or not, such as `/work/clients/acme` when no approved root holds it. The workspace knows each root and repository by its canonical path, so a path written through a symbolic link, other than the system's own links to the home and temporary directories, is one it does not know. A known path longer than 512 characters is left to the general patterns, and so are the known paths past the first 100,000 characters in all, which the pending roots of a restored backup reach last.
 - Text that encodes characters a URL or JSON leaves as they are, such as a letter written `%61` or `\u0061`, does not match a known path, and a known path whose name holds `%25` matches only as written there.

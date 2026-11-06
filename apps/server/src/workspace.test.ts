@@ -80,6 +80,44 @@ describe('verdict and evidence history is append-only', () => {
     }
   }, 30_000);
 
+  it('refuses to write over a recorded verdict or evidence record', async () => {
+    const { database } = await decidedWorkspace();
+    /** Writes over a table's newest row through SQLite's REPLACE conflict path. */
+    const replacing = (table: string, changes: Record<string, string>, byRowid = false) => {
+      const info = database.connection.pragma(`table_info(${table})`) as Array<{ name: string }>;
+      const columns = info.map(({ name }) => name);
+      const key = byRowid ? ['rowid'] : [];
+      const values = columns.map((name) => changes[name] ?? name);
+      return `INSERT OR REPLACE INTO ${table} (${[...key, ...columns].join(', ')})
+        SELECT ${[...key, ...values].join(', ')} FROM ${table} ORDER BY rowid DESC LIMIT 1`;
+    };
+    const rows = () => ({
+      verdicts: database.connection.prepare('SELECT * FROM verdicts ORDER BY rowid').all(),
+      evidence: database.connection.prepare('SELECT * FROM evidence ORDER BY rowid').all(),
+    });
+    const before = rows();
+    // Past the check that a verdict extends the latest one, on the latest verdict's own id.
+    const successor = {
+      decision: "'rejected'",
+      sequence: 'sequence + 1',
+      previous_verdict_id: 'id',
+    };
+    const statements = [
+      replacing('evidence', { result: "'forged'" }),
+      replacing('evidence', { id: "'another'", result: "'forged'" }, true),
+      replacing('verdicts', successor),
+      replacing('verdicts', { ...successor, id: "'another'" }, true),
+      // Replacing a parent row removes what its foreign keys cascade to.
+      'INSERT OR REPLACE INTO work_items SELECT * FROM work_items',
+      'INSERT OR REPLACE INTO checks SELECT * FROM checks',
+      'INSERT OR REPLACE INTO repositories SELECT * FROM repositories',
+    ];
+    for (const statement of statements) {
+      expect(() => database.connection.prepare(statement).run(), statement).toThrow(/append-only/u);
+    }
+    expect(rows()).toEqual(before);
+  }, 30_000);
+
   it('accepts a verdict only as the successor of the latest one', async () => {
     const { database, workItemId } = await decidedWorkspace();
     const latest = database.latestVerdict(workItemId);
