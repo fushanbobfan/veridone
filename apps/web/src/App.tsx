@@ -23,6 +23,7 @@ import {
 } from './api.js';
 import { AddSourceDialog } from './components/AddSourceDialog.js';
 import { CheckDialog } from './components/CheckDialog.js';
+import { DefaultContractDialog } from './components/DefaultContractDialog.js';
 import { Navigation } from './components/Navigation.js';
 import { RemoveWorkItemDialog } from './components/RemoveWorkItemDialog.js';
 import { RepositoryLinkDialog } from './components/RepositoryLinkDialog.js';
@@ -711,6 +712,9 @@ export function App() {
               Dismiss
             </button>
           </div>
+        )}
+        {!bootstrap && workspaceSection && (
+          <DefaultContractDialog onClose={() => setWorkspaceSection(null)} />
         )}
       </div>
       {sharedDialogs}

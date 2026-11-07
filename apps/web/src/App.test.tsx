@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -69,6 +69,25 @@ describe('review desk', () => {
     expect(window.location.search).toContain('filter=ready');
     expect(window.location.search).toContain('q=receipt');
     expect(window.location.search).toContain('sort=repository');
+  });
+
+  it('shows the contract every workspace starts with on a page with no service', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const trigger = screen.getByRole('button', { name: 'View contract' });
+    await user.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'Acceptance contract' });
+    expect(within(dialog).getByText('Default acceptance contract')).toBeTruthy();
+    expect(within(dialog).getByText('default-v1')).toBeTruthy();
+    expect(
+      within(dialog).getByText('Every approved check has fresh passing evidence'),
+    ).toBeTruthy();
+    expect(within(dialog).getByText('Required')).toBeTruthy();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it('drops the pending focus move when the desk unmounts', () => {
