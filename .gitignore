@@ -6,6 +6,7 @@ test-results/
 output/
 .playwright-cli/
 .veridone/
+.vitest/
 *.db
 *.db-shm
 *.db-wal
