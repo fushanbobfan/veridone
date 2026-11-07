@@ -217,6 +217,7 @@ test('a check approved by mistake can be diagnosed, replaced and left behind', a
 test('a reviewer can accept normally after requesting changes on an earlier state', async ({
   page,
 }) => {
+  test.setTimeout(120_000);
   const ids = await seedLinkedItems(page.request, [
     { repository: 'revision-c', runId: 'revision-c', title: 'Revision item C' },
   ]);

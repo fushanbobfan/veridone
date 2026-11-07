@@ -15,9 +15,6 @@ All notable changes are documented here. This project follows Semantic Versionin
 - In the light theme, warning text such as the notice that a repository source is unavailable now meets the 4.5:1 contrast ratio.
 - On a phone, the workspace explorer's tabs wrap, so each one can be reached without the dialog sliding sideways.
 - A dialog takes its first focus only while focus is outside it, so keys typed into a field right after it opens stay in that field.
-
-### Fixed
-
 - The web app loads without a content security policy report. Its import of `@veridone/core` also brought in zod, which probes for eval when it builds its first object schema, so every page load reported a blocked eval and Firefox logged it as an error. The web app now imports `@veridone/core/scope`, which takes zod and the schemas out of the page and about 85 KB out of the JavaScript bundle. A Playwright check on the built page in Chromium, Firefox, and WebKit fails if a report or a console error appears while the page loads.
 - The public demo no longer asks for an API it does not have. A build with `VITE_PUBLIC_DEMO=1` requested `/api/v1/bootstrap` when the page loaded and about every 15 seconds after that, GitHub Pages answered 404, and Chromium and WebKit logged each answer as a console error. That build now opens on the labeled synthetic data without that request or its timer. A build without the flag that has not reached its service still falls back to that data, says the service is unavailable, and keeps asking. Playwright checks both bundles in Chromium, Firefox, and WebKit.
 
