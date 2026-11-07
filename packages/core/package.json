@@ -3,7 +3,10 @@
   "version": "1.2.0",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./scope": "./src/scope.ts"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format esm --clean && tsc --emitDeclarationOnly --declaration --outDir dist",
     "typecheck": "tsc --noEmit"

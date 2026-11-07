@@ -21,7 +21,7 @@ The public deployment runs the same client and domain behavior against a clearly
 
 - `apps/web` — responsive React UI, URL-backed review state, accessibility, and browser tests.
 - `apps/server` — loopback HTTP API, filesystem boundary, check process lifecycle, and persistence composition root.
-- `packages/core` — framework-independent domain types, repository fingerprints, and declared-scope checks.
+- `packages/core` — framework-independent domain types, repository fingerprints, and declared-scope checks. `apps/web` imports only `@veridone/core/scope`, which keeps zod out of the page: the page's content security policy reports zod's eval probe.
 - `packages/adapters` — Git, portable/harness receipt, path-boundary, and bounded-process implementations.
 - `e2e` — isolated repository/receipt fixtures created at runtime plus browser acceptance tests.
 
