@@ -4,6 +4,10 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ## [Unreleased]
 
+### Added
+
+- `pnpm walk:first-workspace`, `pnpm walk:upgrade`, and `pnpm walk:dead-ends` rerun the release walks from a clone, and `pnpm walk:release` runs the local gates and the walks at one commit. The **Release walks** workflow runs the three walks on Ubuntu, Windows, and macOS after each merge and every Monday.
+
 ## [1.2.0] - 2026-11-05
 
 ### Added

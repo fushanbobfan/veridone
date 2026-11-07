@@ -1,0 +1,58 @@
+name: Release walks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'scripts/walks/**'
+      - '.github/workflows/walks.yml'
+  schedule:
+    - cron: '47 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  walks:
+    name: Walks · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The upgrade and dead-end walks build the v1.1.0 tag.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      # The newest pytest on purpose: its summary line is one of the things the walks read.
+      - run: python -m pip install pytest
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm walk:first-workspace
+      - run: pnpm walk:upgrade
+        if: ${{ !cancelled() }}
+      - run: pnpm walk:dead-ends
+        if: ${{ !cancelled() }}
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: walks-${{ matrix.os }}
+          path: |
+            output/walks/*.log
+            output/walks/clones/*.log
+            output/walks/walk-first-workspace/*.png
+          retention-days: 7

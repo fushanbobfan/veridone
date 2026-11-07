@@ -12,6 +12,8 @@ VeriDone welcomes focused issues and pull requests that strengthen evidence qual
 
 Tests belong beside the affected package. Security boundary changes should include a hostile or failure-path regression test. UI changes should preserve keyboard use, 360 px layout, visible focus, non-color status cues, and the axe suite.
 
+The [release walks](scripts/walks/README.md) run the built app on a real repository and on a workspace from an older release. Run them when a change touches migrations, stored records, or how the built app starts.
+
 To evaluate an unchanged release on a real local repository, follow the privacy-preserving [external tester guide](docs/TESTER_GUIDE.md) and use the dedicated dogfood feedback issue form.
 
 ## Pull requests
