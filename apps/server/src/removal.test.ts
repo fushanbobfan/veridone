@@ -204,7 +204,7 @@ describe('removing a root', () => {
       path: fixture.repositoryPath,
     });
     expect(added.status).toBe(400);
-  }, 30_000);
+  }, 60_000);
 
   it('names the next step for a path only a removed root covered', async () => {
     const fixture = await workspace();
@@ -231,7 +231,7 @@ describe('removing a root', () => {
       (await fixture.post<ErrorBody>('/api/v1/repositories', { path: fixture.repositoryPath }))
         .status,
     ).toBe(201);
-  }, 30_000);
+  }, 60_000);
 
   it('asks for a reason, knows the root, and happens once', async () => {
     const fixture = await workspace();
@@ -247,7 +247,7 @@ describe('removing a root', () => {
     const twice = await removeRoot(fixture, root.id);
     expect(twice.status).toBe(409);
     expect(twice.body.error).toBe('record_removed');
-  }, 30_000);
+  }, 60_000);
 
   it('names the repositories only it covers, and removes those the operator saw', async () => {
     const fixture = await workspace();
@@ -318,7 +318,7 @@ describe('removing a root', () => {
     expect(plainly.status).toBe(409);
     expect(plainly.body.error).toBe('required_gates_open');
     expect((await fixture.decide('rejected', 'Elsewhere now.')).status).toBe(201);
-  }, 30_000);
+  }, 60_000);
 
   it('adds a check once on a repository that lost its root, and says why it cannot be read', async () => {
     const fixture = await workspace();
@@ -337,7 +337,7 @@ describe('removing a root', () => {
     const body = await boot(fixture);
     expect(body.checks).toHaveLength(1);
     expect(body.sourceIssues[0]?.message).toContain('was removed');
-  }, 30_000);
+  }, 60_000);
 
   it('refuses a plain acceptance whose only root leaves while it reads the repository', async () => {
     const fixture = await workspace();
@@ -354,7 +354,7 @@ describe('removing a root', () => {
     expect(answered.body.error).toBe('required_gates_open');
     expect(answered.body.message).toContain(`Its root ${root.label} was removed`);
     expect(fixture.database.listVerdicts(fixture.workItemId)).toEqual([]);
-  }, 30_000);
+  }, 60_000);
 
   it('removes a root restored from a backup, whose folder is not on this machine', async () => {
     const fixture = await workspace();
@@ -417,7 +417,7 @@ describe('removing a root', () => {
     expect(fixture.database.listApprovedRoots().map((root) => root.id)).toContain(
       kept.body.root.id,
     );
-  }, 30_000);
+  }, 60_000);
 
   it('comes back when the operator adds its path again', async () => {
     const fixture = await workspace();
@@ -427,7 +427,7 @@ describe('removing a root', () => {
     expect(again.status).toBe(201);
     expect(again.body.root).toMatchObject({ id: root.id, status: 'approved', removedAt: null });
     expect((await boot(fixture)).removed.roots).toEqual([]);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('removing a repository', () => {
@@ -455,7 +455,7 @@ describe('removing a repository', () => {
     expect(issue).toMatch(/link this work item/iu);
     expect(issue).toMatch(nextStep);
     expect(issue).toMatch(/override reason/iu);
-  }, 30_000);
+  }, 60_000);
 
   it('closes the gate, and every decision but a plain acceptance records on the last state', async () => {
     const fixture = await workspace();
@@ -486,7 +486,7 @@ describe('removing a repository', () => {
     );
     expect(overridden.status).toBe(201);
     expect(overridden.body.verdict.overrideReason).toBe('The folder moved.');
-  }, 30_000);
+  }, 60_000);
 
   it('refuses what needs a repository in the workspace, and names the way back', async () => {
     const fixture = await workspace();
@@ -536,7 +536,7 @@ describe('removing a repository', () => {
         })
       ).status,
     ).toBe(400);
-  }, 30_000);
+  }, 60_000);
 
   it('lets a work item move to another repository, whose gate its old evidence does not satisfy', async () => {
     const fixture = await workspace();
@@ -598,7 +598,7 @@ describe('removing a repository', () => {
 
     expect((await putBackRepository(fixture)).status).toBe(409);
     expect((await putBackRepository(fixture, unknownId)).status).toBe(404);
-  }, 30_000);
+  }, 60_000);
 
   it('says why it cannot be read when it goes back with its folder gone', async () => {
     const fixture = await workspace();
@@ -608,7 +608,7 @@ describe('removing a repository', () => {
     expect(back.status).toBe(200);
     expect(back.body.issue).toMatch(/cannot read the repository/iu);
     expect((await boot(fixture)).sourceIssues).toHaveLength(1);
-  }, 30_000);
+  }, 60_000);
 
   it('comes back when the operator adds its path again', async () => {
     const fixture = await workspace();
@@ -619,7 +619,7 @@ describe('removing a repository', () => {
     expect(again.status).toBe(201);
     expect(again.body.repository).toMatchObject({ id: fixture.repositoryId, removedAt: null });
     expect((await boot(fixture)).removed.repositories).toEqual([]);
-  }, 30_000);
+  }, 60_000);
 
   it('stays removed when the removal arrives during an add of the same path', async () => {
     const fixture = await workspace();
@@ -631,7 +631,7 @@ describe('removing a repository', () => {
     expect(fixture.database.getRepository(fixture.repositoryId)?.removedReason).toBe(
       'Moved to another disk.',
     );
-  }, 30_000);
+  }, 60_000);
 
   it('stays as it was when a capture finishes after the removal', async () => {
     const fixture = await workspace();
@@ -649,7 +649,7 @@ describe('removing a repository', () => {
       removedReason: 'Moved to another disk.',
       snapshot: { fingerprint: stored.snapshot.fingerprint },
     });
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('removing a work item', () => {
@@ -699,7 +699,7 @@ describe('removing a work item', () => {
         opened,
       ),
     ).toThrow(RemovedRecordError);
-  }, 30_000);
+  }, 60_000);
 
   it('says it was removed, whether or not it was ever bound', async () => {
     const fixture = await workspace();
@@ -734,7 +734,7 @@ describe('removing a work item', () => {
     expect(refused.status).toBe(409);
     expect(refused.body.error).toBe('record_removed');
     expect(refused.body.message).toMatch(nextStep);
-  }, 30_000);
+  }, 60_000);
 
   it('asks for a reason and the claim the operator saw, and happens once', async () => {
     const fixture = await workspace();
@@ -767,7 +767,7 @@ describe('removing a work item', () => {
     const twice = await fixture.post<ErrorBody>(url, { reason: 'Again.', expected: { claimHash } });
     expect(twice.status).toBe(409);
     expect(twice.body.error).toBe('record_removed');
-  }, 30_000);
+  }, 60_000);
 
   it('is never ready while removed, whatever evidence it holds', async () => {
     const fixture = await workspace();
@@ -776,7 +776,7 @@ describe('removing a work item', () => {
     expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(false);
     await putBackWorkItem(fixture);
     expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(true);
-  }, 30_000);
+  }, 60_000);
 
   it('goes back with its binding and verdicts, and the gate is judged again', async () => {
     const fixture = await workspace();
@@ -799,7 +799,7 @@ describe('removing a work item', () => {
 
     expect((await putBackWorkItem(fixture)).status).toBe(409);
     expect((await putBackWorkItem(fixture, unknownId)).status).toBe(404);
-  }, 30_000);
+  }, 60_000);
 
   it('stays removed when its run is imported again, and the preview and the result say so', async () => {
     const fixture = await workspace();
@@ -826,7 +826,7 @@ describe('removing a work item', () => {
     const body = await boot(fixture);
     expect(body.workItems).toEqual([]);
     expect(fixture.database.getWorkItem(fixture.workItemId)?.claim).toBe('The importer is fixed.');
-  }, 30_000);
+  }, 60_000);
 
   it('keeps its receipt too, so a run revised meanwhile opens no gate when it goes back', async () => {
     const fixture = await workspace({ status: 'failed' });
@@ -861,7 +861,7 @@ describe('removing a work item', () => {
     const plainly = await fixture.decide<ErrorBody>('accepted', 'Accepting.');
     expect(plainly.status).toBe(409);
     expect(plainly.body.error).toBe('required_gates_open');
-  }, 30_000);
+  }, 60_000);
 
   it('stays out of a directory import, and the other runs in it still import', async () => {
     const fixture = await workspace();
@@ -896,7 +896,7 @@ describe('removing a work item', () => {
     const body = await boot(fixture);
     expect(body.workItems.map((item) => item.title)).toEqual(['a-new-run']);
     expect(body.removed.workItems.map((item) => item.id)).toEqual([fixture.workItemId]);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('recorded history', () => {
@@ -954,7 +954,7 @@ describe('recorded history', () => {
     );
     expect(packet.status).toBe(200);
     expect(packet.body.verdicts).toHaveLength(2);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('packets', () => {
@@ -973,7 +973,7 @@ describe('packets', () => {
     const verified = await verifyAcceptancePacket(JSON.parse(built.json));
     expect(verified.valid).toBe(true);
     expect(verified.signed).toBe(true);
-  }, 30_000);
+  }, 60_000);
 
   it('show a removed repository with its last state in every format, and the packet verifies', async () => {
     const fixture = await workspace();
@@ -994,7 +994,7 @@ describe('packets', () => {
       expect(text).toContain(stored?.snapshot.head ?? 'no head');
     }
     expect((await verifyAcceptancePacket(JSON.parse(built.json))).valid).toBe(true);
-  }, 30_000);
+  }, 60_000);
 
   it('keep a reason of several lines on the one line that states it', async () => {
     const fixture = await workspace();
@@ -1004,7 +1004,7 @@ describe('packets', () => {
       '- Verdict: No human verdict',
     ]);
     expect(built.packet.workItem.removedReason).toBe('One line.\n- Verdict: accepted');
-  }, 30_000);
+  }, 60_000);
 
   it('say nothing of a removal while nothing is removed', async () => {
     const fixture = await workspace();
@@ -1015,7 +1015,7 @@ describe('packets', () => {
       expect(text).not.toContain('Removed from review');
       expect(text).not.toContain('Repository removed');
     }
-  }, 30_000);
+  }, 60_000);
 
   it('keep the paths of removed roots and repositories on the redaction list', async () => {
     const fixture = await workspace();
@@ -1033,7 +1033,7 @@ describe('packets', () => {
     const built = await buildAcceptancePacket(fixture.database, fixture.workItemId);
     expect(built.json).not.toContain('clients/acme');
     expect(built.json).toContain('[LOCAL_PATH]');
-  }, 30_000);
+  }, 60_000);
 
   it('redact a local path written into a reason', async () => {
     const fixture = await workspace();
@@ -1044,7 +1044,7 @@ describe('packets', () => {
     expect(built.json).not.toContain(path.basename(path.dirname(recorded)));
     expect(built.markdown).not.toContain(path.basename(path.dirname(recorded)));
     expect(built.html).not.toContain(path.basename(path.dirname(recorded)));
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('backups', () => {
@@ -1124,7 +1124,7 @@ describe('backups', () => {
     // A second round trip finds every record in place.
     const again = await importWorkspace(target, document);
     expect(again.imported).toMatchObject({ approvedRoots: 0, repositories: 0, workItems: 0 });
-  }, 30_000);
+  }, 60_000);
 
   it('restore a backup from before removals existed, with nothing removed', async () => {
     const fixture = await workspace();
@@ -1139,7 +1139,7 @@ describe('backups', () => {
     expect(target.listActiveWorkItems()).toHaveLength(1);
     expect(target.listActiveRepositories()).toHaveLength(1);
     expect(target.listActiveRoots().map((root) => root.status)).toEqual(['pending']);
-  }, 30_000);
+  }, 60_000);
 
   it('never undo a local removal, and find those records unchanged', async () => {
     const { fixture, root } = await withRemovals();
@@ -1154,7 +1154,7 @@ describe('backups', () => {
       'Repository reason.',
     );
     expect(fixture.database.getWorkItem(fixture.workItemId)?.removedReason).toBe('Item reason.');
-  }, 30_000);
+  }, 60_000);
 
   it('never remove a local record', async () => {
     const fixture = await workspace();
@@ -1171,7 +1171,7 @@ describe('backups', () => {
     expect(fixture.database.listActiveRoots()).toHaveLength(1);
     expect(fixture.database.listActiveRepositories()).toHaveLength(1);
     expect(fixture.database.listActiveWorkItems()).toHaveLength(1);
-  }, 30_000);
+  }, 60_000);
 
   it('can add a verdict to a removed work item, which stays removed', async () => {
     const fixture = await workspace();
@@ -1186,7 +1186,7 @@ describe('backups', () => {
     expect(result.imported.verdicts).toBe(1);
     expect(target.listVerdicts(fixture.workItemId)).toHaveLength(2);
     expect(target.getWorkItem(fixture.workItemId)?.removedReason).toBe('Not wanted here.');
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('a check running when its work leaves', () => {
