@@ -46,3 +46,19 @@ test('the built page loads without a content security policy report', async ({ p
   });
   await expect.poll(reports).toEqual(['script-src eval']);
 });
+
+test('a local build without its service says so and keeps asking', async ({ page }) => {
+  let requests = 0;
+  await page.route('**/api/v1/bootstrap', (route) => {
+    requests += 1;
+    return route.abort('connectionrefused');
+  });
+
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.getByText('Local service unavailable · synthetic demo')).toBeVisible();
+
+  const requestsAtLoad = requests;
+  await page.clock.fastForward(15_000);
+  await expect.poll(() => requests).toBeGreaterThan(requestsAtLoad);
+});

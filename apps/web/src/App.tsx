@@ -33,6 +33,9 @@ type Theme = 'light' | 'dark';
 type ThemePreference = Theme | 'system';
 type ReviewSort = 'priority' | 'newest' | 'repository';
 
+// The public demo is a static site and the unit tests render the app alone, so neither has a service to ask.
+const noService = import.meta.env.MODE === 'test' || import.meta.env.VITE_PUBLIC_DEMO === '1';
+
 function initialView(): {
   reviewId: string;
   filter: 'all' | ReviewState;
@@ -135,7 +138,7 @@ export function App() {
   const [decisions, setDecisions] = useState<Record<string, string>>({});
   const [bootstrap, setBootstrap] = useState<BootstrapDto | null>(null);
   const [connectionState, setConnectionState] = useState<'loading' | 'ready' | 'demo'>(
-    import.meta.env.MODE === 'test' ? 'demo' : 'loading',
+    noService ? 'demo' : 'loading',
   );
   const [serviceUnavailable, setServiceUnavailable] = useState(false);
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
@@ -174,7 +177,7 @@ export function App() {
   };
 
   useEffect(() => {
-    if (import.meta.env.MODE === 'test') return;
+    if (noService) return;
     const controller = new AbortController();
     const update = () =>
       fetchBootstrap(controller.signal)
@@ -187,9 +190,9 @@ export function App() {
           }
         })
         .catch(() => {
-          // Static/public deployments intentionally fall back to the labeled synthetic demo.
+          // A page that has not reached the service shows the labeled synthetic demo and says why.
           setConnectionState('demo');
-          setServiceUnavailable(import.meta.env.VITE_PUBLIC_DEMO !== '1');
+          setServiceUnavailable(true);
         });
     void update();
     const interval = window.setInterval(() => void update(), 15_000);

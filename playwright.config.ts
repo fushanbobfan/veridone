@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 const repositoryRoot = import.meta.dirname;
 const builtPageUrl = 'http://127.0.0.1:4419';
+const pagesBuildUrl = 'http://127.0.0.1:4420/veridone/';
 
 export default defineConfig({
   testDir: './e2e',
@@ -60,6 +61,21 @@ export default defineConfig({
         VERIDONE_STRICT_PORT: '1',
       },
     },
+    {
+      // The public demo as `.github/workflows/pages.yml` builds it, in a folder apart from the bundle above.
+      command:
+        'pnpm --filter @veridone/web build --outDir ../../output/pages-build --emptyOutDir && pnpm --filter @veridone/web preview --outDir ../../output/pages-build',
+      url: pagesBuildUrl,
+      timeout: 120_000,
+      reuseExistingServer: false,
+      env: {
+        ...process.env,
+        VITE_BASE_PATH: '/veridone/',
+        VITE_PUBLIC_DEMO: '1',
+        VERIDONE_WEB_PORT: '4420',
+        VERIDONE_STRICT_PORT: '1',
+      },
+    },
   ],
   projects: [
     {
@@ -111,6 +127,21 @@ export default defineConfig({
       name: 'webkit-built',
       testMatch: /built-page\.spec\.ts/u,
       use: { ...devices['Desktop Safari'], baseURL: builtPageUrl },
+    },
+    {
+      name: 'chromium-pages',
+      testMatch: /pages-build\.spec\.ts/u,
+      use: { ...devices['Desktop Chrome'], baseURL: pagesBuildUrl },
+    },
+    {
+      name: 'firefox-pages',
+      testMatch: /pages-build\.spec\.ts/u,
+      use: { ...devices['Desktop Firefox'], baseURL: pagesBuildUrl },
+    },
+    {
+      name: 'webkit-pages',
+      testMatch: /pages-build\.spec\.ts/u,
+      use: { ...devices['Desktop Safari'], baseURL: pagesBuildUrl },
     },
   ],
 });

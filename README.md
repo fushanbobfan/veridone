@@ -97,7 +97,7 @@ VeriDone signs each packet with an Ed25519 key it creates for the workspace. Dow
 
 ```bash
 pnpm quality          # format, lint, types, tests, build, audit, licenses, secrets
-pnpm test:e2e         # Chromium local flow plus Chromium/Firefox/WebKit demo flows and built page
+pnpm test:e2e         # Chromium local flow plus Chromium/Firefox/WebKit demo flows, built page, and public demo build
 ```
 
 CI repeats the core suite on Windows, macOS, and Linux. CodeQL, dependency updates, license policy, and browser artifacts are configured under `.github/`.
