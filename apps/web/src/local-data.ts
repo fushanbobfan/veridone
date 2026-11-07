@@ -1,4 +1,5 @@
-import { pathFromStatusEntry } from '@veridone/core';
+// The main entry also builds the schemas with zod, whose eval probe the page's content security policy reports.
+import { pathFromStatusEntry } from '@veridone/core/scope';
 
 import type { BootstrapDto, ReadinessDto, VerdictDto, WorkItemDto } from './api.js';
 import type { ReviewItem } from './data.js';

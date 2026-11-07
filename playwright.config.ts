@@ -3,6 +3,7 @@ import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 const repositoryRoot = import.meta.dirname;
+const builtPageUrl = 'http://127.0.0.1:4419';
 
 export default defineConfig({
   testDir: './e2e',
@@ -47,6 +48,18 @@ export default defineConfig({
         VERIDONE_STRICT_PORT: '1',
       },
     },
+    {
+      // The production bundle, which `pnpm start` and the public demo serve and the development server does not.
+      command: 'pnpm --filter @veridone/web build && pnpm --filter @veridone/web preview',
+      url: builtPageUrl,
+      timeout: 120_000,
+      reuseExistingServer: false,
+      env: {
+        ...process.env,
+        VERIDONE_WEB_PORT: '4419',
+        VERIDONE_STRICT_PORT: '1',
+      },
+    },
   ],
   projects: [
     {
@@ -83,6 +96,21 @@ export default defineConfig({
       name: 'webkit-demo',
       testMatch: /demo\.spec\.ts/u,
       use: { ...devices['Desktop Safari'] },
+    },
+    {
+      name: 'chromium-built',
+      testMatch: /built-page\.spec\.ts/u,
+      use: { ...devices['Desktop Chrome'], baseURL: builtPageUrl },
+    },
+    {
+      name: 'firefox-built',
+      testMatch: /built-page\.spec\.ts/u,
+      use: { ...devices['Desktop Firefox'], baseURL: builtPageUrl },
+    },
+    {
+      name: 'webkit-built',
+      testMatch: /built-page\.spec\.ts/u,
+      use: { ...devices['Desktop Safari'], baseURL: builtPageUrl },
     },
   ],
 });
