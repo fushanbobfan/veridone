@@ -8,6 +8,11 @@ export interface ProcessRequest {
   maxOutputBytes?: number;
   env?: Record<string, string>;
   signal?: AbortSignal;
+  /**
+   * False starts the process with no console on Windows. Otherwise it gets a hidden console of its own, and Windows
+   * starts a console host process for it as soon as the program touches that console.
+   */
+  console?: boolean;
 }
 
 export type ProcessResultState =
@@ -35,7 +40,8 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
     const child = spawn(request.executable, request.args, {
       cwd: request.cwd,
       env: request.env ? { ...request.env } : undefined,
-      detached: process.platform !== 'win32',
+      // Detached is a process group elsewhere; on Windows it is DETACHED_PROCESS, a process with no console.
+      detached: process.platform !== 'win32' || request.console === false,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
