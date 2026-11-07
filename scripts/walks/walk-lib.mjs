@@ -23,7 +23,7 @@ export const checkArgs = ['-m', 'pytest', '-q', '-o', 'pythonpath=src', '-p', 'n
 
 // The commits the walks were last checked on. An operator's clone sits on its default branch, so the walks do too.
 const publicRepositoryCommits = {
-  'ai-eval-micro-lab': 'b44a7fad14bc5dbd60e7cda864567bdc4418e3c2',
+  'ai-eval-micro-lab': '1bb0e5cfb98022bfce8497cffa49babc282f3525',
   'useful-automation-lab': '17f98eda7573b2eaacb1804f9809fbdefb531677',
 };
 
@@ -227,8 +227,8 @@ function checkEnvironment() {
 
 /**
  * The Python a check can pin: VeriDone pins the file a link leads to and passes few variables, so pytest has to import
- * from that file under those variables, away from any pytest.py where the walk was started. ai-eval-micro-lab has a
- * test that fails before Python 3.12, where sum() rounds floats differently, whatever VeriDone does.
+ * from that file under those variables, away from any pytest.py where the walk was started. The floor is the
+ * requires-python of ai-eval-micro-lab, whose tests the walks run.
  */
 export async function findPython() {
   const problems = [];
@@ -236,11 +236,11 @@ export async function findPython() {
     try {
       const { stdout } = await execFileAsync(
         command,
-        ['-c', 'import sys; print(sys.executable); print(sys.version_info[:2] >= (3, 12))'],
+        ['-c', 'import sys; print(sys.executable); print(sys.version_info[:2] >= (3, 10))'],
         { windowsHide: true },
       );
       const [found, recent] = stdout.trim().split(/\r?\n/u);
-      if (recent !== 'True') throw new Error(`${found} is older than Python 3.12.`);
+      if (recent !== 'True') throw new Error(`${found} is older than Python 3.10.`);
       const executable = await realpath(found);
       await execFileAsync(executable, ['-c', 'import pytest'], {
         cwd: os.tmpdir(),
@@ -254,7 +254,7 @@ export async function findPython() {
     }
   }
   throw new CannotStart(
-    `This walk needs Python 3.12 or newer with pytest installed in that interpreter: python -m pip install pytest\n${problems.join('\n')}`,
+    `This walk needs Python 3.10 or newer with pytest installed in that interpreter: python -m pip install pytest\n${problems.join('\n')}`,
   );
 }
 
