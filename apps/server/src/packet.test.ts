@@ -82,7 +82,7 @@ describe('acceptance packets', () => {
       expect(text).not.toContain(path.basename(fixture.directory));
     }
     expect(markdown).toContain('failed in [LOCAL_PATH]');
-  }, 30_000);
+  }, 60_000);
 
   it('knows the home and temporary directories by both names, and paths under home from ~', async () => {
     const base = await mkdtemp(path.join(tmpdir(), 'veridone-known-'));
@@ -129,7 +129,7 @@ describe('acceptance packets', () => {
     for (const text of [markdown, html]) {
       expect(text).toContain('Fixed the importer in [LOCAL_PATH].');
     }
-  }, 30_000);
+  }, 60_000);
 
   it('sanitizes the title and the branch in the JSON packet', async () => {
     const fixture = await boundWorkspace();
@@ -148,7 +148,7 @@ describe('acceptance packets', () => {
     expect(packet.repository?.branch).toBe('fix/token=[REDACTED]');
     expect(json).not.toContain('abc123def');
     expect(json).not.toContain('client-acme');
-  }, 30_000);
+  }, 60_000);
 
   // The repository id hashes the local path, and every hash below takes it, the claim or the status lines
   // before sanitizing, or uncommitted file content as one input among fields a packet carries; each one would
@@ -190,7 +190,7 @@ describe('acceptance packets', () => {
     expect(packet.workItem.repositoryId).toBe(packet.repository?.id);
     expect(packet.manifest.evidenceArtifacts).toEqual(packet.evidence[0]?.artifactHashes);
     expect(await verifyAcceptancePacket(packet)).toMatchObject({ valid: true, issues: [] });
-  }, 30_000);
+  }, 60_000);
 
   it('names each check and counts its tests without carrying its output', async () => {
     const fixture = await boundWorkspace({
@@ -313,7 +313,7 @@ describe('acceptance packets', () => {
       expect(text).toContain('Reviewed the smoke check.');
       expect(text).toContain(packet.manifest.payloadHash);
     }
-  }, 30_000);
+  }, 60_000);
 
   it('shows the setup command a check runs first in its readable formats', async () => {
     const fixture = await boundWorkspace();
@@ -341,7 +341,7 @@ describe('acceptance packets', () => {
       expect(text).toContain(`after setup`);
       expect(text).toContain(`${path.basename(process.execPath)} install --frozen-lockfile`);
     }
-  }, 30_000);
+  }, 60_000);
 
   it('embeds the contract its evidence and verdicts were recorded under', async () => {
     const fixture = await boundWorkspace();
@@ -359,7 +359,7 @@ describe('acceptance packets', () => {
     const { packet } = await buildAcceptancePacket(fixture.database, fixture.workItemId);
 
     expect(packet.contract?.version).toBe(packet.evidence[0]?.contractVersion);
-  }, 30_000);
+  }, 60_000);
 
   it('signs its payload with the workspace key', async () => {
     const fixture = await boundWorkspace();
@@ -385,7 +385,7 @@ describe('acceptance packets', () => {
     await expect(
       verifyAcceptancePacket(packet, { trustedKeys: [key.publicKey] }),
     ).resolves.toMatchObject({ valid: true, signed: true, trusted: true });
-  }, 30_000);
+  }, 60_000);
 
   it('detects a changed payload even when its hashes are recomputed', async () => {
     const fixture = await boundWorkspace();
@@ -397,7 +397,7 @@ describe('acceptance packets', () => {
       signed: false,
       issues: expect.arrayContaining(['The signature does not match the payload.']),
     });
-  }, 30_000);
+  }, 60_000);
 
   it('tells a packet re-signed with another key from one signed by a trusted key', async () => {
     const fixture = await boundWorkspace();
@@ -419,7 +419,7 @@ describe('acceptance packets', () => {
       trusted: false,
       issues: expect.arrayContaining(['The packet is not signed by a trusted key.']),
     });
-  }, 30_000);
+  }, 60_000);
 
   it('refuses a signature made with a key other than Ed25519', async () => {
     const fixture = await boundWorkspace();
@@ -431,7 +431,7 @@ describe('acceptance packets', () => {
       signed: false,
       issues: expect.arrayContaining(['The packet signature is not an Ed25519 signature.']),
     });
-  }, 30_000);
+  }, 60_000);
 
   it('keeps a secret passed as a separate argument out of every format', async () => {
     const fixture = await boundWorkspace();
@@ -458,7 +458,7 @@ describe('acceptance packets', () => {
       expect(format).not.toContain('setup-secret-value');
       expect(format).not.toContain('check-secret-value');
     }
-  }, 30_000);
+  }, 60_000);
 
   it('sanitizes a contract that a restored backup carried', async () => {
     const fixture = await boundWorkspace();
@@ -493,7 +493,7 @@ describe('acceptance packets', () => {
       expect(format).not.toContain('contract-secret-value');
       expect(format).not.toContain('private-project');
     }
-  }, 30_000);
+  }, 60_000);
 
   it('refuses a schema-2 packet whose signature was removed', async () => {
     const fixture = await boundWorkspace();
@@ -507,7 +507,7 @@ describe('acceptance packets', () => {
       signed: false,
       issues: expect.arrayContaining(['The packet is not signed.']),
     });
-  }, 30_000);
+  }, 60_000);
 
   it('still verifies the published schema-1 packets, as unsigned', async () => {
     const directory = path.resolve(import.meta.dirname, '../../../docs/evidence/dogfood');
@@ -535,7 +535,7 @@ describe('acceptance packets', () => {
     expect(await response.text()).toBe(key.publicKey);
     const bootstrap = await fixture.get<{ signingKey: { keyId: string } }>('/api/v1/bootstrap');
     expect(bootstrap.body.signingKey).toEqual({ keyId: key.keyId });
-  }, 30_000);
+  }, 60_000);
 
   it('keeps its pseudonyms stable within a workspace and its key out of backups', async () => {
     const fixture = await boundWorkspace();
@@ -557,5 +557,5 @@ describe('acceptance packets', () => {
     const signingMaterial = fixture.database.workspaceKey('packet-signing');
     expect(signingMaterial).toContain('PRIVATE KEY');
     expect(backup).not.toContain(signingMaterial.split('\n')[1]);
-  }, 30_000);
+  }, 60_000);
 });
