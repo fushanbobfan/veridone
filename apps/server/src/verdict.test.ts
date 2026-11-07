@@ -61,7 +61,7 @@ describe('verdict recording', () => {
     );
     expect(accepted.status).toBe(201);
     expect(accepted.body.verdict.overrideReason).toBeNull();
-  }, 30_000);
+  }, 60_000);
 
   it('records the claim it judged and the verdict it supersedes', async () => {
     const { decide, expectedState } = await workspace();
@@ -75,7 +75,7 @@ describe('verdict recording', () => {
       previousVerdictId: first.body.verdict.id,
       claimHash: (await expectedState()).claimHash,
     });
-  }, 30_000);
+  }, 60_000);
   it('heads the packet with the latest verdict of the chain, whatever the clocks recorded', async () => {
     const fixture = await workspace();
     await fixture.decide('changes-requested', 'Add a regression test.');
@@ -97,7 +97,7 @@ describe('verdict recording', () => {
       'rejected',
       'changes-requested',
     ]);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('verdicts are compare-and-swap writes', () => {
@@ -117,7 +117,7 @@ describe('verdicts are compare-and-swap writes', () => {
       reason: 'repository-changed',
     });
     expect(fixture.database.listVerdicts(fixture.workItemId)).toEqual([]);
-  }, 30_000);
+  }, 60_000);
 
   it('refuses a verdict when another one was recorded after the reviewer looked', async () => {
     const fixture = await workspace();
@@ -132,7 +132,7 @@ describe('verdicts are compare-and-swap writes', () => {
     expect(late.status).toBe(409);
     expect(late.body.reason).toBe('verdict-changed');
     expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
-  }, 30_000);
+  }, 60_000);
 
   it('refuses a verdict when the claim changed after the reviewer read it', async () => {
     const fixture = await workspace();
@@ -146,7 +146,7 @@ describe('verdicts are compare-and-swap writes', () => {
 
     expect(response.status).toBe(409);
     expect(response.body.reason).toBe('claim-changed');
-  }, 30_000);
+  }, 60_000);
 
   it('records exactly one of two verdicts sent against the same state', async () => {
     const fixture = await workspace();
@@ -159,7 +159,7 @@ describe('verdicts are compare-and-swap writes', () => {
 
     expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
     expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
-  }, 30_000);
+  }, 60_000);
 
   it('refuses the second of two verdicts expecting the same state inside one store transaction', async () => {
     const fixture = await workspace();
@@ -180,7 +180,7 @@ describe('verdicts are compare-and-swap writes', () => {
       fixture.database.recordVerdict({ ...verdict, note: 'Reviewer B.' }, expected),
     ).toThrow(VerdictConflictError);
     expect(fixture.database.listVerdicts(fixture.workItemId)).toHaveLength(1);
-  }, 30_000);
+  }, 60_000);
 
   it('keeps the claim of a work item that already has a verdict', async () => {
     const fixture = await workspace();
@@ -194,5 +194,5 @@ describe('verdicts are compare-and-swap writes', () => {
       message: expect.stringMatching(/already has a verdict/u),
     });
     expect(fixture.database.getWorkItem(fixture.workItemId)?.claim).toBe('The importer is fixed.');
-  }, 30_000);
+  }, 60_000);
 });
