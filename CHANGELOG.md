@@ -14,6 +14,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - A check approved while its folder exists and VeriDone still cannot read the repository, as when its root is removed or waits for approval, is added once, and the answer is 201. It used to be written and answered with a 400, so a retry added it again.
 - In the light theme, warning text such as the notice that a repository source is unavailable now meets the 4.5:1 contrast ratio.
 - On a phone, the workspace explorer's tabs wrap, so each one can be reached without the dialog sliding sideways.
+- A dialog takes its first focus only while focus is outside it, so keys typed into a field right after it opens stay in that field.
 
 ### Fixed
 

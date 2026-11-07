@@ -33,7 +33,10 @@ export function useDialogFocus(
     if (!open) return;
     const returnTarget =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusFrame = window.requestAnimationFrame(() => initialFocus.current?.focus());
+    // Someone already in a field keeps it: their next keys would land on the first target.
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (!dialog.current?.contains(document.activeElement)) initialFocus.current?.focus();
+    });
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
