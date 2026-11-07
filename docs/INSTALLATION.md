@@ -46,7 +46,7 @@ The database uses versioned migrations, foreign keys, WAL journaling, and normal
 | `VERIDONE_PORT`            | `4317`                   | API port.                                                                    |
 | `VERIDONE_DATA_DIR`        | OS application-data path | SQLite directory.                                                            |
 | `VERIDONE_ALLOWED_ORIGINS` | none beyond defaults     | Comma-separated extra browser origins.                                       |
-| `VERIDONE_DEMO`            | unset                    | `1` reports demo service mode; hosted static demo normally needs no service. |
+| `VERIDONE_DEMO`            | unset                    | `1` reports demo service mode; the hosted static demo makes no API requests. |
 | `VERIDONE_WEB_PORT`        | `4173`                   | Vite/preview port.                                                           |
 | `VERIDONE_API_PORT`        | `4317`                   | Vite proxy target.                                                           |
 | `VERIDONE_GIT`             | first `git` on `PATH`    | Absolute path of the Git executable VeriDone starts.                         |
