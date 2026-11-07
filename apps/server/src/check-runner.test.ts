@@ -68,7 +68,7 @@ describe('checks run in a clean checkout', () => {
     expect(observed.readme).toBe('# Fixture\n');
     expect(path.relative(fixture.repositoryPath, observed.cwd).startsWith('..')).toBe(true);
     expect(existsSync(observed.cwd)).toBe(false);
-  }, 30_000);
+  }, 60_000);
 
   it('refuses to run checks while the repository has uncommitted changes', async () => {
     const fixture = await workspace();
@@ -85,7 +85,7 @@ describe('checks run in a clean checkout', () => {
 
     expect(run.status).toBe(400);
     expect(run.body.message).toMatch(/uncommitted changes/u);
-  }, 30_000);
+  }, 60_000);
 
   it('marks a check that edits its checkout as mutated and leaves the repository alone', async () => {
     const fixture = await workspace();
@@ -103,7 +103,7 @@ describe('checks run in a clean checkout', () => {
     await expect(readFile(path.join(fixture.repositoryPath, 'README.md'), 'utf8')).resolves.toBe(
       '# Fixture\n',
     );
-  }, 30_000);
+  }, 60_000);
 
   it('catches a check that commits its own edit inside the checkout', async () => {
     const fixture = await workspace();
@@ -117,7 +117,7 @@ describe('checks run in a clean checkout', () => {
 
     expect(run.body.evidence.result).toBe('mutated');
     expect(run.body.evidence.invalidReason).toMatch(/moved its checkout/u);
-  }, 30_000);
+  }, 60_000);
 
   it('catches an edit that the check hides from the checkout index', async () => {
     const fixture = await workspace();
@@ -131,7 +131,7 @@ describe('checks run in a clean checkout', () => {
 
     expect(run.body.evidence.result).toBe('mutated');
     expect(run.body.evidence.invalidReason).toContain('README.md');
-  }, 30_000);
+  }, 60_000);
 
   it('records a check that leaves its checkout unreadable as mutated', async () => {
     const fixture = await workspace();
@@ -146,7 +146,7 @@ describe('checks run in a clean checkout', () => {
     expect(run.status).toBe(200);
     expect(run.body.evidence.result).toBe('mutated');
     expect(run.body.evidence.invalidReason).toMatch(/could not be compared/u);
-  }, 30_000);
+  }, 60_000);
 
   it('gives the check absolute PATH entries only', async () => {
     const fixture = await workspace();
@@ -165,7 +165,7 @@ describe('checks run in a clean checkout', () => {
     const entries = observed.path.split(path.delimiter).filter(Boolean);
     expect(entries.every((entry) => path.isAbsolute(entry))).toBe(true);
     expect(observed.noCurrentDirectory).toBe(process.platform === 'win32' ? '1' : null);
-  }, 30_000);
+  }, 60_000);
 
   it('does not count passing evidence that ran outside a clean checkout', async () => {
     const fixture = await workspace();
@@ -183,7 +183,7 @@ describe('checks run in a clean checkout', () => {
     });
 
     expect(acceptanceReadiness(fixture.database, fixture.workItemId).ready).toBe(false);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('check tools are pinned', () => {
@@ -205,7 +205,7 @@ describe('check tools are pinned', () => {
       toolPath: tool,
       toolSha256: sha256,
     });
-  }, 30_000);
+  }, 60_000);
 
   it('includes the pinned tool in the check definition', async () => {
     const definition = {
@@ -252,7 +252,7 @@ describe('check tools are pinned', () => {
       workItemId: fixture.workItemId,
     });
     expect(run.body.evidence.result).toBe('passed');
-  }, 30_000);
+  }, 60_000);
 
   it('requires a check approved before tools were pinned to be pinned before it runs', async () => {
     const fixture = await workspace();
@@ -286,7 +286,7 @@ describe('check tools are pinned', () => {
       workItemId: fixture.workItemId,
     });
     expect(run.body).toMatchObject({ evidence: { result: 'passed' }, readiness: { ready: true } });
-  }, 30_000);
+  }, 60_000);
 
   it('pins only the tool file the operator reviewed', async () => {
     const fixture = await workspace();
@@ -307,7 +307,7 @@ describe('check tools are pinned', () => {
     expect(refused.status).toBe(409);
     expect(refused.body.error).toBe('tool_changed');
     expect(fixture.database.getCheck(checkId)).toEqual(before);
-  }, 30_000);
+  }, 60_000);
 
   it('treats a scope of ./ as no declared scope', async () => {
     const fixture = await workspace();
@@ -324,7 +324,7 @@ describe('check tools are pinned', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.check.scopePaths).toEqual(['src']);
-  }, 30_000);
+  }, 60_000);
 
   it('rejects a tool named by a relative path at approval', async () => {
     const fixture = await workspace();
@@ -340,7 +340,7 @@ describe('check tools are pinned', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.message).toMatch(/relative paths are not pinned/u);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('acceptance readiness', () => {

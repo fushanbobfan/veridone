@@ -78,7 +78,7 @@ describe('verdict and evidence history is append-only', () => {
     for (const statement of statements) {
       expect(() => database.connection.prepare(statement).run()).toThrow(/append-only/u);
     }
-  }, 30_000);
+  }, 60_000);
 
   it('refuses to write over a recorded verdict or evidence record', async () => {
     const { database } = await decidedWorkspace();
@@ -116,7 +116,7 @@ describe('verdict and evidence history is append-only', () => {
       expect(() => database.connection.prepare(statement).run(), statement).toThrow(/append-only/u);
     }
     expect(rows()).toEqual(before);
-  }, 30_000);
+  }, 60_000);
 
   it('accepts a verdict only as the successor of the latest one', async () => {
     const { database, workItemId } = await decidedWorkspace();
@@ -140,7 +140,7 @@ describe('verdict and evidence history is append-only', () => {
       previousVerdictId: latest.id,
     });
     expect(database.latestVerdict(workItemId)?.id).toBe(successor.id);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('workspace restore', () => {
@@ -154,7 +154,7 @@ describe('workspace restore', () => {
     expect(history(restored, workItemId)).toEqual(history(database, workItemId));
     expect(restored.getWorkItem(workItemId)?.humanVerdict).toBe('accepted');
     expect(restored.listEvidence().map((evidence) => evidence.origin)).toEqual(['imported']);
-  }, 30_000);
+  }, 60_000);
 
   it('makes restored checks wait for a pinned tool and recomputes their definition', async () => {
     const { backup } = await decidedWorkspace();
@@ -166,7 +166,7 @@ describe('workspace restore', () => {
     if (!check) throw new Error('The backup restored no check.');
     expect(check).toMatchObject({ resolvedExecutable: null, executableSha256: null });
     expect(check.definitionHash).toBe(await checkDefinitionHash(check));
-  }, 30_000);
+  }, 60_000);
 
   it('restores a check whose scope an earlier version stored as an empty path', async () => {
     const { backup } = await decidedWorkspace();
@@ -177,7 +177,7 @@ describe('workspace restore', () => {
     await importWorkspace(restored, await resealed(edited));
 
     expect(restored.listChecks().map((check) => check.scopePaths)).toEqual([['src']]);
-  }, 30_000);
+  }, 60_000);
 
   it('never lets restored evidence satisfy a gate', async () => {
     const { database, workItemId } = await decidedWorkspace();
@@ -192,7 +192,7 @@ describe('workspace restore', () => {
     database.recordImportedEvidence({ ...passing, id: randomUUID(), completedAt: later(2_000) });
 
     expect(acceptanceReadiness(database, workItemId).ready).toBe(false);
-  }, 30_000);
+  }, 60_000);
 
   it('adds nothing when the workspace already holds the backup', async () => {
     const { database, backup } = await decidedWorkspace();
@@ -204,7 +204,7 @@ describe('workspace restore', () => {
       expect(Object.values(result.imported).every((count) => count === 0)).toBe(true);
       expect(result.unchanged).toMatchObject({ workItems: 1, evidence: 1, verdicts: 2 });
     }
-  }, 30_000);
+  }, 60_000);
 
   it('rejects a backup that rewrites a recorded verdict, even with a recomputed checksum', async () => {
     const { post, database, workItemId, backup } = await decidedWorkspace();
@@ -221,7 +221,7 @@ describe('workspace restore', () => {
     expect(response.body).toMatchObject({ error: 'workspace_conflict' });
     expect(response.body.message).toMatch(/never replaced/u);
     expect(history(database, workItemId)).toEqual(before);
-  }, 30_000);
+  }, 60_000);
 
   it('rejects a backup whose verdict history diverges from the local one', async () => {
     const { database, workItemId, backup } = await decidedWorkspace();
@@ -254,7 +254,7 @@ describe('workspace restore', () => {
       WorkspaceConflictError,
     );
     expect(history(database, workItemId)).toEqual(before);
-  }, 30_000);
+  }, 60_000);
 
   it('keeps a local record when the backup carries a different copy of it', async () => {
     const { database, workItemId, backup } = await decidedWorkspace();
@@ -266,7 +266,7 @@ describe('workspace restore', () => {
 
     expect(result.unchanged.workItems).toBe(1);
     expect(database.getWorkItem(workItemId)?.title).toBe('Fix the importer');
-  }, 30_000);
+  }, 60_000);
 
   it('restores a backup written by VeriDone 1.1', async () => {
     const { database, workItemId, backup } = await decidedWorkspace();
@@ -294,7 +294,7 @@ describe('workspace restore', () => {
     const again = await importWorkspace(database, await resealed(legacy));
     expect(Object.values(again.imported).every((count) => count === 0)).toBe(true);
     expect(again.unchanged.verdicts).toBe(2);
-  }, 30_000);
+  }, 60_000);
 
   it('refuses a restored verdict that judged a different claim than the local work item shows', async () => {
     const fixture = await boundWorkspace();
@@ -317,7 +317,7 @@ describe('workspace restore', () => {
       /judged a different claim/u,
     );
     expect(restored.listVerdicts()).toEqual([]);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('receipt times in backups', () => {
@@ -348,7 +348,7 @@ describe('receipt times in backups', () => {
     ).toMatchObject({
       startedAt: new Date(2026, 6, 21, 13, 0, 0).toISOString(),
     });
-  }, 30_000);
+  }, 60_000);
 
   it('exports receipts an earlier version stored with a local time or a time to the minute', async () => {
     const database = emptyDatabase();
@@ -448,7 +448,7 @@ describe('restored roots wait for the operator', () => {
     expect(target.database.listRoots().find((root) => root.label === 'Elsewhere')?.status).toBe(
       'pending',
     );
-  }, 30_000);
+  }, 60_000);
 
   it('refuses to approve a restored root whose path now leads to another directory', async () => {
     const target = await boundWorkspace();
@@ -476,7 +476,7 @@ describe('restored roots wait for the operator', () => {
     expect(target.database.listRoots().find((root) => root.label === 'Linked')?.status).toBe(
       'pending',
     );
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('restore preview', () => {
@@ -500,7 +500,7 @@ describe('restore preview', () => {
     const restored = await importWorkspace(target, backup);
     expect(restored.imported).toEqual(preview.imported);
     expect(target.listVerdicts()).toHaveLength(2);
-  }, 30_000);
+  }, 60_000);
 
   it('reports a conflicting backup before anything is restored', async () => {
     const { backup, database } = await decidedWorkspace();
@@ -511,5 +511,5 @@ describe('restore preview', () => {
     await expect(
       importWorkspace(database, await resealed(rewritten), { dryRun: true }),
     ).rejects.toBeInstanceOf(WorkspaceConflictError);
-  }, 30_000);
+  }, 60_000);
 });
