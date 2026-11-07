@@ -16,8 +16,14 @@ export class CheckCapacityError extends Error {
   }
 }
 
+interface ActiveRun {
+  checkId: string;
+  workItemId: string;
+  controller: AbortController;
+}
+
 export class CheckExecutionManager {
-  readonly #active = new Map<string, AbortController>();
+  readonly #active = new Map<string, ActiveRun>();
 
   constructor(
     readonly concurrencyLimit = 2,
@@ -40,7 +46,7 @@ export class CheckExecutionManager {
     const runId = requestedRunId ?? randomUUID();
     if (this.#active.has(runId)) throw new Error('The check run ID is already active.');
     const controller = new AbortController();
-    this.#active.set(runId, controller);
+    this.#active.set(runId, { checkId, workItemId, controller });
     try {
       return {
         runId,
@@ -52,9 +58,16 @@ export class CheckExecutionManager {
   }
 
   cancel(runId: string): boolean {
-    const controller = this.#active.get(runId);
-    if (!controller) return false;
-    controller.abort();
+    const run = this.#active.get(runId);
+    if (!run) return false;
+    run.controller.abort();
     return true;
+  }
+
+  /** Cancels the runs that match, as when what they check leaves the workspace; gives how many. */
+  cancelWhere(matches: (run: { checkId: string; workItemId: string }) => boolean): number {
+    const runs = [...this.#active.values()].filter(matches);
+    for (const run of runs) run.controller.abort();
+    return runs.length;
   }
 }

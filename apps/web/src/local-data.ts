@@ -1,7 +1,7 @@
 // The main entry also builds the schemas with zod, whose eval probe the page's content security policy reports.
 import { pathFromStatusEntry } from '@veridone/core/scope';
 
-import type { BootstrapDto, ReadinessDto, VerdictDto, WorkItemDto } from './api.js';
+import type { BootstrapDto, ReadinessDto, RepositoryDto, VerdictDto, WorkItemDto } from './api.js';
 import type { ReviewItem } from './data.js';
 
 const verdictNames: Record<VerdictDto['decision'], string> = {
@@ -18,6 +18,16 @@ export function latestVerdict(verdicts: VerdictDto[], workItemId: string): Verdi
       (latest, verdict) => (!latest || verdict.sequence > latest.sequence ? verdict : latest),
       undefined,
     );
+}
+
+/** A work item's repository, a removed one included: its last state is what the work item stays on. */
+export function repositoryOf(
+  bootstrap: BootstrapDto,
+  repositoryId: string | null | undefined,
+): RepositoryDto | undefined {
+  return [...bootstrap.repositories, ...bootstrap.removed.repositories].find(
+    (candidate) => candidate.id === repositoryId,
+  );
 }
 
 function relativeTime(iso: string): string {
@@ -47,7 +57,7 @@ const unreported: ReadinessDto = {
 };
 
 export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): ReviewItem {
-  const repository = bootstrap.repositories.find((candidate) => candidate.id === item.repositoryId);
+  const repository = repositoryOf(bootstrap, item.repositoryId);
   const receipt = bootstrap.receipts.find((candidate) =>
     item.sourceRef.endsWith(`:${candidate.runId}`),
   );
@@ -81,8 +91,11 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
     verdict && !verdictCurrent
       ? `An earlier ${verdictNames[verdict.decision]} was recorded on a previous repository state and is superseded. `
       : '';
-  // The receipt counts as a gate like the others: a run that reports a failing stage fails it.
-  const requiredTotal = 2 + Math.max(checks.length, 1) + (scope.declared ? 1 : 0);
+  // The receipt counts as a gate like the others: a run that reports a failing stage fails it. So does a repository
+  // VeriDone cannot read or no longer reads, so the score never reads as complete while acceptance stays locked.
+  const repositoryUnreadable = Boolean(readiness.repositoryIssue);
+  const requiredTotal =
+    2 + Math.max(checks.length, 1) + (scope.declared ? 1 : 0) + (repositoryUnreadable ? 1 : 0);
   const requiredSatisfied =
     (isDegraded ? 0 : 1) +
     (bindingFresh ? 1 : 0) +
@@ -161,11 +174,24 @@ export function workItemToReview(item: WorkItemDto, bootstrap: BootstrapDto): Re
         id: 'binding',
         title: 'Claim is bound to the current repository state',
         detail: isBound
-          ? `${repository?.snapshot.head.slice(0, 8)} · current fingerprint`
+          ? `${repository?.snapshot.head.slice(0, 8)} · ${repository?.removedAt ? 'last state captured' : 'current fingerprint'}`
           : 'No repository snapshot has been linked',
         state: bindingFresh ? 'passed' : isBound ? 'stale' : 'missing',
         evidenceLabel: 'Git snapshot',
       },
+      ...(repositoryUnreadable
+        ? [
+            {
+              id: 'repository',
+              title: 'VeriDone can read the repository',
+              detail: repository?.removedAt
+                ? 'The repository was removed; decisions record against its last state'
+                : 'Decisions record against the last state captured',
+              state: 'failed' as const,
+              evidenceLabel: 'Git snapshot',
+            },
+          ]
+        : []),
       ...(checkAssessments.length === 0
         ? [
             {

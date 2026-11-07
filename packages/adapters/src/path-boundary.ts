@@ -33,7 +33,7 @@ export async function resolveWithinApprovedRoots(
 ): Promise<string> {
   if (approvedRoots.length === 0) {
     throw new PathBoundaryError(
-      'No filesystem roots have been approved. Approve one under Roots first.',
+      'No filesystem roots have been approved. Add one under Add source, or approve a restored one under Roots.',
     );
   }
 
@@ -44,7 +44,9 @@ export async function resolveWithinApprovedRoots(
   ).flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
 
   if (!resolvedRoots.some((root) => isWithin(resolvedCandidate, root))) {
-    throw new PathBoundaryError('The requested path is outside the approved roots.');
+    throw new PathBoundaryError(
+      'The requested path is outside the approved roots. Add a folder that holds it as a root under Add source.',
+    );
   }
 
   return resolvedCandidate;

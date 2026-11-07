@@ -37,4 +37,31 @@ describe('check execution manager', () => {
     expect(manager.activeCount).toBe(0);
     expect(manager.cancel('00000000-0000-4000-8000-000000000001')).toBe(false);
   });
+
+  it('cancels the runs that match, by their check and work item', async () => {
+    const started: string[] = [];
+    const runner = async (
+      _database: VeriDoneDatabase,
+      checkId: string,
+      _workItemId: string,
+      signal?: AbortSignal,
+    ): Promise<EvidenceRecord> => {
+      started.push(checkId);
+      await new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve()));
+      throw new Error(`cancelled ${checkId}`);
+    };
+    const manager = new CheckExecutionManager(2, runner);
+    const database = {} as VeriDoneDatabase;
+    expect(manager.cancelWhere(() => true)).toBe(0);
+    const first = manager.run(database, 'check-1', 'work-1');
+    const second = manager.run(database, 'check-2', 'work-2');
+    expect(started).toEqual(['check-1', 'check-2']);
+
+    expect(manager.cancelWhere((run) => run.workItemId === 'work-1')).toBe(1);
+    await expect(first).rejects.toThrow('cancelled check-1');
+    expect(manager.activeCount).toBe(1);
+    expect(manager.cancelWhere((run) => run.checkId === 'check-2')).toBe(1);
+    await expect(second).rejects.toThrow('cancelled check-2');
+    expect(manager.activeCount).toBe(0);
+  });
 });

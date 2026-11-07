@@ -1,5 +1,6 @@
 import {
   Archive,
+  ArchiveX,
   FileCheck2,
   FolderGit2,
   FolderTree,
@@ -10,7 +11,8 @@ import {
   Sun,
 } from 'lucide-react';
 
-export type WorkspaceSection = 'roots' | 'repositories' | 'checks' | 'contracts' | 'exports';
+export type WorkspaceSection =
+  'roots' | 'repositories' | 'checks' | 'contracts' | 'exports' | 'removed';
 
 export function Navigation({
   theme,
@@ -88,6 +90,15 @@ export function Navigation({
         >
           <Archive aria-hidden="true" size={17} />
           Exports
+        </button>
+        <button
+          className="nav-item"
+          type="button"
+          onClick={() => onOpenSection?.('removed')}
+          disabled={!onOpenSection}
+        >
+          <ArchiveX aria-hidden="true" size={17} />
+          Removed
         </button>
       </nav>
 

@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The upgrade and dead-end walks build the v1.1.0 tag.
+          # The upgrade and dead-end walks build the v1.1.0 tag, and the removal walk the v1.2.0 tag.
           fetch-depth: 0
       - uses: pnpm/action-setup@v6
         with:
@@ -50,6 +50,8 @@ jobs:
         if: ${{ !cancelled() }}
       - run: pnpm walk:dead-ends
         if: ${{ !cancelled() }}
+      - run: pnpm walk:removal
+        if: ${{ !cancelled() }}
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -58,4 +60,5 @@ jobs:
             output/walks/*.log
             output/walks/clones/*.log
             output/walks/walk-first-workspace/*.png
+            output/walks/walk-removal/*.png
           retention-days: 7

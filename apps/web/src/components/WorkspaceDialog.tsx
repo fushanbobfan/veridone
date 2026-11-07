@@ -96,6 +96,10 @@ export function WorkspaceDialog({
     }
   };
 
+  const removedRecords =
+    bootstrap.removed.roots.length +
+    bootstrap.removed.repositories.length +
+    bootstrap.removed.workItems.length;
   const totalRecords =
     bootstrap.roots.length +
     bootstrap.repositories.length +
@@ -103,7 +107,8 @@ export function WorkspaceDialog({
     bootstrap.workItems.length +
     bootstrap.checks.length +
     bootstrap.evidence.length +
-    bootstrap.verdicts.length;
+    bootstrap.verdicts.length +
+    removedRecords;
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -137,6 +142,7 @@ export function WorkspaceDialog({
             <span>
               {bootstrap.repositories.length} repositories · {bootstrap.workItems.length} work items
               · {bootstrap.evidence.length} evidence records
+              {removedRecords > 0 ? ` · ${removedRecords} removed` : ''}
             </span>
           </div>
         </div>
@@ -213,6 +219,10 @@ export function WorkspaceDialog({
             <PreviewList
               title="Work items"
               items={pending.preview.added.workItems.map((item) => item.title)}
+            />
+            <PreviewList
+              title="Removed records, which stay removed"
+              items={pending.preview.added.removed.map((record) => record.name)}
             />
             <div className="pin-actions">
               <button

@@ -70,6 +70,18 @@ A backup restores up to 500 MB. Export refuses to write a larger one and names t
 
 Restored roots wait for your approval. VeriDone reads nothing under one until you choose **Approve** for it under **Roots** in the workspace explorer, and it refuses a root whose directory is missing on this machine or now resolves to another place. The backup checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
 
+## 7. Remove what no longer belongs
+
+A root whose folder is gone, a repository that moved, and a work item added by mistake can each leave the workspace, with a reason. The record stays, marked as removed, and the evidence and verdicts recorded about it do not change. **Removed** in the navigation lists what left, when, and why, and **Put back** returns it. Once a root, a repository, or a removal is on record, an empty inbox offers **Open workspace explorer**, which reaches the same list.
+
+**Remove** under **Roots** takes back the read access that root gave. VeriDone stops reading the repositories and receipts only this root covers, and checks running on those repositories are cancelled; a path another approved root covers stays readable. The form names the repositories only this root covers, ticked to leave with it under the same reason. One you untick stays listed and says it cannot be read. A root restored from a backup can be removed without approving it. **Put back** runs the checks that approve a restored root: the folder must exist and still resolve to the path on record. Adding the same path again under **Add source** also brings a removed root back.
+
+**Remove** under **Repositories** stops VeriDone reading that repository, and checks running on it are cancelled. Its checks stay listed and refuse to run; those not retired are marked as belonging to a removed repository. The work items bound to it stay in the inbox on the last state captured. A work item whose latest verdict is on that state stays decided. For the others, the review says what to do next: **Link to repository** binds the work item to another repository, where evidence from the removed one does not count, and **Reject**, **Request changes**, and **Override lock** still record against the last state. A plain acceptance stays locked. **Put back**, or adding the same path again, returns the repository with its checks and bindings, and the gates are judged again.
+
+**Remove work item** in the review takes the item out of the inbox. It cannot be bound, checked, or decided until it goes back, and checks running for it are cancelled. Its packet still exports from **Removed**, and from **Exports** when it has a verdict, and says when and why it left. Importing its run again leaves it removed, and both the preview and the result say so. **Put back** returns it with its binding and verdicts.
+
+A packet states the removal of its work item and of the repository that work item is bound to, with the reason, so write the reason for that reader. A backup carries removed records, and they stay removed in a workspace that lacks them. A restore neither removes a record the workspace holds nor brings back one it removed, so an older backup does not undo a removal. The paths and check output of a removed record stay in the database and in backups, and **Put back** clears the time and the reason of that removal.
+
 ## Keyboard and mobile use
 
 - The first focusable link skips directly to the selected review.

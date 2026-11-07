@@ -115,3 +115,16 @@ describe('reading what a check printed', () => {
     expect(onReject).toHaveBeenCalled();
   });
 });
+
+describe('removing a work item from the review', () => {
+  it('offers it where the workspace can act on it', async () => {
+    const user = userEvent.setup();
+    const onRemove = vi.fn();
+    const { rerender } = render(<ReviewDetail item={item} {...actions} onRemove={onRemove} />);
+    await user.click(screen.getByRole('button', { name: 'Remove work item' }));
+    expect(onRemove).toHaveBeenCalled();
+
+    rerender(<ReviewDetail item={item} {...actions} />);
+    expect(screen.queryByRole('button', { name: 'Remove work item' })).toBeNull();
+  });
+});

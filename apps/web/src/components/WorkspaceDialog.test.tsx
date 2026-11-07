@@ -20,6 +20,7 @@ const bootstrap: BootstrapDto = {
   repositories: [],
   receipts: [],
   workItems: [],
+  removed: { roots: [], repositories: [], workItems: [] },
   contracts: [],
   checks: [],
   evidence: [],
@@ -47,6 +48,7 @@ const result = {
     repositories: [{ name: 'importer', path: '/work/restored/importer' }],
     checks: [{ label: 'Unit tests', executable: 'node' }],
     workItems: [{ title: 'Fix the importer' }],
+    removed: [],
   },
 };
 
@@ -89,6 +91,74 @@ describe('workspace restore', () => {
       '/api/v1/workspace/import',
     ]);
     expect(onImported).toHaveBeenCalled();
+  });
+
+  it('lists the records a backup holds as removed apart from the rest', async () => {
+    const user = userEvent.setup();
+    const withRemoved = {
+      ...result,
+      added: {
+        roots: [],
+        repositories: [],
+        checks: [],
+        workItems: [],
+        removed: [{ kind: 'workItem', name: 'Fix the importer' }],
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(withRemoved), { status: 200 })),
+    );
+    render(
+      <WorkspaceDialog
+        open
+        bootstrap={bootstrap}
+        onClose={() => undefined}
+        onImported={vi.fn(async () => undefined)}
+      />,
+    );
+    await user.upload(
+      screen.getByLabelText('Choose a VeriDone workspace JSON backup'),
+      new File(['{"schemaVersion":2}'], 'backup.json', { type: 'application/json' }),
+    );
+    expect(await screen.findByText('Removed records, which stay removed')).toBeTruthy();
+    expect(screen.getByText('Fix the importer')).toBeTruthy();
+  });
+
+  it('counts removed records among what a backup carries', () => {
+    render(
+      <WorkspaceDialog
+        open
+        bootstrap={{
+          ...bootstrap,
+          removed: {
+            roots: [],
+            repositories: [],
+            workItems: [
+              {
+                id: 'item',
+                repositoryId: null,
+                sourceType: 'codex',
+                sourceRef: 'codex:run',
+                title: 'Fix the importer',
+                claim: 'The importer is fixed.',
+                sourceLabel: 'Codex',
+                updatedAt: '2026-11-06T10:00:00.000Z',
+                snapshotFingerprint: null,
+                humanVerdict: null,
+                claimHash: '9'.repeat(64),
+                removedAt: '2026-11-06T11:00:00.000Z',
+                removedReason: 'Added by mistake.',
+              },
+            ],
+          },
+        }}
+        onClose={() => undefined}
+        onImported={vi.fn(async () => undefined)}
+      />,
+    );
+    expect(screen.getByText('1 records in this workspace')).toBeTruthy();
+    expect(screen.getByText(/1 removed/u)).toBeTruthy();
   });
 
   // A second backup chosen while the first is read would race it: the later answer could show, and be restored,

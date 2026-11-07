@@ -57,6 +57,12 @@ A human decision bound to a work item, contract version, repository fingerprint,
 
 A verdict request carries the fingerprint, claim hash, and latest verdict the reviewer saw when the dialog opened. The server captures the repository again, then records the verdict in one immediate transaction only if all three still match; otherwise it answers 409 and names what changed. When the repository state changes later, the review view marks the earlier verdict superseded and opens the item for a new decision.
 
+### Removal
+
+A root, repository, or work item leaves the workspace by a recorded state on its own row: `removed_at` and `removed_reason`. Evidence points at repository and work item rows and verdicts at work item rows through foreign keys, a row with that history refuses deletion, and packets redact the paths root and repository rows hold, so the rows stay. `listRoots`, `listRepositories`, and `listWorkItems` return every row, which is what backups and the redaction list read; what acts on records as a set reads `listActiveRoots`, `listApprovedRoots`, `listActiveRepositories`, or `listActiveWorkItems`.
+
+A removed root grants no access, so only the other approved roots bound the repositories and receipts VeriDone reads. A removed repository is no longer captured, and readiness closes the gate of the work items bound to it, which stay on its last state and can still be decided as they can when a repository cannot be read. A removed work item refuses binding, runs, and verdict requests; a restore can still add the verdicts its backup holds. A removal cancels the checks running on what left. A run stays on record with how it ended, cancelled if its tool was still running and its result if the tool had already finished; one stopped while its checkout was being prepared ends with no record. A capture that finishes after a repository's removal leaves its row as it is.
+
 ## Persistence
 
 SQLite is the local source of truth. Migrations are versioned and tested. Evidence output is capped before persistence; the database stores redacted output plus content hashes. Foreign keys, WAL journaling, and transactional verdict/import writes are enabled, and triggers keep verdicts and evidence append-only.

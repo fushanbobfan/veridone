@@ -76,6 +76,12 @@ Packets are signed with an Ed25519 key that the workspace creates on first use a
 
 **Control:** retiring takes the anti-CSRF token and the definition hash the operator saw, and requires a reason. Evidence counts only under the set of checks it ran with, so the other checks need a run under the new set unless they already have one on this commit, and a capture that began before the change cannot write the older set back. With every check retired the gate stays closed. A retired check stays on record with its evidence, every packet lists it with the time and the reason, and a restore never retires a check the workspace holds. Nothing imported can retire a check. Choosing the policy stays the operator's call: VeriDone records a retirement and leaves the judgment to whoever reads the packet.
 
+### Removing a record to pass a gate
+
+**Threat:** a repository, root, or work item is removed so that a work item can be accepted without its evidence, or so that a decision disappears from the record.
+
+**Control:** removing takes the anti-CSRF token and requires a reason. A removed repository closes the gate of the work items bound to it: a plain acceptance is refused, and an override records its reason as usual. Removing the only root over a repository leaves it unreadable, with the same result. A removed work item refuses verdict requests, and a restore can only add the verdicts its backup holds. Evidence from a removed repository does not count for a work item bound elsewhere, since neither its check nor its fingerprint matches. No removal changes a verdict or evidence row, a removed work item's packet still exports and states the removal, and a restore neither removes a record the workspace holds nor brings back one it removed. A removed root or repository stays on the list of known paths that packets redact.
+
 ### Restored access
 
 **Threat:** a backup made on another machine, or by someone else, grants read access to directories on this one.

@@ -28,6 +28,7 @@ const walks = [
   ['walk:upgrade', 'UPGRADE WALK: PASS'],
   ['walk:first-workspace', 'FIRST WORKSPACE WALK: PASS'],
   ['walk:dead-ends', 'DEAD-END WALK: PASS'],
+  ['walk:removal', 'REMOVAL WALK: PASS'],
 ];
 
 async function cpuLoad() {
