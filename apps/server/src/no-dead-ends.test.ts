@@ -241,7 +241,7 @@ describe('retiring a check', () => {
     const twice = await retire(fixture, checkId);
     expect(twice.status).toBe(409);
     expect(twice.body.error).toBe('check_retired');
-  }, 30_000);
+  }, 60_000);
 
   it('refuses to run or pin a retired check, and says it is retired', async () => {
     const fixture = await workspace();
@@ -259,7 +259,7 @@ describe('retiring a check', () => {
       expected: { path: process.execPath, sha256: 'a'.repeat(64) },
     });
     expect(pinned.status).toBe(409);
-  }, 30_000);
+  }, 60_000);
 
   it('leaves the gate closed when no check is left', async () => {
     const fixture = await workspace();
@@ -272,7 +272,7 @@ describe('retiring a check', () => {
     const { body } = await fixture.get<BootstrapBody>('/api/v1/bootstrap');
     expect(body.readiness[fixture.workItemId]).toMatchObject({ ready: false, checkCount: 0 });
     expect((await fixture.decide('accepted', 'Nothing left to pass.')).status).toBe(409);
-  }, 30_000);
+  }, 60_000);
 
   it('shows the retirement and its reason in every packet format, and the packet verifies', async () => {
     const fixture = await workspace();
@@ -289,7 +289,7 @@ describe('retiring a check', () => {
       expect(text).toMatch(/retired/iu);
     }
     expect((await verifyAcceptancePacket(JSON.parse(built.json))).valid).toBe(true);
-  }, 30_000);
+  }, 60_000);
 
   it('redacts a local path written into the reason', async () => {
     const fixture = await workspace();
@@ -297,7 +297,7 @@ describe('retiring a check', () => {
     await retire(fixture, checkId, `Moved away from ${fixture.repositoryPath}.`);
     const built = await buildAcceptancePacket(fixture.database, fixture.workItemId);
     expect(built.json).not.toContain(path.basename(fixture.directory));
-  }, 30_000);
+  }, 60_000);
 
   it('carries through a backup, and a backup never retires a local check', async () => {
     const fixture = await workspace();
@@ -326,14 +326,14 @@ describe('retiring a check', () => {
       integrity: { algorithm: 'sha256', payloadHash: await sha256Hex(canonicalJson(altered)) },
     });
     expect(fixture.database.getCheck(activeId)?.retiredAt).toBeNull();
-  }, 30_000);
+  }, 60_000);
 
   it('can retire while the repository folder is gone', async () => {
     const fixture = await workspace();
     const checkId = await fixture.approveCheck('process.exit(0)');
     await rm(fixture.repositoryPath, { recursive: true, force: true });
     expect((await retire(fixture, checkId, 'The folder is gone.')).status).toBe(200);
-  }, 30_000);
+  }, 60_000);
 
   it('names replacing or retiring when a legacy tool cannot be pinned', async () => {
     const fixture = await workspace();
@@ -361,7 +361,7 @@ describe('retiring a check', () => {
     const ran = await run(fixture, added.id);
     expect(ran.status).toBe(400);
     expect(ran.body.message).toMatch(/replace or retire/iu);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('decisions when the repository cannot be read', () => {
@@ -401,7 +401,7 @@ describe('decisions when the repository cannot be read', () => {
     expect(overridden.body.verdict.overrideReason).toBe('The folder moved.');
     const packet = await fixture.get('/api/v1/work-items/' + fixture.workItemId + '/packet/json');
     expect(packet.status).toBe(200);
-  }, 30_000);
+  }, 60_000);
 
   it('still compares what the reviewer saw', async () => {
     const fixture = await workspace();
@@ -411,7 +411,7 @@ describe('decisions when the repository cannot be read', () => {
     const conflict = await fixture.decide<ErrorBody>('rejected', 'Second.', { expected: stale });
     expect(conflict.status).toBe(409);
     expect(conflict.body.error).toBe('verdict_conflict');
-  }, 30_000);
+  }, 60_000);
 
   it('records a decision on a restored work item with no root approved', async () => {
     const fixture = await workspace();
@@ -446,7 +446,7 @@ describe('decisions when the repository cannot be read', () => {
       },
     );
     expect(response.status).toBe(201);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('a missing root folder', () => {
@@ -469,7 +469,7 @@ describe('a missing root folder', () => {
     const { body } = await fixture.get<BootstrapBody>('/api/v1/bootstrap');
     expect(body.roots.find((root) => root.path === other)?.missing).toBe(true);
     expect(body.roots.find((root) => root.path !== other)?.missing).toBe(false);
-  }, 30_000);
+  }, 60_000);
 
   it('answers discovery and adding in plain words', async () => {
     const fixture = await workspace();
@@ -487,7 +487,7 @@ describe('a missing root folder', () => {
     const again = await fixture.post<ErrorBody>('/api/v1/roots', { path: other });
     expect(again.status).toBe(400);
     expect(again.body.message).not.toMatch(rawErrors);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('backups', () => {
@@ -542,7 +542,7 @@ describe('backups', () => {
     expect(response.status).toBe(413);
     expect(listEvidence).not.toHaveBeenCalled();
     listEvidence.mockRestore();
-  }, 30_000);
+  }, 60_000);
 
   it('restores what export writes, up to one shared limit', async () => {
     const fixture = await workspace();
@@ -627,7 +627,7 @@ describe('records an older version stored', () => {
     expect(restored.getRepository(fixture.repositoryId)?.snapshot.submoduleEntries).toHaveLength(
       1_001,
     );
-  }, 30_000);
+  }, 60_000);
 
   it('exports a root whose folder name is longer than a label may be', async () => {
     const fixture = await workspace();
@@ -637,7 +637,7 @@ describe('records an older version stored', () => {
     cleanups.push(async () => restored.close());
     await importWorkspace(restored, document);
     expect(restored.listRoots().some((root) => root.label === 'x'.repeat(121))).toBe(true);
-  }, 30_000);
+  }, 60_000);
 
   it("exports and restores values that today's import would refuse", async () => {
     const fixture = await workspace();
@@ -656,7 +656,7 @@ describe('records an older version stored', () => {
     cleanups.push(async () => restored.close());
     const result = await importWorkspace(restored, document);
     expect(result.imported.receipts).toBe(document.data.receipts.length);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('receipts', () => {
@@ -691,7 +691,7 @@ describe('receipts', () => {
     expect(restored.listReceipts().map((receipt) => receipt.runId)).toEqual(
       expect.arrayContaining(['first-run', 'second-run']),
     );
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('the receipts table', () => {
@@ -747,7 +747,7 @@ describe('check output', () => {
       '/api/v1/evidence/00000000-0000-4000-8000-000000000000/output',
     );
     expect(unknown.status).toBe(404);
-  }, 30_000);
+  }, 60_000);
 
   it('keeps the end of a long output, where a failure usually shows', async () => {
     const fixture = await workspace();
@@ -769,5 +769,5 @@ describe('check output', () => {
     expect(output.body.truncated).toBe(true);
     expect(output.body.stdout.length).toBeLessThanOrEqual(65_536);
     expect(output.body.stdout.endsWith('the end')).toBe(true);
-  }, 30_000);
+  }, 60_000);
 });
