@@ -34,7 +34,7 @@ export function DefaultContractDialog({ onClose }: { onClose: () => void }) {
         <p className="dialog-intro">
           This is the contract VeriDone ships. You approve the commands that count as checks for
           each repository. Acceptance stays locked while any of them has not passed on the current
-          code.
+          code. Overriding the lock takes a written reason.
         </p>
         <div className="explorer-list">
           <article>
