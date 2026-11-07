@@ -53,7 +53,7 @@ This review followed the local JavaScript/TypeScript and React security specific
 - Minimal check environment, redaction, tool version, exit code, and before/after mutation classification: `apps/server/src/check-runner.ts:25-39`, `apps/server/src/check-runner.ts:74-287`.
 - Full workspace schema/hash validation before a single import transaction: `apps/server/src/workspace.ts:364-438`.
 - Frontend audit found no `dangerouslySetInnerHTML`, DOM HTML sink, string-to-code execution, dynamic script, postMessage, auth-token storage, or third-party remote script.
-- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:69-73`, `apps/web/src/App.tsx:214-217`.
+- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:72-76`, `apps/web/src/App.tsx:217-220`.
 
 ## Residual, documented boundaries
 
