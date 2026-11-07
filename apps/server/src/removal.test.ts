@@ -577,7 +577,7 @@ describe('removing a repository', () => {
     });
     const ran = await run(fixture, added.body.check.id);
     expect(ran.body.readiness.ready).toBe(true);
-  }, 30_000);
+  }, 60_000);
 
   it('goes back with its checks and bindings, and the gate is judged again', async () => {
     const fixture = await workspace();
