@@ -15,7 +15,7 @@ Browser
           -> export renderer
 ```
 
-The public deployment runs the same client and domain behavior against a clearly labeled synthetic workspace. Filesystem access and command execution are absent in hosted demo mode.
+The public deployment runs the same client and domain behavior against a clearly labeled synthetic workspace. Filesystem access, command execution, and API requests are absent in hosted demo mode.
 
 ## Packages
 
