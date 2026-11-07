@@ -98,11 +98,21 @@ function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
   }));
 }
 
+/** Where a Markdown reader or a text editor can start a new line. */
+const lineEnd = /\r\n|[\n\v\f\r\x85\p{Zl}\p{Zp}]/u;
+
 /**
  * A text on one line: a line break in it could otherwise pass for a line of the packet, such as a second verdict.
  * Nothing else in it changes, so two spaces in a row stay.
  */
-const oneLine: Sanitize = (value) => value.replace(/[\n\v\f\r\x85\p{Zl}\p{Zp}]+/gu, ' ');
+const oneLine: Sanitize = (value) => value.split(lineEnd).join(' ');
+
+/** Free text as a Markdown quotation: each line is marked, so a heading or a list in it stays inside the quote. */
+const quotation = (text: string) =>
+  text
+    .split(lineEnd)
+    .map((line) => (line ? `> ${line}` : '>'))
+    .join('\n');
 
 /** A value with every string in it, object keys included, passed through `sanitize`. */
 function sanitizeDeep(value: unknown, sanitize: Sanitize): unknown {
@@ -451,9 +461,9 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
  */
 function commandLine(check: { executable: string; args: string[] }): string {
   const quoted = check.args.map((arg) =>
-    /[\s"'\\\x85]/u.test(arg)
+    /[\s"'\\]/u.test(arg) || lineEnd.test(arg)
       ? JSON.stringify(arg).replace(
-          /[\x85\p{Zl}\p{Zp}]/gu,
+          new RegExp(lineEnd, 'gu'),
           (mark) => `\\u${mark.charCodeAt(0).toString(16).padStart(4, '0')}`,
         )
       : arg,
@@ -587,7 +597,7 @@ function renderMarkdown(view: PacketView): string {
 
 ### Claim
 
-${escapeMarkdown(view.claim)}
+${quotation(escapeMarkdown(view.claim))}
 
 ### Contract clauses
 

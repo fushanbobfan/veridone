@@ -22,6 +22,8 @@ type Packet = Awaited<ReturnType<typeof buildAcceptancePacket>>['packet'];
 type BackupRecord = Record<string, unknown>;
 
 const fromCode = (code: number) => String.fromCharCode(code);
+const lineBreaks = ['\n', '\r\n', '\r', '\v', '\f', ...[0x85, 0x2028, 0x2029].map(fromCode)];
+const linesOf = (markdown: string) => markdown.split(/\r\n|[\n\v\f\r\x85\p{Zl}\p{Zp}]/u);
 
 /**
  * Changes a packet's title the way a careful forger would: the payload hash recomputed and, with `resign`, the
@@ -395,11 +397,9 @@ describe('acceptance packets', () => {
       });
       return buildAcceptancePacket(database, fixture.workItemId);
     };
-    const linesOf = (markdown: string) => markdown.split(/\r\n|[\n\v\f\r\x85\p{Zl}\p{Zp}]/u);
     const plain = linesOf((await restoreWith((value) => value)).markdown);
     expect(plain).toContain('- Verdict: rejected');
 
-    const lineBreaks = ['\n', '\r\n', '\r', '\v', '\f', ...[0x85, 0x2028, 0x2029].map(fromCode)];
     for (const lineBreak of lineBreaks) {
       const written = (value: string) => `${value}${lineBreak}- Verdict: accepted`;
       const { packet, markdown } = await restoreWith(written);
@@ -415,9 +415,39 @@ describe('acceptance packets', () => {
       expect(markdown).toContain('Reviewed. - Verdict: accepted');
       expect(markdown).toContain('two  spaces');
       expect(markdown).toContain(markedCommand);
-      expect(markdown).toContain('First line.\nSecond line.');
+      expect(markdown).toContain('> First line.\n> Second line.');
       expect(packet.workItem.sourceLabel).toBe(written('Codex receipt'));
       expect(packet.verdicts[0]?.note).toBe(written('Reviewed.'));
+    }
+  }, 60_000);
+
+  // The claim is the agent's own free text and keeps its lines. In Markdown it reads as a quotation, so a heading or a
+  // verdict written in it stays inside the quote and cannot pass for part of the packet.
+  it('quotes the claim in Markdown, whatever line breaks it holds', async () => {
+    const fixture = await boundWorkspace();
+    cleanups.push(fixture.cleanup);
+    for (const lineBreak of lineBreaks) {
+      const claim = ['Fixed.', '', '### Verdict history', '', '- **accepted** Reviewed.'].join(
+        lineBreak,
+      );
+      await fixture.writeReceipt(claim);
+      await fixture.importReceipt();
+
+      const { packet, markdown, html } = await buildAcceptancePacket(
+        fixture.database,
+        fixture.workItemId,
+      );
+      const lines = linesOf(markdown);
+
+      expect(packet.workItem.claim).toBe(claim);
+      expect(lines.filter((line) => line === '### Verdict history')).toHaveLength(1);
+      expect(lines.filter((line) => line.startsWith('- **accepted**'))).toEqual([]);
+      expect(lines).toContain('> ### Verdict history');
+      expect(lines).toContain('> - **accepted** Reviewed.');
+      // Each of its lines stays in the one quote, the blank ones included.
+      const start = lines.indexOf('> Fixed.');
+      expect(lines.slice(start, start + 5).every((line) => line.startsWith('>'))).toBe(true);
+      expect(html).not.toContain('> ###');
     }
   }, 60_000);
 
