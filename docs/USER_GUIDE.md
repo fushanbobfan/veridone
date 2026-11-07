@@ -88,4 +88,4 @@ A packet states the removal of its work item and of the repository that work ite
 - Dialog focus is trapped and returns to the trigger on close.
 - Escape closes dialogs.
 - Every required decision remains available in the 360 px decision dock.
-- Theme cycles through system, light, and dark; reduced-motion system preferences disable nonessential animation.
+- Each press of the theme button switches between light and dark; when it lands on your device's theme, the page follows the device's setting again. Reduced-motion system preferences disable nonessential animation.

@@ -74,6 +74,7 @@ function RunOutput({
 export function ReviewDetail({
   item,
   decision,
+  decisionInBar = false,
   evidenceActionLabel,
   evidenceActionBusy = false,
   onBack,
@@ -92,6 +93,8 @@ export function ReviewDetail({
 }: {
   item: ReviewItem;
   decision: string | null;
+  /** Shows the decision in the decision bar too, for a decision that opens no dialog: the rail can be off screen. */
+  decisionInBar?: boolean;
   evidenceActionLabel?: string;
   evidenceActionBusy?: boolean;
   onBack: () => void;
@@ -340,7 +343,10 @@ export function ReviewDetail({
           <footer className="decision-dock">
             <div>
               <span className="section-label">Your decision</span>
-              <strong>{ready ? 'Evidence is current' : 'Acceptance is locked'}</strong>
+              <strong role="status">
+                {(decisionInBar && decision) ||
+                  (ready ? 'Evidence is current' : 'Acceptance is locked')}
+              </strong>
               <small>
                 {ready
                   ? 'Review the evidence, then record a human verdict.'

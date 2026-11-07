@@ -594,17 +594,11 @@ export function App() {
           reviewCount={reviews.length}
           serviceMode={bootstrap?.mode ?? 'demo'}
           themePreference={themePreference}
-          onToggleTheme={() =>
-            setThemePreference((current) =>
-              current === 'system'
-                ? theme === 'dark'
-                  ? 'light'
-                  : 'dark'
-                : current === 'light'
-                  ? 'dark'
-                  : 'system',
-            )
-          }
+          onToggleTheme={() => {
+            // Every press changes what the page shows; landing on the device's theme follows the device again.
+            const next = theme === 'dark' ? 'light' : 'dark';
+            setThemePreference(next === systemTheme ? 'system' : next);
+          }}
           {...(bootstrap?.mode === 'local'
             ? {
                 onOpenWorkspace: () => setWorkspaceDialogOpen(true),
@@ -639,6 +633,8 @@ export function App() {
               ? verdictLabel(localVerdict, localRepository?.snapshot.fingerprint)
               : (decisions[selected.id] ?? null)
           }
+          // A decision on a page with no workspace opens no dialog, so the decision bar says it.
+          decisionInBar={!isLocal}
           {...(evidenceActionLabel ? { evidenceActionLabel } : {})}
           evidenceActionBusy={actionBusy}
           {...(activeRunId ? { onCancelEvidence: cancelEvidenceAction } : {})}
