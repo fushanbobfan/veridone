@@ -52,6 +52,28 @@ const result = {
   },
 };
 
+describe('while the service is not answering', () => {
+  const props = {
+    open: true,
+    bootstrap,
+    onClose: vi.fn(),
+    onImported: vi.fn(async () => undefined),
+  };
+  const links = () => screen.queryAllByRole('link').map((link) => link.getAttribute('href'));
+
+  it('holds back its downloads and says why', () => {
+    render(<WorkspaceDialog {...props} lastDataReceived="Nov 7, 10:46 AM" />);
+    expect(screen.getByRole('status').textContent).toContain('Nov 7, 10:46 AM');
+    expect(links()).toEqual([]);
+  });
+
+  it('offers them while the service answers', () => {
+    render(<WorkspaceDialog {...props} />);
+    expect(screen.getByRole('status').textContent).toBe('');
+    expect(links()).toEqual(['/api/v1/workspace/export', '/api/v1/workspace/signing-key']);
+  });
+});
+
 describe('workspace restore', () => {
   it('shows what a backup adds and restores it only once confirmed', async () => {
     const user = userEvent.setup();

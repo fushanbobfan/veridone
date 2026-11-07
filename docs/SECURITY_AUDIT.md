@@ -19,7 +19,7 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 ### VDS-002 — Medium — workspace body limit trusted a request header
 
-- **Location:** `apps/server/src/app.ts:400-430`
+- **Location:** `apps/server/src/app.ts:414-444`
 - **Evidence:** the import route uses Hono's streaming `bodyLimit` middleware before JSON parsing, at the 500 MB limit export also applies.
 - **Impact before fix:** a chunked request without `Content-Length` could force an unexpectedly large allocation.
 - **Fix:** enforce the limit for declared and streamed body sizes and return 413 before schema/import work.
@@ -47,13 +47,13 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 ## Verified controls
 
-- Origin allowlist and per-process anti-CSRF token: `apps/server/src/app.ts:281-308`.
+- Origin allowlist and per-process anti-CSRF token: `apps/server/src/app.ts:288-322`.
 - Canonical approved-root and symlink boundary: `packages/adapters/src/path-boundary.ts:22-53`.
 - Direct spawn with `shell: false`: `packages/adapters/src/process.ts:35-42`.
 - Minimal check environment, redaction, tool version, exit code, and before/after mutation classification: `apps/server/src/check-runner.ts:25-39`, `apps/server/src/check-runner.ts:74-287`.
 - Full workspace schema/hash validation before a single import transaction: `apps/server/src/workspace.ts:364-438`.
 - Frontend audit found no `dangerouslySetInnerHTML`, DOM HTML sink, string-to-code execution, dynamic script, postMessage, auth-token storage, or third-party remote script.
-- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:73-77`, `apps/web/src/App.tsx:218-221`.
+- `localStorage` contains only an allowlisted theme preference: `apps/web/src/App.tsx:74-78`, `apps/web/src/App.tsx:257-260`.
 
 ## Residual, documented boundaries
 

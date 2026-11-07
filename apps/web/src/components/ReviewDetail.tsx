@@ -76,6 +76,7 @@ export function ReviewDetail({
   decision,
   evidenceActionLabel,
   evidenceActionBusy = false,
+  lastDataReceived,
   onBack,
   onEvidenceAction,
   onCancelEvidence,
@@ -94,6 +95,8 @@ export function ReviewDetail({
   decision: string | null;
   evidenceActionLabel?: string;
   evidenceActionBusy?: boolean;
+  /** When this data arrived, given while the service is not answering; verdicts, runs and exports are off meanwhile. */
+  lastDataReceived?: string;
   onBack: () => void;
   onEvidenceAction?: () => void;
   onCancelEvidence?: () => void;
@@ -112,6 +115,8 @@ export function ReviewDetail({
 }) {
   const ready = item.gatesReady;
   const percentage = Math.round((item.requiredSatisfied / item.requiredTotal) * 100);
+  const paused = lastDataReceived !== undefined;
+  const asOf = paused ? ` as of ${lastDataReceived}` : '';
 
   return (
     <main className="review-detail" id="review-detail" tabIndex={-1}>
@@ -154,7 +159,7 @@ export function ReviewDetail({
                 Decision readiness
               </span>
               <strong>
-                {item.requiredSatisfied} of {item.requiredTotal} required gates are current
+                {item.requiredSatisfied} of {item.requiredTotal} required gates are current{asOf}
               </strong>
               <div
                 className="progress-track"
@@ -215,17 +220,32 @@ export function ReviewDetail({
                     </button>
                   )}
                   {onChangeRepository && (
-                    <button className="text-button" type="button" onClick={onChangeRepository}>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={onChangeRepository}
+                      disabled={paused}
+                    >
                       Change repository <ArrowUpRight aria-hidden="true" size={14} />
                     </button>
                   )}
                   {onExport && (
-                    <button className="text-button" type="button" onClick={onExport}>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={onExport}
+                      disabled={paused}
+                    >
                       Export packet <ArrowUpRight aria-hidden="true" size={14} />
                     </button>
                   )}
                   {onRemove && (
-                    <button className="text-button" type="button" onClick={onRemove}>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={onRemove}
+                      disabled={paused}
+                    >
                       Remove work item <ArrowUpRight aria-hidden="true" size={14} />
                     </button>
                   )}
@@ -288,7 +308,9 @@ export function ReviewDetail({
                   <span className="rail-node">2</span>
                   <div>
                     <small>Independent evidence</small>
-                    <strong>{ready ? 'All required evidence is current' : item.reason}</strong>
+                    <strong>
+                      {ready ? `All required evidence is current${asOf}` : item.reason}
+                    </strong>
                     <span>
                       A claim can explain intent. It cannot satisfy a required gate by itself.
                     </span>
@@ -297,7 +319,7 @@ export function ReviewDetail({
                         className="run-button"
                         type="button"
                         onClick={evidenceActionBusy ? onCancelEvidence : onEvidenceAction}
-                        disabled={evidenceActionBusy && !onCancelEvidence}
+                        disabled={evidenceActionBusy ? !onCancelEvidence : paused}
                       >
                         <Play aria-hidden="true" size={14} fill="currentColor" />
                         {evidenceActionBusy && onCancelEvidence
@@ -314,7 +336,12 @@ export function ReviewDetail({
                   <div>
                     <small>Human verdict</small>
                     <strong>
-                      {decision ?? (ready ? 'Ready for your decision' : 'Locked by open gates')}
+                      {decision ??
+                        (paused
+                          ? 'Waiting for the local service'
+                          : ready
+                            ? 'Ready for your decision'
+                            : 'Locked by open gates')}
                     </strong>
                     <span>Automated checks never sign off on your behalf.</span>
                   </div>
@@ -340,26 +367,49 @@ export function ReviewDetail({
           <footer className="decision-dock">
             <div>
               <span className="section-label">Your decision</span>
-              <strong>{ready ? 'Evidence is current' : 'Acceptance is locked'}</strong>
+              <strong>
+                {paused
+                  ? 'Decisions wait for the local service'
+                  : ready
+                    ? 'Evidence is current'
+                    : 'Acceptance is locked'}
+              </strong>
               <small>
-                {ready
-                  ? 'Review the evidence, then record a human verdict.'
-                  : 'Re-run or resolve every required gate before accepting.'}
+                {paused
+                  ? 'The service records every verdict, and it is not answering.'
+                  : ready
+                    ? 'Review the evidence, then record a human verdict.'
+                    : 'Re-run or resolve every required gate before accepting.'}
               </small>
             </div>
             <div className="decision-actions">
               {!ready && onOverride && (
-                <button type="button" className="override-action" onClick={onOverride}>
+                <button
+                  type="button"
+                  className="override-action"
+                  onClick={onOverride}
+                  disabled={paused}
+                >
                   Override lock
                 </button>
               )}
-              <button type="button" className="reject-action" onClick={onReject}>
+              <button type="button" className="reject-action" onClick={onReject} disabled={paused}>
                 Reject
               </button>
-              <button type="button" className="secondary-action" onClick={onRequestChanges}>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={onRequestChanges}
+                disabled={paused}
+              >
                 Request changes
               </button>
-              <button type="button" className="primary-action" disabled={!ready} onClick={onAccept}>
+              <button
+                type="button"
+                className="primary-action"
+                disabled={!ready || paused}
+                onClick={onAccept}
+              >
                 <Check aria-hidden="true" size={16} />
                 Accept work
               </button>
