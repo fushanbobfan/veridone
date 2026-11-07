@@ -96,7 +96,7 @@ export const demoReviews: ReviewItem[] = [
       {
         id: 'scope',
         title: 'Changed files remain inside declared scope',
-        detail: '11 changed files match the acceptance contract',
+        detail: '11 changed files match the declared scope',
         state: 'passed',
         evidenceLabel: 'Scope inspection',
       },

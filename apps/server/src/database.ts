@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
-import { canonicalJson, type RepositorySnapshot } from '@veridone/core';
+import { canonicalJson, defaultContract, type RepositorySnapshot } from '@veridone/core';
 import type { ReceiptPreview } from '@veridone/adapters';
 
 const migrationOne = `
@@ -558,16 +558,13 @@ export class VeriDoneDatabase {
       .prepare(
         `INSERT OR IGNORE INTO acceptance_contracts
           (id, version, title, criteria_json, created_at)
-         VALUES ('default', 'default-v1', 'Default acceptance contract', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
-        JSON.stringify([
-          {
-            id: 'approved-checks',
-            title: 'Every approved check has fresh passing evidence',
-            required: true,
-          },
-        ]),
+        defaultContract.id,
+        defaultContract.version,
+        defaultContract.title,
+        JSON.stringify(defaultContract.criteria),
         new Date().toISOString(),
       );
   }

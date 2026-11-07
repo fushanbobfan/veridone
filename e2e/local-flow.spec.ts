@@ -109,6 +109,12 @@ test('onboards, verifies, decides, and exports without trusting the claim', asyn
   await expectNoWcagViolations(page);
   await explorer.getByRole('button', { name: 'Close workspace explorer' }).click();
 
+  // A page with a workspace opens the explorer on its contracts.
+  await page.getByRole('button', { name: 'View contract' }).click();
+  await expect(explorer.getByRole('tab', { name: 'Contracts', selected: true })).toBeVisible();
+  await expect(explorer.getByText('Every approved check has fresh passing evidence')).toBeVisible();
+  await explorer.getByRole('button', { name: 'Close workspace explorer' }).click();
+
   await page.getByRole('button', { name: 'Run approved checks' }).click();
 
   await expect(page.getByText('All required evidence is current')).toBeVisible({

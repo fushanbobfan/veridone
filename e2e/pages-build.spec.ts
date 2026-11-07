@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import { expectNoWcagViolations } from './accessibility.js';
+
 // The public demo is a static site with no service behind it, so an open page has nothing to ask for and nothing to log.
 test('the public demo makes no data request and logs no console error', async ({ page }) => {
   const dataRequests: string[] = [];
@@ -37,4 +39,24 @@ test('the public demo makes no data request and logs no console error', async ({
   await expect
     .poll(() => ({ dataRequests, consoleErrors }))
     .toEqual({ dataRequests: ['/veridone/favicon.svg?control'], consoleErrors: ['control'] });
+});
+
+test('the contract opens on the public demo and closes back to its button', async ({ page }) => {
+  await page.goto('./');
+  const trigger = page.getByRole('button', { name: 'View contract' });
+
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: 'Acceptance contract' });
+  await expect(dialog.getByText('Every approved check has fresh passing evidence')).toBeVisible();
+  await expectNoWcagViolations(page);
+  await dialog.getByRole('button', { name: 'Close contract' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  // WebKit gives a clicked button no focus, so the way back to the button is tested from the keyboard.
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByRole('button', { name: 'Close contract' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 });

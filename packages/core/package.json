@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
     "./scope": "./src/scope.ts"
   },
   "scripts": {
