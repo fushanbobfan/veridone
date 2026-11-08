@@ -18,6 +18,7 @@ export function ReviewInbox({
   query,
   sort,
   dataLabel,
+  updatedLabel,
   sourceIssues,
   onAddSource,
   onFilter,
@@ -31,6 +32,8 @@ export function ReviewInbox({
   query: string;
   sort: 'priority' | 'newest' | 'repository';
   dataLabel: string;
+  /** When the data arrived; null for data no service sent. */
+  updatedLabel: string | null;
   sourceIssues: Array<{ repositoryId: string; message: string }>;
   onAddSource?: () => void;
   onFilter: (filter: 'all' | ReviewState) => void;
@@ -66,9 +69,13 @@ export function ReviewInbox({
     <section className="inbox-panel" id="inbox" aria-labelledby="inbox-title">
       <header className="inbox-header">
         <div className="eyebrow-line">
-          <span>{dataLabel}</span>
-          <span aria-hidden="true">·</span>
-          <span>Updated now</span>
+          <span role="status">{dataLabel}</span>
+          {updatedLabel && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{updatedLabel}</span>
+            </>
+          )}
         </div>
         <div className="inbox-title-line">
           <h1 id="inbox-title" tabIndex={-1}>

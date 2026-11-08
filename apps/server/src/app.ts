@@ -309,7 +309,14 @@ export function createApp(options: AppOptions): Hono {
   app.use('/api/v1/*', async (context, next) => {
     if (context.req.method === 'GET' || context.req.method === 'HEAD') return next();
     if (context.req.header('X-VeriDone-CSRF') !== csrfToken) {
-      return context.json({ error: 'csrf_token_invalid' }, 403);
+      return context.json(
+        {
+          error: 'csrf_token_invalid',
+          message:
+            'This page holds an out-of-date token, as happens after the service restarts. Try again in a few seconds.',
+        },
+        403,
+      );
     }
     return next();
   });

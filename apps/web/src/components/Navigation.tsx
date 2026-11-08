@@ -18,6 +18,7 @@ export function Navigation({
   theme,
   reviewCount,
   serviceMode,
+  serviceStopped,
   themePreference,
   onToggleTheme,
   onOpenWorkspace,
@@ -26,6 +27,7 @@ export function Navigation({
   theme: 'light' | 'dark';
   reviewCount: number;
   serviceMode: 'local' | 'demo';
+  serviceStopped: boolean;
   themePreference: 'light' | 'dark' | 'system';
   onToggleTheme: () => void;
   onOpenWorkspace?: () => void;
@@ -108,10 +110,16 @@ export function Navigation({
 
       <div className="navigation-footer">
         <div className="local-status">
-          <span className="local-dot" aria-hidden="true" />
+          <span className={serviceStopped ? 'local-dot stopped' : 'local-dot'} aria-hidden="true" />
           <span>
             {serviceMode === 'local' ? 'Local service' : 'Demo workspace'}
-            <small>{serviceMode === 'local' ? 'Loopback only' : 'Synthetic data'}</small>
+            <small>
+              {serviceStopped
+                ? 'Not answering'
+                : serviceMode === 'local'
+                  ? 'Loopback only'
+                  : 'Synthetic data'}
+            </small>
           </span>
         </div>
         <button
