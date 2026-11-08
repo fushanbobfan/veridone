@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export interface ProcessRequest {
   executable: string;
@@ -26,6 +27,43 @@ export interface ProcessResult {
   durationMs: number;
 }
 
+// taskkill reads the process tree through WMI, and a busy Windows machine cancels such queries in bursts of up to a
+// few seconds. A failed try is repeated after each of these waits; after the last one, the direct child alone is ended.
+const treeKillRetryDelaysMs = [1_000, 2_000];
+// A taskkill try still running after this long counts as failed; with about a thousand processes running, one took 3 to
+// 4 s to succeed.
+const treeKillTryLimitMs = 10_000;
+// A process that outlives the kill can keep the output pipes open, so the run settles at most this long after the kill.
+const pipeCloseGraceMs = 2_000;
+
+/** Runs `taskkill /t /f` on a process tree and resolves whether it reported success within its time limit. */
+function taskkillTree(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let killer: ChildProcess;
+    try {
+      killer = spawn('taskkill.exe', ['/pid', String(pid), '/t', '/f'], {
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      // Node emits 'error' when the file is missing or inaccessible or resources run short, and throws for any other
+      // failure.
+      resolve(false);
+      return;
+    }
+    const limit = setTimeout(() => killer.kill(), treeKillTryLimitMs);
+    limit.unref();
+    const done = (succeeded: boolean) => {
+      clearTimeout(limit);
+      resolve(succeeded);
+    };
+    killer.once('error', () => done(false));
+    killer.once('close', (code) => done(code === 0));
+    killer.unref();
+  });
+}
+
 export async function runBoundedProcess(request: ProcessRequest): Promise<ProcessResult> {
   const timeoutMs = request.timeoutMs ?? 30_000;
   const maxOutputBytes = request.maxOutputBytes ?? 512_000;
@@ -36,6 +74,7 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
     let stderr = Buffer.alloc(0);
     let state: ProcessResultState = 'completed';
     let settled = false;
+    let pipeTimer: NodeJS.Timeout | undefined;
 
     const child = spawn(request.executable, request.args, {
       cwd: request.cwd,
@@ -46,30 +85,43 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
+    // Once Node has seen the direct child exit, its pid can belong to another process.
+    const childRunning = () => child.exitCode === null && child.signalCode === null;
 
-    const terminateProcessTree = () => {
-      if (child.pid === undefined) return;
+    const terminateProcessTree = async () => {
+      const pid = child.pid;
+      if (pid === undefined) return;
       if (process.platform === 'win32') {
-        const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
-          shell: false,
-          stdio: 'ignore',
-          windowsHide: true,
-        });
-        killer.once('error', () => child.kill());
-        killer.unref();
-        return;
+        for (let attempt = 0; childRunning(); attempt += 1) {
+          if (await taskkillTree(pid)) break;
+          const wait = treeKillRetryDelaysMs[attempt];
+          if (wait === undefined) {
+            if (childRunning()) child.kill();
+            break;
+          }
+          await delay(wait, undefined, { ref: false });
+        }
+      } else {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          child.kill('SIGKILL');
+        }
       }
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        child.kill('SIGKILL');
-      }
+      if (settled) return;
+      pipeTimer = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(child.exitCode);
+      }, pipeCloseGraceMs);
+      pipeTimer.unref();
     };
 
     const finish = (exitCode: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(pipeTimer);
       request.signal?.removeEventListener('abort', abort);
       resolve({
         state,
@@ -89,13 +141,15 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
 
       if (accepted.length < chunk.length && state === 'completed') {
         state = 'output-capped';
-        terminateProcessTree();
+        void terminateProcessTree();
       }
     };
 
     child.stdout.on('data', (chunk: Buffer) => append('stdout', chunk));
     child.stderr.on('data', (chunk: Buffer) => append('stderr', chunk));
     child.on('error', (error) => {
+      // A failed kill arrives here too; the run keeps its state and settles after the kill.
+      if ((error as NodeJS.ErrnoException).syscall === 'kill') return;
       state = 'spawn-error';
       stderr = Buffer.from(error.message);
       finish(null);
@@ -105,7 +159,7 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
     const abort = () => {
       if (state !== 'completed') return;
       state = 'cancelled';
-      terminateProcessTree();
+      void terminateProcessTree();
     };
     request.signal?.addEventListener('abort', abort, { once: true });
     if (request.signal?.aborted) abort();
@@ -113,7 +167,7 @@ export async function runBoundedProcess(request: ProcessRequest): Promise<Proces
     const timer = setTimeout(() => {
       if (state !== 'completed') return;
       state = 'timed-out';
-      terminateProcessTree();
+      void terminateProcessTree();
     }, timeoutMs);
     timer.unref();
   });
