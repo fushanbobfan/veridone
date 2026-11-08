@@ -3,10 +3,12 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect as baseExpect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 import { expectNoWcagViolations } from './accessibility.js';
 
+// Many assertions here wait for a bootstrap, which has taken more than the default 10 s.
+const expect = baseExpect.configure({ timeout: 25_000 });
 const execFileAsync = promisify(execFile);
 const fixtureRoot = path.resolve('output/e2e-verdict-fixture');
 
