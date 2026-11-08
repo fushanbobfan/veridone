@@ -133,7 +133,7 @@ async function plannedRun(
 function start(
   run: PlannedRun,
   shape: 'plain' | 'flood' | 'grandchild' | 'orphan',
-  limits: Pick<ProcessRequest, 'timeoutMs' | 'maxOutputBytes' | 'signal'>,
+  limits: Pick<ProcessRequest, 'timeoutMs' | 'maxOutputBytes' | 'signal' | 'console'>,
 ) {
   return runBoundedProcess({
     executable: process.execPath,
@@ -182,6 +182,8 @@ describe('ending a process tree', () => {
       const capped = await plannedRun(['fail', 'fail', 'fail']);
       const hung = await plannedRun(['hang', 'fail', 'fail']);
       const unkillable = await plannedRun(['fail', 'fail', 'fail'], true);
+      // Git commands start without a console.
+      const consoleless = await plannedRun(['fail', 'fail', 'fail']);
       const controller = new AbortController();
       setTimeout(() => controller.abort(), 100).unref();
 
@@ -191,6 +193,7 @@ describe('ending a process tree', () => {
         start(capped, 'flood', { maxOutputBytes: 100 }),
         start(hung, 'plain', { timeoutMs: 100 }),
         start(unkillable, 'plain', { timeoutMs: 100 }),
+        start(consoleless, 'plain', { timeoutMs: 100, console: false }),
       ]);
 
       expect(results.map((result) => result.state)).toEqual([
@@ -199,17 +202,15 @@ describe('ending a process tree', () => {
         'output-capped',
         'timed-out',
         'timed-out',
+        'timed-out',
       ]);
       expect(
-        [timedOut, cancelled, capped, hung, unkillable].map((run) => run.taskkillRuns),
-      ).toEqual([3, 3, 3, 3, 3]);
+        [timedOut, cancelled, capped, hung, unkillable, consoleless].map((run) => run.taskkillRuns),
+      ).toEqual([3, 3, 3, 3, 3, 3]);
       // After the last failed try, the direct child alone is ended through Node.
-      expect([timedOut, cancelled, capped, hung].map((run) => childOf(run).signalCode)).toEqual([
-        'SIGTERM',
-        'SIGTERM',
-        'SIGTERM',
-        'SIGTERM',
-      ]);
+      expect(
+        [timedOut, cancelled, capped, hung, consoleless].map((run) => childOf(run).signalCode),
+      ).toEqual(['SIGTERM', 'SIGTERM', 'SIGTERM', 'SIGTERM', 'SIGTERM']);
       // A failed kill keeps the run's state and output; it is not a spawn failure.
       expect(results[4]?.stderr).toBe('');
       for (const result of results) expect(result.durationMs).toBeLessThan(30_000);
@@ -221,12 +222,21 @@ describe('ending a process tree', () => {
     'tries taskkill again after a failed try and ends the whole tree',
     async () => {
       const run = await plannedRun(['fail']);
-      const result = await start(run, 'grandchild', { maxOutputBytes: 100 });
+      // Git commands start without a console.
+      const consoleless = await plannedRun(['fail']);
+      const results = await Promise.all([
+        start(run, 'grandchild', { maxOutputBytes: 100 }),
+        start(consoleless, 'grandchild', { maxOutputBytes: 100, console: false }),
+      ]);
 
-      expect(result.state).toBe('output-capped');
+      expect(results.map((result) => result.state)).toEqual(['output-capped', 'output-capped']);
       // The second try is the real taskkill; should it fail as well, a third one runs.
       expect(run.taskkillRuns).toBeGreaterThanOrEqual(2);
-      expect(isAlive(grandchildPid(result.stdout))).toBe(false);
+      expect(consoleless.taskkillRuns).toBeGreaterThanOrEqual(2);
+      expect(results.map((result) => isAlive(grandchildPid(result.stdout)))).toEqual([
+        false,
+        false,
+      ]);
     },
     30_000,
   );
