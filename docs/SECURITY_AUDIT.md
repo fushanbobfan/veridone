@@ -34,7 +34,7 @@ This review followed the local JavaScript/TypeScript and React security specific
 ### VDS-004 — Medium — bounded checks killed only the direct process
 
 - **Location:** `packages/adapters/src/process.ts:30-69`, `packages/adapters/src/process.ts:83-122`, `packages/adapters/src/process.ts:146-175`
-- **Evidence:** non-Windows checks start in a process group; timeout, cancellation, and output-cap termination kill the group. Windows uses `taskkill /t /f` without a shell, up to three times, and kills the direct child alone when every try fails. A run settles at most two seconds after the kill step, even when a process left behind still holds its output pipes.
+- **Evidence:** non-Windows checks start in a process group; timeout, cancellation, and output-cap termination kill the group. Windows uses `taskkill /t /f` without a shell, up to three times, and tries to kill the direct child alone when every try fails. A run settles at most two seconds after the kill step, even when a process left behind still holds its output pipes.
 - **Impact before fix:** a timed-out tool could leave descendant processes running.
 - **Fix:** terminate the process tree for every bounded abnormal state.
 

@@ -28,7 +28,7 @@ export interface ProcessResult {
 }
 
 // taskkill reads the process tree through WMI, and on a busy machine Windows has cancelled such queries in bursts of up
-// to about 3 s. A failed try is repeated after each of these waits; after the last one, the direct child alone is killed.
+// to about 3 s. A failed try is repeated after each of these waits, then child.kill() goes to the direct child alone.
 const treeKillRetryDelaysMs = [1_000, 2_000];
 // A taskkill try still running after this long counts as failed; with about a thousand processes running, one took 3 to
 // 4 s to succeed.
