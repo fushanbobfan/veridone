@@ -505,6 +505,7 @@ a:focus-visible {
 .review-row > strong {
   display: block;
   margin-top: 12px;
+  overflow-wrap: anywhere;
   font-size: 13px;
   font-weight: 720;
   letter-spacing: -0.018em;
@@ -613,9 +614,12 @@ a:focus-visible {
   margin: 14px 0 7px;
 }
 
+/* A word wider than this box, as in a title with no break opportunity, breaks at the box's edge, and the status beside
+   it stays in the pane. */
 .title-line h2 {
   max-width: 720px;
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: clamp(28px, 3.4vw, 48px);
   font-weight: 620;
   letter-spacing: -0.06em;
@@ -2029,7 +2033,9 @@ h1[tabindex='-1']:focus {
   }
 }
 
-@media (max-width: 860px) {
+/* From 1220 px down, the navigation, the inbox and the review need 72, 350 and 580 px: 1002 px. Below that, fractional
+   widths of a zoomed window included, the inbox and the review take turns, as on a phone. */
+@media (width < 1002px) {
   body {
     overflow: auto;
   }

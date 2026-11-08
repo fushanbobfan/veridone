@@ -74,7 +74,7 @@ async function expectSeen(locator: Locator) {
 
 async function openReview(page: Page, review: string, title: string) {
   await page.goto(`./?review=${review}`);
-  // Below 861 px the inbox comes first, and a review opens from its row.
+  // Below 1002 px the inbox comes first, and a review opens from its row.
   await page.getByRole('button', { name: new RegExp(title, 'iu') }).click();
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
 }

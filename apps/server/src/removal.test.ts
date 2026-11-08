@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { canonicalJson, sha256Hex } from '@veridone/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { acceptanceReadiness } from './check-runner.js';
 import { RemovedRecordError, VeriDoneDatabase } from './database.js';
@@ -13,11 +13,67 @@ import { buildAcceptancePacket, knownLocalPaths, verifyAcceptancePacket } from '
 import { boundWorkspace } from './test-fixtures.js';
 import { exportWorkspace, importWorkspace, type WorkspaceDocument } from './workspace.js';
 
+// A test can hold the next repository capture once it has read the repository, so that a removal lands while the
+// request that started the capture is still in it, however fast Git answers.
+const captures = vi.hoisted(() => {
+  let next: { read: () => void; finished: Promise<void> } | null = null;
+  return {
+    holdNext() {
+      let read!: () => void;
+      let release!: () => void;
+      const hasRead = new Promise<void>((resolve) => {
+        read = resolve;
+      });
+      const finished = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      next = { read, finished };
+      return { read: hasRead, release };
+    },
+    take() {
+      const held = next;
+      next = null;
+      return held;
+    },
+    holdNone() {
+      next = null;
+    },
+  };
+});
+vi.mock('@veridone/adapters', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@veridone/adapters')>();
+  const captureGitSnapshot = async (...args: Parameters<typeof actual.captureGitSnapshot>) => {
+    const held = captures.take();
+    const captured = await actual.captureGitSnapshot(...args);
+    if (held) {
+      held.read();
+      await held.finished;
+    }
+    return captured;
+  };
+  return { ...actual, captureGitSnapshot };
+});
+
+/** Waits until the held capture has read the repository, and fails at once if the request answers first. */
+async function untilRead(capture: { read: Promise<void> }, request: Promise<unknown>) {
+  const first = await Promise.race([
+    capture.read.then(() => 'read' as const),
+    request.then(
+      () => 'answered' as const,
+      () => 'answered' as const,
+    ),
+  ]);
+  if (first === 'answered')
+    throw new Error('The request answered before its capture read the repository.');
+}
+
 const execFileAsync = promisify(execFile);
 const cleanups: Array<() => Promise<void>> = [];
 const unknownId = '00000000-0000-4000-8000-000000000000';
 
 afterEach(async () => {
+  // A test that failed before its capture started leaves no hold for the next one.
+  captures.holdNone();
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
@@ -344,10 +400,12 @@ describe('removing a root', () => {
     await passingGate(fixture);
     const root = await onlyRoot(fixture);
     const expected = await fixture.expectedState();
+    const capture = captures.holdNext();
     const accepting = fixture.decide<ErrorBody>('accepted', 'Accepting.', { expected });
-    // The acceptance is reading the repository by now, under the roots it started with.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The acceptance has read the repository under the roots it started with, and has not finished.
+    await untilRead(capture, accepting);
     expect((await removeRoot(fixture, root.id)).status).toBe(200);
+    capture.release();
 
     const answered = await accepting;
     expect(answered.status).toBe(409);
@@ -623,10 +681,12 @@ describe('removing a repository', () => {
 
   it('stays removed when the removal arrives during an add of the same path', async () => {
     const fixture = await workspace();
+    const capture = captures.holdNext();
     const adding = fixture.post('/api/v1/repositories', { path: fixture.repositoryPath });
-    // The add is past its first read by now, and its capture takes far longer than this.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The add has read the repository and has not stored it yet.
+    await untilRead(capture, adding);
     expect((await removeRepository(fixture)).status).toBe(200);
+    capture.release();
     expect((await adding).status).toBe(201);
     expect(fixture.database.getRepository(fixture.repositoryId)?.removedReason).toBe(
       'Moved to another disk.',
