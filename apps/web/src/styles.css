@@ -1437,6 +1437,11 @@ a:focus-visible {
   color: var(--ink-faint);
 }
 
+.receipt-preview > small {
+  display: block;
+  margin-top: 6px;
+}
+
 .receipt-preview .preview-degraded {
   color: var(--warning);
 }
