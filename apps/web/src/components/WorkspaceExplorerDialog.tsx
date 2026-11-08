@@ -2,6 +2,7 @@ import { Archive, ArchiveX, FileCheck2, FolderGit2, FolderTree, ListChecks, X } 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 import type { BootstrapDto, CheckDto, ToolCandidate } from '../api.js';
+import { LastDataNote } from './LastDataNote.js';
 import type { WorkspaceSection } from './Navigation.js';
 import { useDialogFocus } from './useDialogFocus.js';
 
@@ -93,6 +94,7 @@ export function WorkspaceExplorerDialog({
   bootstrap,
   onSection,
   onClose,
+  lastDataReceived,
   onReviewTool,
   onPinTool,
   onApproveRoot,
@@ -108,6 +110,8 @@ export function WorkspaceExplorerDialog({
   bootstrap: BootstrapDto;
   onSection: (section: WorkspaceSection) => void;
   onClose: () => void;
+  /** When this data arrived, given while the service is not answering. */
+  lastDataReceived?: string;
   /** Reads the tool file that pinning would record now. */
   onReviewTool?: (checkId: string) => Promise<ToolCandidate>;
   /** Pins the reviewed file; the service refuses if another file resolves by then. */
@@ -260,6 +264,11 @@ export function WorkspaceExplorerDialog({
             <span className="sr-only">Close workspace explorer</span>
           </button>
         </header>
+
+        <LastDataNote
+          received={lastDataReceived}
+          waiting="Changes wait until the service answers."
+        />
 
         <div className="explorer-tabs" role="tablist" aria-label="Workspace sections">
           {sections.map(({ id, label, icon: Icon }) => (
@@ -605,7 +614,7 @@ export function WorkspaceExplorerDialog({
                           )}
                         </div>
                       ))}
-                    {retiring === check.id && !check.retiredAt && (
+                    {retiring === check.id && !check.retiredAt && onRetireCheck && (
                       <form
                         className="retire-review"
                         aria-label={`Retire ${check.label}`}
@@ -692,17 +701,19 @@ export function WorkspaceExplorerDialog({
                           {item?.removedAt ? ' · work item removed' : ''}
                         </span>
                       </div>
-                      <div className="export-links" aria-label="Acceptance packet formats">
-                        {packetFormats.map((format) => (
-                          <a
-                            key={format}
-                            href={`/api/v1/work-items/${verdict.workItemId}/packet/${format}`}
-                            download
-                          >
-                            {format.toUpperCase()}
-                          </a>
-                        ))}
-                      </div>
+                      {!lastDataReceived && (
+                        <div className="export-links" aria-label="Acceptance packet formats">
+                          {packetFormats.map((format) => (
+                            <a
+                              key={format}
+                              href={`/api/v1/work-items/${verdict.workItemId}/packet/${format}`}
+                              download
+                            >
+                              {format.toUpperCase()}
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </article>
                   );
                 })
@@ -808,17 +819,19 @@ export function WorkspaceExplorerDialog({
                       {verdicts} {verdicts === 1 ? 'verdict' : 'verdicts'} and {evidence} evidence{' '}
                       {evidence === 1 ? 'record' : 'records'} stay on record.
                     </p>
-                    <div className="export-links" aria-label="Acceptance packet formats">
-                      {packetFormats.map((format) => (
-                        <a
-                          key={format}
-                          href={`/api/v1/work-items/${item.id}/packet/${format}`}
-                          download
-                        >
-                          {format.toUpperCase()}
-                        </a>
-                      ))}
-                    </div>
+                    {!lastDataReceived && (
+                      <div className="export-links" aria-label="Acceptance packet formats">
+                        {packetFormats.map((format) => (
+                          <a
+                            key={format}
+                            href={`/api/v1/work-items/${item.id}/packet/${format}`}
+                            download
+                          >
+                            {format.toUpperCase()}
+                          </a>
+                        ))}
+                      </div>
+                    )}
                     {onPutBackWorkItem && (
                       <div className="pin-actions">
                         <button

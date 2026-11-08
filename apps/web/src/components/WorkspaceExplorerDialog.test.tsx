@@ -620,4 +620,93 @@ describe('workspace explorer removal', () => {
     expect(screen.getByText('Fix the importer')).toBeTruthy();
     expect(screen.getByText('rejected · work item removed')).toBeTruthy();
   });
+
+  it('offers no packet of a removed work item while the service is not answering', () => {
+    const { rerender } = render(
+      <WorkspaceExplorerDialog
+        {...explorer}
+        section="removed"
+        bootstrap={withRemovals}
+        lastDataReceived="Nov 7, 10:46 AM"
+      />,
+    );
+    expect(screen.getByText('Added by mistake.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'JSON' })).toBeNull();
+
+    rerender(<WorkspaceExplorerDialog {...explorer} section="removed" bootstrap={withRemovals} />);
+    expect(screen.getByRole('link', { name: 'JSON' })).toBeTruthy();
+  });
+});
+
+describe('workspace explorer while the service is not answering', () => {
+  const stopped = {
+    open: true,
+    bootstrap,
+    onSection: () => undefined,
+    onClose: () => undefined,
+    lastDataReceived: 'Nov 7, 10:46 AM',
+  };
+
+  it('says the data is the last it received, and shows it', () => {
+    render(<WorkspaceExplorerDialog {...stopped} section="checks" />);
+    expect(screen.getByRole('status').textContent).toContain('Nov 7, 10:46 AM');
+    expect(screen.getByText('Unit tests')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /pin tool again/iu })).toBeNull();
+  });
+
+  it('offers no packet to download, and offers it again when the service answers', () => {
+    const verdict = {
+      id: 'verdict',
+      workItemId: 'item',
+      decision: 'accepted' as const,
+      note: 'Reviewed.',
+      decidedAt: '2026-10-22T10:00:00.000Z',
+      snapshotFingerprint: 'c'.repeat(64),
+      overrideReason: null,
+      sequence: 1,
+      previousVerdictId: null,
+      claimHash: null,
+    };
+    const withVerdict = { ...bootstrap, verdicts: [verdict] };
+    const { rerender } = render(
+      <WorkspaceExplorerDialog {...stopped} section="exports" bootstrap={withVerdict} />,
+    );
+    expect(screen.queryByRole('link', { name: 'HTML' })).toBeNull();
+
+    const { lastDataReceived: _lastDataReceived, ...answering } = stopped;
+    rerender(<WorkspaceExplorerDialog {...answering} section="exports" bootstrap={withVerdict} />);
+    expect(screen.getByRole('status').textContent).toBe('');
+    expect(screen.getByRole('link', { name: 'HTML' })).toBeTruthy();
+  });
+
+  it('puts a half-written retirement away while the service is gone and keeps its text', async () => {
+    const user = userEvent.setup();
+    const { lastDataReceived: _lastDataReceived, ...answering } = stopped;
+    const onRetireCheck = vi.fn(async () => undefined);
+    const props = {
+      ...answering,
+      section: 'checks' as const,
+      onReviewTool: vi.fn(),
+      onPinTool: vi.fn(),
+    };
+    const { rerender } = render(
+      <WorkspaceExplorerDialog {...props} onRetireCheck={onRetireCheck} />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Retire Unit tests' }));
+    await user.type(screen.getByLabelText('Why it retires'), 'Replaced by the new suite.');
+
+    rerender(
+      <WorkspaceExplorerDialog
+        {...answering}
+        section="checks"
+        lastDataReceived="Nov 7, 10:46 AM"
+      />,
+    );
+    expect(screen.queryByLabelText('Why it retires')).toBeNull();
+
+    rerender(<WorkspaceExplorerDialog {...props} onRetireCheck={onRetireCheck} />);
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Why it retires').value).toBe(
+      'Replaced by the new suite.',
+    );
+  });
 });

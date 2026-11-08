@@ -128,3 +128,97 @@ describe('removing a work item from the review', () => {
     expect(screen.queryByRole('button', { name: 'Remove work item' })).toBeNull();
   });
 });
+
+describe('while the service is not answering', () => {
+  const lastData = { lastDataReceived: 'Nov 7, 10:46 AM' };
+  const button = (name: string) => screen.getByRole<HTMLButtonElement>('button', { name });
+  const offers = {
+    evidenceActionLabel: 'Run approved checks',
+    onEvidenceAction: () => undefined,
+    onOverride: () => undefined,
+    onExport: () => undefined,
+    onChangeRepository: () => undefined,
+    onViewContract: () => undefined,
+    onManageChecks: () => undefined,
+    onReadOutput: vi.fn(),
+    onRemove: () => undefined,
+  };
+
+  it('turns off what needs the service and keeps what reads the last data', () => {
+    render(
+      <ReviewDetail item={{ ...item, gatesReady: false }} {...actions} {...offers} {...lastData} />,
+    );
+    for (const name of [
+      'Accept work',
+      'Request changes',
+      'Reject',
+      'Override lock',
+      'Run approved checks',
+      'Export packet',
+      'Change repository',
+      'Remove work item',
+    ]) {
+      expect(button(name).disabled, name).toBe(true);
+    }
+    for (const name of ['View contract', 'Manage checks', 'Show output of Unit tests']) {
+      expect(button(name).disabled, name).toBe(false);
+    }
+  });
+
+  it('offers all of it again once the service answers', () => {
+    render(<ReviewDetail item={{ ...item, gatesReady: false }} {...actions} {...offers} />);
+    for (const name of [
+      'Request changes',
+      'Reject',
+      'Override lock',
+      'Run approved checks',
+      'Export packet',
+      'Change repository',
+      'Remove work item',
+    ]) {
+      expect(button(name).disabled, name).toBe(false);
+    }
+  });
+
+  it('still cancels a check that was running when the service stopped', async () => {
+    const user = userEvent.setup();
+    const onCancelEvidence = vi.fn();
+    render(
+      <ReviewDetail
+        item={item}
+        {...actions}
+        {...offers}
+        {...lastData}
+        evidenceActionBusy
+        onCancelEvidence={onCancelEvidence}
+      />,
+    );
+    await user.click(button('Cancel check'));
+    expect(onCancelEvidence).toHaveBeenCalled();
+  });
+
+  it('dates what the last data says and says decisions wait', () => {
+    render(<ReviewDetail item={{ ...item, gatesReady: true }} {...actions} {...lastData} />);
+    expect(
+      screen.getByText(
+        `${item.requiredSatisfied} of ${item.requiredTotal} required gates are current as of Nov 7, 10:46 AM`,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('All required evidence is current as of Nov 7, 10:46 AM')).toBeTruthy();
+    expect(screen.getByText('Waiting for the local service')).toBeTruthy();
+    expect(screen.getByText('Decisions wait for the local service')).toBeTruthy();
+    expect(
+      screen.getByText('The service records every verdict, and it is not answering.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('Ready for your decision')).toBeNull();
+    expect(screen.queryByText('Evidence is current')).toBeNull();
+  });
+
+  it('keeps showing a verdict already on record', () => {
+    render(
+      <ReviewDetail item={item} {...actions} {...lastData} decision="accepted · superseded" />,
+    );
+    expect(screen.getByText('accepted · superseded')).toBeTruthy();
+    expect(screen.queryByText('Waiting for the local service')).toBeNull();
+  });
+});

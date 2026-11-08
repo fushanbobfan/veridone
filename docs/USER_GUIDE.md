@@ -58,6 +58,8 @@ The dialog holds on to the state it showed when it opened: the repository finger
 
 While a repository cannot be read, because its folder is gone, its root waits for approval, or Git will not start, the review says why and a plain acceptance stays locked. **Reject**, **Request changes**, and **Override lock** still record, against the last state VeriDone captured.
 
+If the local service stops answering, the page says so at the top and keeps showing the last data it received, with the time it arrived. The buttons for verdicts, checks, exports, removals, and other changes are off, and the page goes back to normal at the service's first answer. A dialog you were writing in keeps its text; sending from it fails until the service answers, and then works again.
+
 VeriDone never records an automated verdict. Even a fully green work item waits for a person.
 
 ## 6. Export or move the workspace

@@ -93,6 +93,11 @@ describe('local API security and persistence', () => {
       body: JSON.stringify({ path: directory }),
     });
     expect(response.status).toBe(403);
+    // A page open across a restart holds the old process's token, and the page shows this message as it comes.
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'csrf_token_invalid',
+      message: expect.stringContaining('Try again in a few seconds.'),
+    });
   });
 
   it('persists an approved root and returns it from bootstrap', async () => {
