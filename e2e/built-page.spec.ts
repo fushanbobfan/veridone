@@ -1,6 +1,7 @@
-import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 
 import { expectNoWcagViolations } from './accessibility.js';
+import { look, lookAwayAndOn } from './pointer.js';
 import {
   answers,
   movedOn,
@@ -393,13 +394,6 @@ test('an empty workspace says when its service stops too', async ({ page }) => {
   await expect(serviceStopped(page)).toHaveCount(0);
 });
 
-/** What a hover style here changes: the text, the fill and the border. */
-const look = (button: Locator) =>
-  button.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return `${style.color} on ${style.backgroundColor}, border ${style.borderTopColor}`;
-  });
-
 test('the buttons a stopped service turns off stay still under the pointer', async ({ page }) => {
   // A work item that is not ready, so the dock offers "Override lock" as well.
   const service = await standInService(page, {
@@ -435,8 +429,7 @@ test('the buttons a stopped service turns off stay still under the pointer', asy
   );
 
   for (const [index, button] of (await turnedOff.all()).entries()) {
-    const atRest = await look(button);
-    await button.hover({ force: true });
-    expect(await look(button), names[index]).toBe(atRest);
+    const { away, on } = await lookAwayAndOn(button);
+    expect(on, names[index]).toBe(away);
   }
 });

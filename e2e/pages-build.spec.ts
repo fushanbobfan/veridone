@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { expectNoWcagViolations } from './accessibility.js';
+import { look, lookAwayAndOn } from './pointer.js';
 
 // The public demo is a static site with no service behind it, so an open page has nothing to ask for and nothing to log.
 test('the public demo makes no data request and logs no console error', async ({ page }) => {
@@ -129,13 +130,6 @@ test('"Show all reviews" clears the search as well as the filter', async ({ page
   await expect(page).not.toHaveURL(/[?&](q|filter)=/u);
 });
 
-/** What a hover style here changes: the text, the fill and the border. */
-const look = (button: Locator) =>
-  button.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return `${style.color} on ${style.backgroundColor}, border ${style.borderTopColor}`;
-  });
-
 test('the backup button looks as unavailable as it is', async ({ page }) => {
   await page.goto('./');
   const backup = page.getByRole('button', { name: /^Workspace backup/u });
@@ -147,9 +141,8 @@ test('the backup button looks as unavailable as it is', async ({ page }) => {
   await expect
     .poll(() => backup.evaluate((element) => Number(getComputedStyle(element).opacity)))
     .toBeLessThan(1);
-  const backupAtRest = await look(backup);
-  await backup.hover({ force: true });
-  expect(await look(backup)).toBe(backupAtRest);
+  const backupLook = await lookAwayAndOn(backup);
+  expect(backupLook.on).toBe(backupLook.away);
 
   // The working button beside it does light up, so this browser applies the hover style.
   const themeAtRest = await look(theme);
@@ -167,9 +160,8 @@ test('the navigation items with nothing to open stay still under the pointer', a
 
   for (const item of await items.all()) {
     await expect(item).toBeDisabled();
-    const atRest = await look(item);
-    await item.hover({ force: true });
-    expect(await look(item), await item.innerText()).toBe(atRest);
+    const { away, on } = await lookAwayAndOn(item);
+    expect(on, await item.innerText()).toBe(away);
   }
 
   // The theme button below them does light up, so this browser applies the hover style.
@@ -244,9 +236,8 @@ test('a disabled button of every class with a hover style stays still under the 
     await expect.poll(() => look(enabled), name).not.toBe(enabledAtRest);
 
     const disabled = page.getByRole('button', { name: `${name} disabled`, exact: true });
-    const disabledAtRest = await look(disabled);
-    await disabled.hover({ force: true });
-    expect(await look(disabled), name).toBe(disabledAtRest);
+    const { away, on } = await lookAwayAndOn(disabled);
+    expect(on, name).toBe(away);
   }
 });
 
