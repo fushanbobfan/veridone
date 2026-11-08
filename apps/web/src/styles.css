@@ -270,11 +270,6 @@ a:focus-visible {
   background: var(--surface-raised);
 }
 
-.icon-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .inbox-panel {
   position: relative;
   z-index: 1;
