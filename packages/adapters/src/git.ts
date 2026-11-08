@@ -11,11 +11,16 @@ import {
   type RepositorySnapshot,
 } from '@veridone/core';
 
-import { GitAdapterError, openGitSession, type GitSession } from './git-runtime.js';
+import {
+  GitAdapterError,
+  openGitSession,
+  type GitRunOptions,
+  type GitSession,
+} from './git-runtime.js';
 import { resolveWithinApprovedRoots } from './path-boundary.js';
 
-async function git(session: GitSession, args: string[]): Promise<string> {
-  const result = await session.run(args);
+async function git(session: GitSession, args: string[], options?: GitRunOptions): Promise<string> {
+  const result = await session.run(args, options);
 
   if (result.state !== 'completed' || result.exitCode !== 0) {
     throw new GitAdapterError(
@@ -138,29 +143,39 @@ export async function captureGitSnapshot(
     () => true,
     () => false,
   );
-  const [head, branch, status, submodules, unstagedPaths, stagedPaths, untrackedPaths, cachedDiff] =
-    await Promise.all([
-      optionalGit(session, ['rev-parse', '--verify', 'HEAD']),
-      git(session, ['branch', '--show-current']),
-      git(session, [
-        'status',
-        '--porcelain=v1',
-        '-z',
-        '--untracked-files=all',
-        '--ignore-submodules=dirty',
-      ]),
-      declaresSubmodules ? git(session, ['submodule', 'status', '--recursive']) : '',
-      git(session, [...diff, '--name-only', '-z', '--']),
-      git(session, [...diff, '--cached', '--name-only', '-z', '--']),
-      git(session, ['ls-files', '--others', '--exclude-standard', '-z']),
-      git(session, [...diff, '--cached', '--raw', '--full-index', '-z', '--']),
-    ]);
+  const [head, branch, status, submodules, unstagedPaths] = await Promise.all([
+    optionalGit(session, ['rev-parse', '--verify', 'HEAD']),
+    git(session, ['branch', '--show-current']),
+    git(session, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--ignore-submodules=dirty',
+    ]),
+    declaresSubmodules
+      ? git(session, ['submodule', 'status', '--recursive'], { startsShell: true })
+      : '',
+    git(session, [...diff, '--name-only', '-z', '--']),
+  ]);
   const statusEntries = parseNullDelimited(status);
   if (statusEntries.length > maxStatusEntries) {
     throw new GitAdapterError(
       `${repositoryPath} has ${statusEntries.length} changed files, more than the ${maxStatusEntries} a snapshot records. Commit or ignore them, then refresh.`,
     );
   }
+  // Status compares the content of a file whose timestamps changed, and the changed files list does too unless the
+  // repository turns off diff.autoRefreshIndex. When neither reports anything, the staged files, the untracked files
+  // and the staged diff are empty as well, and Git is not started for them: on Windows each start is costly. The line
+  // counts against HEAD always run, since an intent-to-add file marked assume-unchanged is on them while status and
+  // the changed files list leave it out.
+  const quiet = statusEntries.length === 0 && unstagedPaths === '';
+  const [stagedPaths, untrackedPaths, cachedDiff, numstatOutput] = await Promise.all([
+    quiet ? '' : git(session, [...diff, '--cached', '--name-only', '-z', '--']),
+    quiet ? '' : git(session, ['ls-files', '--others', '--exclude-standard', '-z']),
+    quiet ? '' : git(session, [...diff, '--cached', '--raw', '--full-index', '-z', '--']),
+    head ? git(session, [...diff, '--numstat', 'HEAD', '--']) : '',
+  ]);
   const untracked = parseNullDelimited(untrackedPaths);
   const workingContent = await hashWorkingPaths(repositoryPath, [
     ...parseNullDelimited(unstagedPaths),
@@ -170,9 +185,7 @@ export async function captureGitSnapshot(
   const worktreeHash = await sha256Hex(
     canonicalJson({ statusEntries, cachedDiff, workingContent }),
   );
-  const numstat = head
-    ? parseNumstat(await git(session, [...diff, '--numstat', 'HEAD', '--']))
-    : { additions: 0, deletions: 0, binaryFiles: 0 };
+  const numstat = parseNumstat(numstatOutput);
   const repositoryId = await sha256Hex(canonicalTopLevel.replaceAll('\\', '/').toLowerCase());
   const snapshot = await createRepositorySnapshot({
     repositoryId,

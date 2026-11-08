@@ -51,6 +51,8 @@ The database uses versioned migrations, foreign keys, WAL journaling, and normal
 | `VERIDONE_API_PORT`        | `4317`                   | Vite proxy target.                                                           |
 | `VERIDONE_GIT`             | first `git` on `PATH`    | Absolute path of the Git executable VeriDone starts.                         |
 
+On Windows, without `VERIDONE_GIT`, VeriDone starts the `git.exe` in the directory that the first `git` on `PATH` reports with `git --exec-path`, when that reports the same version, and starts the Git commands that run `sh`, `git submodule` and the fetch that prepares a check's checkout, through that first `git`.
+
 Remote binding, TLS termination, and multi-user authentication are deliberately unsupported in v1. The service refuses non-loopback hosts.
 
 ## Troubleshooting

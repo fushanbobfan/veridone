@@ -16,8 +16,13 @@ export class GitAdapterError extends Error {
 }
 
 export interface GitRuntime {
-  /** Absolute path of the Git executable, from VERIDONE_GIT or the absolute PATH entries. */
+  /** Absolute path of the Git executable most commands start. */
   executable: string;
+  /**
+   * The Git that VERIDONE_GIT or the absolute PATH entries named. Git commands that start sh start through it, as every
+   * command once did: Git for Windows' launcher puts Git's own sh ahead of $HOME\bin on PATH.
+   */
+  scriptExecutable: string;
   version: string;
   emptyConfigFile: string;
   hooksDirectory: string;
@@ -31,6 +36,11 @@ export interface GitRunOptions {
   signal?: AbortSignal;
   /** Variables added to the fixed environment, such as GIT_INDEX_FILE. */
   environment?: Record<string, string>;
+  /**
+   * The command starts sh, as `git submodule` (a shell script) and a fetch from a local path (through
+   * `sh -c git-upload-pack`) do, so it starts through `scriptExecutable`.
+   */
+  startsShell?: boolean;
 }
 
 export type GitSetting = [key: string, value: string];
@@ -237,6 +247,7 @@ async function createGitRuntime(): Promise<GitRuntime> {
   await writeFile(emptyConfigFile, '');
   const runtime: GitRuntime = {
     executable,
+    scriptExecutable: executable,
     version: '',
     emptyConfigFile,
     hooksDirectory,
@@ -252,7 +263,33 @@ async function createGitRuntime(): Promise<GitRuntime> {
     throw new GitAdapterError(`VeriDone needs Git 2.32 or later; ${executable} is older.`);
   }
   runtime.version = result.stdout.trim().split(/\r?\n/u)[0] ?? '';
+  // VERIDONE_GIT names the file to start, so only a Git found on PATH gives way to its program directory's.
+  if (process.platform === 'win32' && !process.env.VERIDONE_GIT) {
+    runtime.executable = await programDirectoryGit(runtime);
+  }
   return runtime;
+}
+
+/**
+ * The git.exe in the directory `git --exec-path` names, when it reports the same version. Git for Windows puts
+ * launchers on PATH, such as cmd\git.exe: each sets MSYSTEM and adds Git's own directories to PATH, then starts that
+ * git.exe with a console of its own, so every command took three processes. That git.exe sets the same variables when
+ * it starts without them, and with no console it gives the programs it starts none either, so it runs as one process.
+ */
+async function programDirectoryGit(runtime: GitRuntime): Promise<string> {
+  const listed = await runGitProcess(runtime, ['--exec-path'], []);
+  const directory = listed.stdout.trim();
+  if (listed.state !== 'completed' || listed.exitCode !== 0 || !path.isAbsolute(directory)) {
+    return runtime.executable;
+  }
+  const candidate = path.join(directory, 'git.exe');
+  if (!(await isExecutableFile(candidate))) return runtime.executable;
+  const direct = { ...runtime, executable: await realpath(candidate) };
+  const checked = await runGitProcess(direct, ['--version'], []);
+  const version = checked.stdout.trim().split(/\r?\n/u)[0] ?? '';
+  return checked.state === 'completed' && checked.exitCode === 0 && version === runtime.version
+    ? direct.executable
+    : runtime.executable;
 }
 
 let runtimePromise: Promise<GitRuntime> | null = null;
@@ -273,12 +310,14 @@ export function runGitProcess(
   options: GitRunOptions = {},
 ): Promise<ProcessResult> {
   return runBoundedProcess({
-    executable: runtime.executable,
+    executable: options.startsShell ? runtime.scriptExecutable : runtime.executable,
     args,
     cwd: runtime.workingDirectory,
     env: { ...gitEnvironment(runtime, settings), ...options.environment },
     timeoutMs: options.timeoutMs ?? 15_000,
     maxOutputBytes: options.maxOutputBytes ?? 2_000_000,
+    // Git reads and writes only its pipes. A console would cost a console host process on every start.
+    console: false,
     ...(options.signal ? { signal: options.signal } : {}),
   });
 }
@@ -301,6 +340,7 @@ export async function openGitSession(
     env: options.operatorSettings ? operatorEnvironment() : gitEnvironment(runtime, []),
     timeoutMs: 15_000,
     maxOutputBytes: 2_000_000,
+    console: false,
   });
   if (listed.state !== 'completed' || listed.exitCode !== 0) {
     throw new GitAdapterError(

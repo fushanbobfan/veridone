@@ -1,12 +1,22 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  mkdtemp,
+  mkdir,
+  realpath,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { maxStatusEntries } from '@veridone/core';
+import { canonicalJson, maxStatusEntries, sha256Hex } from '@veridone/core';
 
 import {
   absolutePathEntries,
@@ -29,6 +39,7 @@ import {
   resolveGitExecutable,
   resolveWithinApprovedRoots,
   runBoundedProcess,
+  runGitProcess,
 } from './index.js';
 
 const execFileAsync = promisify(execFile);
@@ -207,6 +218,27 @@ describe('bounded process execution', () => {
     expect(spawnFailure).toMatchObject({ state: 'spawn-error', exitCode: null });
     // Two kills, each a taskkill run on Windows, which takes seconds on a busy machine.
   }, 30_000);
+
+  it.runIf(process.platform === 'win32')(
+    'starts a process without a console when asked, and with one otherwise',
+    async () => {
+      const cwd = await temporaryDirectory();
+      // `mode con` reads the settings of the process's console, so it succeeds only in a process that has one.
+      const mode = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'mode.com');
+      const withConsole = await runBoundedProcess({ executable: mode, args: ['con'], cwd });
+      const withoutConsole = await runBoundedProcess({
+        executable: mode,
+        args: ['con'],
+        cwd,
+        console: false,
+      });
+
+      expect(withConsole).toMatchObject({ state: 'completed', exitCode: 0 });
+      expect(withoutConsole.state).toBe('completed');
+      expect(withoutConsole.exitCode).not.toBe(0);
+    },
+    20_000,
+  );
 });
 
 async function committedRepository(
@@ -278,6 +310,28 @@ describe('Git invocation', () => {
     expect(path.isAbsolute(runtime.executable)).toBe(true);
     expect(runtime.version).toMatch(/^git version \d+\.\d+/u);
   });
+
+  // VERIDONE_GIT names the file to start, so this holds only for a Git found on PATH.
+  it.runIf(process.platform === 'win32' && !process.env.VERIDONE_GIT)(
+    "starts the git.exe in Git's program directory, without a console, on Windows",
+    async () => {
+      const runtime = await gitRuntime();
+      // Git for Windows' launchers on PATH, such as cmd\git.exe, each start this git.exe with a console of its own.
+      const { stdout } = await execFileAsync(runtime.executable, ['--exec-path']);
+      expect(path.dirname(runtime.executable).toLowerCase()).toBe(
+        path.resolve(stdout.trim()).toLowerCase(),
+      );
+      await expect(execFileAsync(runtime.executable, ['--version'])).resolves.toMatchObject({
+        stdout: expect.stringContaining(runtime.version),
+      });
+      // A program started the way Git is: `mode con` succeeds only in a process that has a console.
+      const mode = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'mode.com');
+      const probe = await runGitProcess({ ...runtime, executable: mode }, ['con'], []);
+      expect(probe.state).toBe('completed');
+      expect(probe.exitCode).not.toBe(0);
+    },
+    20_000,
+  );
 
   it('searches only absolute PATH entries for a command', async () => {
     const first = await temporaryDirectory();
@@ -492,6 +546,250 @@ describe('real adapters', () => {
     expect(dirtier.snapshot.worktreeHash).not.toBe(dirty.snapshot.worktreeHash);
     expect(dirtier.snapshot.fingerprint).not.toBe(dirty.snapshot.fingerprint);
   }, 20_000);
+
+  it('leaves nothing for the other listings to find whenever status and the changed files list report nothing', async () => {
+    // A capture runs these three commands only when status or the list of changed tracked files reports something, so
+    // in each state below, where both report nothing, every one of them must report nothing too.
+    const diff = ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'];
+    const changedFiles = [...diff, '--name-only', '-z', '--'];
+    const skipped = [
+      [...diff, '--cached', '--name-only', '-z', '--'],
+      ['ls-files', '--others', '--exclude-standard', '-z'],
+      [...diff, '--cached', '--raw', '--full-index', '-z', '--'],
+    ];
+    const git = (repository: string, args: string[]) =>
+      execFileAsync('git', args, { cwd: repository });
+    const states: Array<[string, () => Promise<string>]> = [
+      ['committed and untouched', () => committedRepository({ 'README.md': '# Fixture\n' })],
+      [
+        'touched without a change',
+        async () => {
+          const repository = await committedRepository({ 'README.md': '# Fixture\n' });
+          await touchLater(path.join(repository, 'README.md'));
+          return repository;
+        },
+      ],
+      [
+        'only ignored files and an empty folder',
+        async () => {
+          const repository = await committedRepository({ '.gitignore': '*.log\nbuild/\n' });
+          await writeFile(path.join(repository, 'debug.log'), 'ignored\n');
+          await mkdir(path.join(repository, 'build', 'nested'), { recursive: true });
+          await writeFile(path.join(repository, 'build', 'nested', 'out.txt'), 'ignored\n');
+          await mkdir(path.join(repository, 'empty-folder'));
+          return repository;
+        },
+      ],
+      [
+        'a change hidden by assume-unchanged',
+        async () => {
+          const repository = await committedRepository({ 'README.md': '# Fixture\n' });
+          await git(repository, ['update-index', '--assume-unchanged', 'README.md']);
+          await writeFile(path.join(repository, 'README.md'), '# Hidden change\n');
+          return repository;
+        },
+      ],
+      [
+        'a change hidden by skip-worktree',
+        async () => {
+          const repository = await committedRepository({ 'README.md': '# Fixture\n' });
+          await git(repository, ['update-index', '--skip-worktree', 'README.md']);
+          await writeFile(path.join(repository, 'README.md'), '# Hidden change\n');
+          return repository;
+        },
+      ],
+      [
+        'line endings that attributes convert',
+        async () => {
+          // The commit stores LF and the work tree keeps CRLF, so Git compares them after converting.
+          const repository = await committedRepository({
+            '.gitattributes': '*.txt text eol=crlf\n',
+            'notes.txt': 'first\r\nsecond\r\n',
+          });
+          await touchLater(path.join(repository, 'notes.txt'));
+          return repository;
+        },
+      ],
+      [
+        'a sparse checkout with a sparse index',
+        async () => {
+          const repository = await committedRepository({ 'root.txt': 'root\n' });
+          for (const folder of ['inside', 'outside']) {
+            await mkdir(path.join(repository, folder));
+            await writeFile(path.join(repository, folder, 'file.txt'), `${folder}\n`);
+          }
+          await git(repository, ['add', '-A']);
+          await git(repository, ['commit', '-m', 'Add two folders']);
+          await git(repository, ['sparse-checkout', 'init', '--cone', '--sparse-index']);
+          await git(repository, ['sparse-checkout', 'set', 'inside']);
+          return repository;
+        },
+      ],
+      [
+        'diff.autoRefreshIndex off and nothing touched',
+        async () => {
+          const repository = await committedRepository({ 'README.md': '# Fixture\n' });
+          await git(repository, ['config', 'diff.autoRefreshIndex', 'false']);
+          return repository;
+        },
+      ],
+      [
+        'an intent-to-add file marked assume-unchanged',
+        async () => {
+          const repository = await committedRepository({ '.gitattributes': '*.bin -diff\n' });
+          await writeFile(path.join(repository, 'new.bin'), '');
+          await git(repository, ['add', '-N', '--', 'new.bin']);
+          await git(repository, ['update-index', '--assume-unchanged', '--', 'new.bin']);
+          return repository;
+        },
+      ],
+      [
+        'an empty repository without a commit',
+        async () => {
+          const repository = await temporaryDirectory();
+          await git(repository, ['init', '-b', 'main']);
+          return repository;
+        },
+      ],
+      [
+        'a submodule whose own work tree changed',
+        async () => {
+          const library = await committedRepository({ 'library.txt': 'shared code\n' });
+          const repository = await committedRepository({ 'README.md': '# Parent\n' });
+          await git(repository, [
+            '-c',
+            'protocol.file.allow=always',
+            'submodule',
+            'add',
+            library,
+            'vendor/library',
+          ]);
+          await git(repository, ['commit', '-m', 'Add the library']);
+          await writeFile(path.join(repository, 'vendor', 'library', 'library.txt'), 'edited\n');
+          await writeFile(path.join(repository, 'vendor', 'library', 'new.txt'), 'new\n');
+          return repository;
+        },
+      ],
+    ];
+    for (const [name, prepare] of states) {
+      const repository = await prepare();
+      const session = await openGitSession(repository, { operatorSettings: true });
+      const run = async (args: string[]) => {
+        const result = await session.run(args);
+        return `exit ${result.exitCode}: ${result.stdout}`;
+      };
+      const status = [
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=all',
+        '--ignore-submodules=dirty',
+      ];
+      expect(await run(status), name).toBe('exit 0: ');
+      expect(await run(changedFiles), name).toBe('exit 0: ');
+      for (const args of skipped) {
+        expect(await run(args), `${name}: git ${args.join(' ')}`).toBe('exit 0: ');
+      }
+    }
+  }, 120_000);
+
+  it('counts an intent-to-add file marked assume-unchanged, which status and the changed files list leave out', async () => {
+    // The line counts against HEAD name this file, as binary here, while both lists stay empty.
+    const repository = await committedRepository({ '.gitattributes': '*.bin -diff\n' });
+    await writeFile(path.join(repository, 'new.bin'), '');
+    await execFileAsync('git', ['add', '-N', '--', 'new.bin'], { cwd: repository });
+    await execFileAsync('git', ['update-index', '--assume-unchanged', '--', 'new.bin'], {
+      cwd: repository,
+    });
+
+    const captured = await captureGitSnapshot(repository, {
+      approvedRoots: [repository],
+      contractVersion: '1',
+      checkDefinitionVersion: '1',
+    });
+
+    expect(captured.snapshot.statusEntries).toEqual([]);
+    expect(captured.snapshot.diffStats).toMatchObject({ changedFiles: 0, binaryFiles: 1 });
+  }, 30_000);
+
+  it('hashes what the changed files list names when status reports nothing', async () => {
+    // With diff.autoRefreshIndex off, `git diff` lists a file whose timestamps changed while its content did not,
+    // though status reports nothing, and the capture hashes what that list names, as it always did.
+    const repository = await committedRepository({ 'README.md': '# Fixture\n' });
+    await execFileAsync('git', ['config', 'diff.autoRefreshIndex', 'false'], { cwd: repository });
+    await touchLater(path.join(repository, 'README.md'));
+    const session = await openGitSession(repository, { operatorSettings: true });
+    const listed = await session.run(['diff', '--no-ext-diff', '--name-only', '-z', '--']);
+    expect(listed.stdout).toBe('README.md\0');
+
+    const captured = await captureGitSnapshot(repository, {
+      approvedRoots: [repository],
+      contractVersion: '1',
+      checkDefinitionVersion: '1',
+    });
+
+    expect(captured.snapshot.statusEntries).toEqual([]);
+    const workingContent = [
+      { path: 'README.md', hash: await sha256File(path.join(repository, 'README.md')) },
+    ];
+    expect(captured.snapshot.worktreeHash).toBe(
+      await sha256Hex(canonicalJson({ statusEntries: [], cachedDiff: '', workingContent })),
+    );
+  }, 30_000);
+
+  it.runIf(process.platform === 'win32')(
+    "runs Git's own sh for git submodule and a local fetch, whatever $HOME\\bin holds",
+    async (context) => {
+      const runtime = await gitRuntime();
+      // A launcher on PATH puts Git's own directories ahead of $HOME\bin. A git.exe found on PATH puts $HOME\bin
+      // first, as it always did, so there is nothing to compare.
+      if ((await sha256File(runtime.scriptExecutable)) === (await sha256File(runtime.executable))) {
+        context.skip();
+      }
+      const library = await committedRepository({ 'library.txt': 'shared code\n' });
+      const repository = await committedRepository({ 'README.md': '# Parent\n' });
+      const run = (args: string[]) => execFileAsync('git', args, { cwd: repository });
+      await run([
+        '-c',
+        'protocol.file.allow=always',
+        'submodule',
+        'add',
+        library,
+        'vendor/library',
+      ]);
+      await run(['commit', '-m', 'Add the library']);
+      const home = await temporaryDirectory();
+      await mkdir(path.join(home, 'bin'));
+      // A program that is no shell, under the name that Git's shell scripts start.
+      await copyFile(
+        path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe'),
+        path.join(home, 'bin', 'sh.exe'),
+      );
+      const previous = process.env.HOME;
+      process.env.HOME = home;
+      try {
+        const result = await captureGitSnapshot(repository, {
+          approvedRoots: [repository],
+          contractVersion: '1',
+          checkDefinitionVersion: '1',
+        });
+        expect(result.snapshot.submoduleEntries).toEqual([
+          expect.stringMatching(/^[0-9a-f]{40} vendor\/library/u),
+        ]);
+        // Git fetches from a local path through `sh -c git-upload-pack`, so a check's checkout needs Git's sh too.
+        const checkout = await createCleanCheckout(repository, result.snapshot.head);
+        try {
+          await expect(checkout.compare()).resolves.toEqual({ headMoved: false, changedPaths: [] });
+        } finally {
+          await checkout.remove();
+        }
+      } finally {
+        if (previous === undefined) delete process.env.HOME;
+        else process.env.HOME = previous;
+      }
+    },
+    60_000,
+  );
 
   it('validates a harness receipt without trusting its output', async () => {
     const root = await temporaryDirectory();
