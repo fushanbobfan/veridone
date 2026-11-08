@@ -55,9 +55,14 @@ export async function createCleanCheckout(
       () => undefined,
     );
   };
-  const git = async (args: string[], settings: GitSetting[] = []) => {
+  const git = async (
+    args: string[],
+    settings: GitSetting[] = [],
+    runOptions: { startsShell?: boolean } = {},
+  ) => {
     const result = await runGitProcess(runtime, args, settings, {
       timeoutMs: 120_000,
+      ...runOptions,
       ...(options.signal ? { signal: options.signal } : {}),
     });
     if (result.state !== 'completed' || result.exitCode !== 0) {
@@ -78,19 +83,24 @@ export async function createCleanCheckout(
     if (process.platform === 'win32') {
       await git(['-C', directory, 'config', 'core.longpaths', 'true']);
     }
-    await git([
-      '-C',
-      directory,
-      'fetch',
-      '--quiet',
-      '--no-tags',
-      '--no-recurse-submodules',
-      '--no-write-fetch-head',
-      '--depth=1',
-      '--',
-      repositoryPath,
-      `+HEAD:${reviewRef}`,
-    ]);
+    // A fetch from a local path starts `sh -c git-upload-pack`.
+    await git(
+      [
+        '-C',
+        directory,
+        'fetch',
+        '--quiet',
+        '--no-tags',
+        '--no-recurse-submodules',
+        '--no-write-fetch-head',
+        '--depth=1',
+        '--',
+        repositoryPath,
+        `+HEAD:${reviewRef}`,
+      ],
+      [],
+      { startsShell: true },
+    );
     const fetched = (
       await git([
         '-C',
