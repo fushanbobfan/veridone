@@ -33,8 +33,8 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 ### VDS-004 — Medium — bounded checks killed only the direct process
 
-- **Location:** `packages/adapters/src/process.ts:30-65`, `packages/adapters/src/process.ts:79-118`, `packages/adapters/src/process.ts:142-171`
-- **Evidence:** non-Windows checks start in a process group; timeout, cancellation, and output-cap termination kill the group. Windows uses `taskkill /t /f` without a shell and, after three failed tries, ends the direct child alone. A run settles at most two seconds after the kill, even when a process left behind still holds its output pipes.
+- **Location:** `packages/adapters/src/process.ts:30-69`, `packages/adapters/src/process.ts:83-122`, `packages/adapters/src/process.ts:146-175`
+- **Evidence:** non-Windows checks start in a process group; timeout, cancellation, and output-cap termination kill the group. Windows uses `taskkill /t /f` without a shell, up to three times, and kills the direct child alone when every try fails. A run settles at most two seconds after the kill step, even when a process left behind still holds its output pipes.
 - **Impact before fix:** a timed-out tool could leave descendant processes running.
 - **Fix:** terminate the process tree for every bounded abnormal state.
 
@@ -49,7 +49,7 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 - Origin allowlist and per-process anti-CSRF token: `apps/server/src/app.ts:288-322`.
 - Canonical approved-root and symlink boundary: `packages/adapters/src/path-boundary.ts:22-53`.
-- Direct spawn with `shell: false`: `packages/adapters/src/process.ts:79-87`.
+- Direct spawn with `shell: false`: `packages/adapters/src/process.ts:83-91`.
 - Minimal check environment, redaction, tool version, exit code, and before/after mutation classification: `apps/server/src/check-runner.ts:25-39`, `apps/server/src/check-runner.ts:74-287`.
 - Full workspace schema/hash validation before a single import transaction: `apps/server/src/workspace.ts:364-438`.
 - Frontend audit found no `dangerouslySetInnerHTML`, DOM HTML sink, string-to-code execution, dynamic script, postMessage, auth-token storage, or third-party remote script.

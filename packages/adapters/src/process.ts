@@ -27,8 +27,8 @@ export interface ProcessResult {
   durationMs: number;
 }
 
-// taskkill reads the process tree through WMI, and a busy Windows machine cancels such queries in bursts of up to a
-// few seconds. A failed try is repeated after each of these waits; after the last one, the direct child alone is ended.
+// taskkill reads the process tree through WMI, and on a busy machine Windows has cancelled such queries in bursts of up
+// to about 3 s. A failed try is repeated after each of these waits; after the last one, the direct child alone is killed.
 const treeKillRetryDelaysMs = [1_000, 2_000];
 // A taskkill try still running after this long counts as failed; with about a thousand processes running, one took 3 to
 // 4 s to succeed.
@@ -52,12 +52,16 @@ function taskkillTree(pid: number): Promise<boolean> {
       resolve(false);
       return;
     }
-    const limit = setTimeout(() => killer.kill(), treeKillTryLimitMs);
-    limit.unref();
     const done = (succeeded: boolean) => {
       clearTimeout(limit);
       resolve(succeeded);
     };
+    // The try ends at its limit whether or not the kill of taskkill brings its close event.
+    const limit = setTimeout(() => {
+      done(false);
+      killer.kill();
+    }, treeKillTryLimitMs);
+    limit.unref();
     killer.once('error', () => done(false));
     killer.once('close', (code) => done(code === 0));
     killer.unref();

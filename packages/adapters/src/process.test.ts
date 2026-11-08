@@ -26,15 +26,16 @@ const mocked = vi.hoisted(() => ({
   byPid: new Map<number, PlannedRun>(),
   /** Names the run in its environment, so the mock can tell which run a spawn belongs to. */
   runVariable: 'VERIDONE_TEST_RUN',
-  /** Waits for the stop file named by its first argument, a minute at most. */
+  /** Waits until the stop file named by its first argument exists or its folder is gone, a minute at most. */
   waitForStop:
-    "const fs = require('node:fs'); const stop = process.argv[1];" +
-    ' setInterval(() => { if (fs.existsSync(stop)) process.exit(0); }, 100);' +
+    "const fs = require('node:fs'); const path = require('node:path'); const stop = process.argv[1];" +
+    ' setInterval(() => {' +
+    ' if (fs.existsSync(stop) || !fs.existsSync(path.dirname(stop))) process.exit(0); }, 100);' +
     ' setTimeout(() => process.exit(0), 60000);',
 }));
 
-// A taskkill try follows the plan of the run it targets: 'fail' starts a process that exits 1 and kills nothing, as
-// taskkill does when Windows cancels its WMI query for the process tree; 'hang' starts one that never answers.
+// A taskkill try follows the plan of the run it targets: 'fail' starts a process that exits 1 and kills nothing;
+// 'hang' starts one that never answers, even when killed.
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   const spawn = (command: string, args: readonly string[], options: SpawnOptions): ChildProcess => {
@@ -49,7 +50,13 @@ vi.mock('node:child_process', async (importOriginal) => {
         return actual.spawn(process.execPath, ['-e', 'process.exit(1)'], options);
       }
       if (run && outcome === 'hang') {
-        return actual.spawn(process.execPath, ['-e', mocked.waitForStop, run.stopFile], options);
+        const killer = actual.spawn(
+          process.execPath,
+          ['-e', mocked.waitForStop, run.stopFile],
+          options,
+        );
+        killer.kill = () => true;
+        return killer;
       }
       return actual.spawn(command, args, options);
     }
@@ -81,6 +88,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 const childScript = [
   "const { spawn } = require('node:child_process');",
   "const fs = require('node:fs');",
+  "const path = require('node:path');",
   'const [stop, shape] = process.argv.slice(1);',
   "if (shape === 'grandchild' || shape === 'orphan') {",
   `  const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(mocked.waitForStop)}, stop], {`,
@@ -94,7 +102,9 @@ const childScript = [
   '  });',
   '}',
   "if (shape === 'flood' || shape === 'grandchild') process.stdout.write('x'.repeat(10000));",
-  'setInterval(() => { if (fs.existsSync(stop)) process.exit(0); }, 100);',
+  'setInterval(() => {',
+  '  if (fs.existsSync(stop) || !fs.existsSync(path.dirname(stop))) process.exit(0);',
+  '}, 100);',
   'setTimeout(() => process.exit(0), 60000);',
 ].join('\n');
 
@@ -156,6 +166,7 @@ afterEach(async () => {
   const runs = [...mocked.runs.values()];
   mocked.runs.clear();
   mocked.byPid.clear();
+  // A process that misses the stop file before its folder goes stops on the missing folder.
   await Promise.all(runs.map((run) => writeFile(run.stopFile, '')));
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
@@ -213,7 +224,8 @@ describe('ending a process tree', () => {
       const result = await start(run, 'grandchild', { maxOutputBytes: 100 });
 
       expect(result.state).toBe('output-capped');
-      expect(run.taskkillRuns).toBe(2);
+      // The second try is the real taskkill; should it fail as well, a third one runs.
+      expect(run.taskkillRuns).toBeGreaterThanOrEqual(2);
       expect(isAlive(grandchildPid(result.stdout))).toBe(false);
     },
     30_000,
