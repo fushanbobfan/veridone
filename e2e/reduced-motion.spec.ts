@@ -11,15 +11,16 @@ declare global {
 }
 
 // Runs before the page's own scripts and looks at every frame the page draws. An element is caught when it can be seen
-// between two resting states: a review pane, a criterion row or an inbox row part-faded or off its place, or a
-// readiness bar whose width changes after it first shows. Each frame also lists the elements away from their final
-// look, seen or not, so a test can tell an element that appears in place from one that never appears.
+// between two resting states: a review pane, a criterion row, a readiness bar or an inbox row part-faded or off its
+// place, or a readiness bar whose width changes after it first shows. Each frame also lists the elements away from
+// their final look, seen or not, so a test can tell an element that appears in place from one that never appears.
 function recordMotion() {
   const record: Window['motionRecord'] = { lastFrame: 0, caught: [], unsettled: [] };
   window.motionRecord = record;
   const watched = {
     '.detail-inner': 'review pane',
     '.criterion-row': 'criterion row',
+    '.progress-track > span': 'readiness bar',
     '.review-row': 'inbox row',
   };
   const barWidths = new Map<Element, number>();
@@ -69,9 +70,18 @@ async function waitForFrameAfter(page: Page, ms: number) {
 }
 
 /**
- * Opens each demo review in turn, then shows only ready reviews and all of them again, so two inbox rows enter once more
- * on a page that has finished loading: on Linux WebKit the recorder once saw no frame of the entrance at load. Then
- * watches for a second, longer than any animation in the app, and checks that everything ended at its final look.
+ * Watches for a second, longer than any animation in the app, and checks that everything on the page ended at its final
+ * look. The caught frames leave out what cannot be seen, so an element left transparent would pass them.
+ */
+async function expectFinalLook(page: Page) {
+  await waitForFrameAfter(page, 1_000);
+  expect(await page.evaluate(() => window.motionRecord.unsettled)).toEqual([]);
+}
+
+/**
+ * Opens each demo review in turn and checks its final look before the next one replaces it, then shows only ready
+ * reviews and all of them again, so two inbox rows enter once more on a page that has finished loading (on Linux WebKit
+ * the recorder once saw no frame of the entrance at load), and checks again.
  */
 async function useTheInbox(page: Page) {
   for (const title of [
@@ -81,15 +91,14 @@ async function useTheInbox(page: Page) {
   ]) {
     await page.getByRole('button', { name: new RegExp(title, 'iu') }).click();
     await expect(page.getByRole('heading', { level: 2, name: title })).toBeVisible();
+    await expectFinalLook(page);
   }
   const filters = page.locator('.filter-strip');
   await filters.getByRole('button', { name: /^Ready/u }).click();
   await expect(page.locator('.review-row')).toHaveCount(1);
   await filters.getByRole('button', { name: /^All/u }).click();
   await expect(page.locator('.review-row')).toHaveCount(3);
-  await waitForFrameAfter(page, 1_000);
-  // The caught frames leave out what cannot be seen, so an element left transparent would pass them.
-  expect(await page.evaluate(() => window.motionRecord.unsettled)).toEqual([]);
+  await expectFinalLook(page);
 }
 
 /** How many frames caught each kind of element. */
