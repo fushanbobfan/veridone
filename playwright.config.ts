@@ -138,17 +138,17 @@ export default defineConfig({
     },
     {
       name: 'chromium-pages',
-      testMatch: /pages-build\.spec\.ts/u,
+      testMatch: /(pages-build|reduced-motion)\.spec\.ts/u,
       use: { ...devices['Desktop Chrome'], baseURL: pagesBuildUrl },
     },
     {
       name: 'firefox-pages',
-      testMatch: /pages-build\.spec\.ts/u,
+      testMatch: /(pages-build|reduced-motion)\.spec\.ts/u,
       use: { ...devices['Desktop Firefox'], baseURL: pagesBuildUrl },
     },
     {
       name: 'webkit-pages',
-      testMatch: /pages-build\.spec\.ts/u,
+      testMatch: /(pages-build|reduced-motion)\.spec\.ts/u,
       use: { ...devices['Desktop Safari'], baseURL: pagesBuildUrl },
     },
   ],
