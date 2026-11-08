@@ -33,6 +33,10 @@ export function Navigation({
   onOpenWorkspace?: () => void;
   onOpenSection?: (section: WorkspaceSection) => void;
 }) {
+  const backupLabel = onOpenWorkspace
+    ? 'Open workspace backup and restore'
+    : 'Workspace backup needs the local service';
+
   return (
     <aside className="navigation" aria-label="Primary navigation">
       <div className="brand-lockup">
@@ -136,11 +140,10 @@ export function Navigation({
           type="button"
           onClick={onOpenWorkspace}
           disabled={!onOpenWorkspace}
+          title={backupLabel}
         >
           <Settings2 aria-hidden="true" size={17} />
-          <span className="sr-only">
-            {onOpenWorkspace ? 'Open workspace backup and restore' : 'Workspace backup unavailable'}
-          </span>
+          <span className="sr-only">{backupLabel}</span>
         </button>
       </div>
     </aside>

@@ -265,7 +265,7 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.icon-button:hover {
+.icon-button:not(:disabled):hover {
   color: var(--ink);
   background: var(--surface-raised);
 }

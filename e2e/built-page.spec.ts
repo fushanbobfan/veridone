@@ -119,7 +119,7 @@ test('a page says when its service stops answering, and goes back when it answer
   await expect(page.getByRole('button', { name: 'Export packet' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Remove work item' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Add source' })).toHaveCount(0);
-  await expect(page.getByText('Workspace backup unavailable')).toHaveCount(1);
+  await expect(page.getByText('Workspace backup needs the local service')).toHaveCount(1);
   await expectNoWcagViolations(page);
 
   // The inspector still opens on the last data, says what it is, and offers no change.

@@ -74,6 +74,7 @@ function RunOutput({
 export function ReviewDetail({
   item,
   decision,
+  decisionInBar = false,
   evidenceActionLabel,
   evidenceActionBusy = false,
   lastDataReceived,
@@ -93,6 +94,8 @@ export function ReviewDetail({
 }: {
   item: ReviewItem;
   decision: string | null;
+  /** Shows the decision in the decision bar too, for a decision that opens no dialog: the rail can be off screen. */
+  decisionInBar?: boolean;
   evidenceActionLabel?: string;
   evidenceActionBusy?: boolean;
   /** When this data arrived, given while the service is not answering; verdicts, runs and exports are off meanwhile. */
@@ -367,12 +370,11 @@ export function ReviewDetail({
           <footer className="decision-dock">
             <div>
               <span className="section-label">Your decision</span>
-              <strong>
+              <strong role="status">
                 {paused
                   ? 'Decisions wait for the local service'
-                  : ready
-                    ? 'Evidence is current'
-                    : 'Acceptance is locked'}
+                  : (decisionInBar && decision) ||
+                    (ready ? 'Evidence is current' : 'Acceptance is locked')}
               </strong>
               <small>
                 {paused

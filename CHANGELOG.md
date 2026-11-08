@@ -23,6 +23,10 @@ All notable changes are documented here. This project follows Semantic Versionin
 - A Markdown packet shows the claim as a quotation, so a heading or a verdict an agent writes in it stays inside the quote.
 - The restore preview shows its summary and the sentence after it on separate lines, and the receipt preview does the same for its closing notes.
 - **Add source** says repositories and receipts must sit inside an approved root, and **Roots** says a restored root grants no read access until you approve it. They used to say VeriDone reads only approved roots and reads nothing under a restored one, which a pinned tool and a second root over the same path contradict.
+- On a page with no workspace, such as the public demo, **Reject**, **Request changes**, and **Accept work** say the decision in the decision bar. Their only effect was the text of the evidence rail's last step, which sat off screen or under the bar at each size tested from 1280×720 down to 360×640, so a press seemed to do nothing. Playwright presses them on the public demo's build at those five sizes.
+- **Show all reviews** clears the search as well as the filter. After a search that matched nothing it cleared only the filter, and the list stayed empty.
+- The backup button at the foot of the navigation looks unavailable when it is: dimmed, with a not-allowed cursor, no hover highlight, and a tooltip saying it needs the local service. It used to look like the working theme button beside it.
+- Each press of the theme button switches between light and dark. On a device set to dark, the third press went from dark to the system theme, which is also dark, and nothing changed. A press that lands on the device's theme still makes the page follow the device again.
 
 ## [1.2.0] - 2026-11-05
 

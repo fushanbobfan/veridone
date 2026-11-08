@@ -150,7 +150,13 @@ export function ReviewInbox({
             <span>
               {normalizedQuery ? 'No reviews match this search.' : 'Nothing in this view.'}
             </span>
-            <button type="button" onClick={() => onFilter('all')}>
+            <button
+              type="button"
+              onClick={() => {
+                onFilter('all');
+                onQuery('');
+              }}
+            >
               Show all reviews
             </button>
           </div>
