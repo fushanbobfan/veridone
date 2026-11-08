@@ -24,19 +24,27 @@ function recordMotion() {
     '.review-row': 'inbox row',
   };
   const barWidths = new Map<Element, number>();
+  // The opacity a user sees: the element's own times each ancestor's, so a wrapper left transparent hides its rows.
+  const seenOpacity = (node: Element) => {
+    let opacity = 1;
+    for (let at: Element | null = node; at; at = at.parentElement) {
+      opacity *= Number(getComputedStyle(at).opacity);
+    }
+    return opacity;
+  };
   const look = (time: number) => {
     record.lastFrame = time;
     const unsettled: Window['motionRecord']['unsettled'] = [];
     for (const [selector, element] of Object.entries(watched)) {
       for (const node of document.querySelectorAll(selector)) {
-        const { opacity, transform } = getComputedStyle(node);
+        const opacity = seenOpacity(node);
+        const { transform } = getComputedStyle(node);
         const atRest =
-          Number(opacity) > 0.999 &&
-          (transform === 'none' || new DOMMatrixReadOnly(transform).isIdentity);
+          opacity > 0.999 && (transform === 'none' || new DOMMatrixReadOnly(transform).isIdentity);
         if (atRest) continue;
         const state = `opacity ${opacity}, ${transform}`;
         unsettled.push({ element, state });
-        if (Number(opacity) > 0.001) record.caught.push({ element, state });
+        if (opacity > 0.001) record.caught.push({ element, state });
       }
     }
     for (const bar of document.querySelectorAll('.progress-track > span')) {
