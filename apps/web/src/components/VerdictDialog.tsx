@@ -42,6 +42,9 @@ export function VerdictDialog({
   const [note, setNote] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
   const [saving, setSaving] = useState(false);
+  // Set once the service has recorded this dialog's verdict; the dialog then sends nothing more. From the moment the
+  // verdict is sent, a change the page reports may be that verdict, so the service's answer decides.
+  const [recorded, setRecorded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useDialogFocus(open, onClose, dialog, closeButton);
@@ -63,12 +66,22 @@ export function VerdictDialog({
         expected,
         overrideRequired ? overrideReason : null,
       );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The verdict could not be recorded.');
+      setSaving(false);
+      return;
+    }
+    setRecorded(true);
+    try {
       await onRecorded();
       setNote('');
       setOverrideReason('');
+      setRecorded(false);
       onClose();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'The verdict could not be recorded.');
+      setError(
+        `The verdict is recorded. ${caught instanceof Error ? caught.message : 'The page could not refresh.'}`,
+      );
     } finally {
       setSaving(false);
     }
@@ -168,7 +181,8 @@ export function VerdictDialog({
             {error ? (
               <span className="error-message">{error}</span>
             ) : (
-              changedSinceOpened && (
+              changedSinceOpened &&
+              !saving && (
                 <span className="error-message">
                   {changedSinceOpened} Close this dialog and review the current state before
                   deciding.
@@ -183,7 +197,7 @@ export function VerdictDialog({
             <button
               className="primary-action"
               type="submit"
-              disabled={saving || Boolean(changedSinceOpened)}
+              disabled={saving || recorded || Boolean(changedSinceOpened)}
             >
               {accepting ? (
                 <Check aria-hidden="true" size={15} />

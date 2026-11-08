@@ -117,4 +117,37 @@ describe('verdict dialog', () => {
     expect(await screen.findByText(/Another verdict was recorded/u)).toBeTruthy();
     expect(onRecorded).not.toHaveBeenCalled();
   });
+
+  it('says its verdict is recorded, and sends no second one, when the page cannot refresh', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ verdict: {} }), { status: 201 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <VerdictDialog
+        open
+        workItemId="work-b"
+        subject={subject}
+        expected={expected}
+        decision="accepted"
+        csrfToken="token"
+        onClose={() => undefined}
+        onRecorded={async () => {
+          throw new Error('The local service did not answer.');
+        }}
+      />,
+    );
+    await user.type(screen.getByLabelText('Decision note'), 'Reviewed the change.');
+    await user.click(screen.getByRole('button', { name: 'Record acceptance' }));
+
+    expect(
+      await screen.findByText('The verdict is recorded. The local service did not answer.'),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Record acceptance' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
