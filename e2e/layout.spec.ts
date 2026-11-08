@@ -16,11 +16,18 @@ declare global {
   }
 }
 
-// UX-01: the review and the workspace explorer fit their boxes on phones, tablets and desktops. The review pane's width
-// does not follow the window's: the navigation and the inbox take a share of the window that changes at each layout
-// step, so the desktop widths below sit on both sides of each step. The workspace holds long values on purpose.
+// UX-01: the review, the inbox and the workspace explorer fit their boxes on phones, tablets and desktops. The review
+// pane's width does not follow the window's: the navigation and the inbox take a share of the window that changes at
+// each layout step, so the desktop widths below sit on both sides of each step. The workspace holds long values on
+// purpose.
 
 const stamp = '2026-11-01T00:00:00.000Z';
+
+// Up to this window width the inbox and the review take turns, as on a phone.
+const onePaneUpTo = 1001;
+
+// A title with no break opportunity, longer than any pane is wide.
+const secondTitle = 'SecondWorkItem'.repeat(15).slice(0, 200);
 
 const repository = (id: string, branch: string, statusEntries: string[]): RepositoryDto => ({
   id,
@@ -152,7 +159,7 @@ const workspace: BootstrapDto = {
   receipts: [],
   workItems: [
     workItem('first', 'First work item', 'first-repository'),
-    workItem('second', 'Second work item', 'second-repository'),
+    workItem('second', secondTitle, 'second-repository'),
   ],
   removed: { roots: [], repositories: [], workItems: [] },
   contracts: [
@@ -211,21 +218,34 @@ const workspace: BootstrapDto = {
   },
 };
 
-async function openWorkspace(page: Page, width: number, height: number) {
+// The explorer keeps a title with no break opportunity on one line in its Exports and Removed tabs, beside a note that
+// wraps; its checks run on titles with spaces.
+const spacedTitles: BootstrapDto = {
+  ...workspace,
+  workItems: workspace.workItems.map((item) =>
+    item.id === 'second' ? { ...item, title: 'Second work item' } : item,
+  ),
+};
+
+async function openWorkspace(page: Page, width: number, height: number, body = workspace) {
   await page.setViewportSize({ width, height });
-  await page.route('**/api/v1/bootstrap', (route) => route.fulfill({ json: workspace }));
+  await page.route('**/api/v1/bootstrap', (route) => route.fulfill({ json: body }));
   await page.goto('/');
   await page.getByRole('button', { name: /First work item/u }).click();
   await expect(page.getByRole('heading', { name: 'First work item' })).toBeVisible();
+  // The review takes focus 240 ms after it opens, and on a phone Chromium and WebKit scroll the page with it, so a press
+  // before then can land where a button was.
+  await expect(page.locator('#review-detail')).toBeFocused();
 }
 
 /** What runs past the review's column, which ends where the review's padding begins, or past the window for the bar. */
 function measureReview() {
+  const shell = document.querySelector<HTMLElement>('.app-shell');
   const pane = document.querySelector<HTMLElement>('.review-detail');
   const inner = document.querySelector<HTMLElement>('.detail-inner');
   const bar = document.querySelector<HTMLElement>('.decision-dock');
   const scroller = document.scrollingElement;
-  if (!pane || !inner || !bar || !scroller) return 'no review on the page';
+  if (!shell || !pane || !inner || !bar || !scroller) return 'no review on the page';
   // The window less a classic scrollbar, which `innerWidth` counts.
   const windowEdge = document.documentElement.clientWidth;
   const edge = Math.min(
@@ -247,12 +267,52 @@ function measureReview() {
   return {
     paneSideways: pane.scrollWidth - pane.clientWidth,
     pageSideways: scroller.scrollWidth - scroller.clientWidth,
+    // The shell clips what passes the window; focus moving to the review can scroll the shell and take the navigation
+    // out of view.
+    shellSideways: shell.scrollWidth - shell.clientWidth,
     pastColumn: past(inFlow, edge),
     barPastWindow: past([...bar.querySelectorAll('*')], windowEdge),
   };
 }
 
-const fits = { paneSideways: 0, pageSideways: 0, pastColumn: [], barPastWindow: [] };
+const fits = {
+  paneSideways: 0,
+  pageSideways: 0,
+  shellSideways: 0,
+  pastColumn: [],
+  barPastWindow: [],
+};
+
+/** What runs past the inbox's column or the window, and how far the inbox or the page scrolls sideways. */
+function measureInbox() {
+  const panel = document.querySelector<HTMLElement>('.inbox-panel');
+  const scroller = document.scrollingElement;
+  if (!panel || !scroller || panel.getBoundingClientRect().width === 0)
+    return 'no inbox on the page';
+  const edge = Math.min(
+    panel.getBoundingClientRect().left + panel.clientWidth,
+    document.documentElement.clientWidth,
+  );
+  return {
+    inboxSideways: panel.scrollWidth - panel.clientWidth,
+    pageSideways: scroller.scrollWidth - scroller.clientWidth,
+    pastColumn: [...panel.querySelectorAll('*')]
+      .filter((node) => {
+        const box = node.getBoundingClientRect();
+        // The filters scroll sideways on a phone, so the ones they hold may sit past the edge.
+        return (
+          box.width > 0 && box.right > edge + 0.5 && !node.parentElement?.closest('.filter-strip')
+        );
+      })
+      .map(
+        (node) =>
+          `${node.tagName.toLowerCase()}.${String(node.getAttribute('class') ?? '').replace(/ +/gu, '.')}`,
+      )
+      .slice(0, 5),
+  };
+}
+
+const inboxFits = { inboxSideways: 0, pageSideways: 0, pastColumn: [] };
 
 /** Records, every frame, how far the pane or the page scrolls sideways and how far the decision bar is off its place. */
 function recordFrames() {
@@ -260,15 +320,17 @@ function recordFrames() {
   window.layoutFramesDone = false;
   const start = performance.now();
   const frame = () => {
+    const shell = document.querySelector<HTMLElement>('.app-shell');
     const pane = document.querySelector<HTMLElement>('.review-detail');
     const bar = document.querySelector<HTMLElement>('.decision-dock');
     const scroller = document.scrollingElement;
     // While the inbox covers a phone's screen the review has no box, and between two reviews there is a frame with none.
-    if (pane && bar && scroller && bar.getBoundingClientRect().height > 0) {
+    if (shell && pane && bar && scroller && bar.getBoundingClientRect().height > 0) {
       window.layoutFrames.push({
         ms: performance.now() - start,
         title: pane.querySelector('h2')?.textContent ?? '',
         sideways: Math.max(
+          shell.scrollWidth - shell.clientWidth,
           pane.scrollWidth - pane.clientWidth,
           scroller.scrollWidth - scroller.clientWidth,
         ),
@@ -291,8 +353,10 @@ const settled = (page: Page) =>
     )
     .toBe('1');
 
-for (const width of [360, 768, 1024, 1100, 1240, 1280, 1366, 1440, 1450, 1536, 1920]) {
-  test(`the review fits its pane at ${width} px, at rest and while it changes`, async ({
+for (const width of [
+  360, 768, 861, 900, 960, 1001, 1002, 1024, 1100, 1240, 1280, 1366, 1440, 1450, 1536, 1920,
+]) {
+  test(`the review and the inbox fit ${width} px, at rest and while the review changes`, async ({
     page,
   }) => {
     await openWorkspace(page, width, 800);
@@ -301,17 +365,20 @@ for (const width of [360, 768, 1024, 1100, 1240, 1280, 1366, 1440, 1450, 1536, 1
 
     // A change of work item animates the review; nothing may leave its place meanwhile, the decision bar included.
     await page.evaluate(recordFrames);
-    if (width <= 860) await page.getByRole('button', { name: 'Review inbox' }).click();
-    await page.getByRole('button', { name: /Second work item/u }).click();
-    await expect(page.getByRole('heading', { name: 'Second work item' })).toBeVisible();
+    if (width <= onePaneUpTo) {
+      await page.getByRole('button', { name: 'Review inbox' }).click();
+      expect(await page.evaluate(measureInbox)).toEqual(inboxFits);
+    }
+    await page.getByRole('button', { name: secondTitle }).click();
+    await expect(page.getByRole('heading', { name: secondTitle })).toBeVisible();
     // The recording spans the change: it starts on the first review and runs until the second has been on screen for
     // longer than its 220 ms fade.
     await expect
       .poll(() =>
-        page.evaluate(() => {
-          const shown = window.layoutFrames.filter((frame) => frame.title === 'Second work item');
+        page.evaluate((title) => {
+          const shown = window.layoutFrames.filter((frame) => frame.title === title);
           return (shown.at(-1)?.ms ?? 0) - (shown[0]?.ms ?? 0);
-        }),
+        }, secondTitle),
       )
       .toBeGreaterThan(400);
     const frames = await page.evaluate(() => {
@@ -324,6 +391,7 @@ for (const width of [360, 768, 1024, 1100, 1240, 1280, 1366, 1440, 1450, 1536, 1
       barMoved: Math.max(...frames.map((frame) => frame.barOffset)),
     }).toEqual({ widest: 0, barMoved: 0 });
     expect(await page.evaluate(measureReview)).toEqual(fits);
+    if (width > onePaneUpTo) expect(await page.evaluate(measureInbox)).toEqual(inboxFits);
   });
 }
 
@@ -376,7 +444,7 @@ for (const width of [320, 360, 768]) {
   test(`the workspace explorer fits ${width} px, every tab reachable where it is drawn`, async ({
     page,
   }) => {
-    await openWorkspace(page, width, 740);
+    await openWorkspace(page, width, 740, spacedTitles);
     await everyExplorerTab(page);
   });
 }
@@ -407,12 +475,35 @@ function measureBanner() {
   };
 }
 
-for (const width of [360, 768, 1024, 1100, 1240, 1450, 1920]) {
-  test(`the review and the banner fit ${width} px while the service is not answering`, async ({
+for (const width of [360, 768, 861, 900, 960, 1001, 1002, 1024, 1100, 1240, 1450, 1920]) {
+  test(`the review, the inbox and the banner fit ${width} px while the service is not answering`, async ({
     page,
   }) => {
     await page.clock.install();
     await openWorkspace(page, width, 800);
+    await settled(page);
+    await stopService(page);
+    await expect(page.getByText('Decisions wait for the local service')).toBeVisible();
+    expect(await page.evaluate(measureReview)).toEqual(fits);
+    expect(await page.evaluate(measureBanner)).toEqual({ bannerSideways: 0, bannerPastWindow: [] });
+    if (width <= onePaneUpTo) await page.getByRole('button', { name: 'Review inbox' }).click();
+    await expect(page.getByRole('button', { name: secondTitle })).toBeVisible();
+    expect(await page.evaluate(measureInbox)).toEqual(inboxFits);
+  });
+}
+
+// The fake clock runs 15 s ahead of the browser's own animation clock once it has jumped, and a review that changes
+// after that waits as long to fade, so the second work item opens before the service stops.
+for (const width of [360, 960, 1002, 1440]) {
+  test(`a title with no break opportunity fits ${width} px while the service is not answering`, async ({
+    page,
+  }) => {
+    await page.clock.install();
+    await openWorkspace(page, width, 800);
+    await settled(page);
+    if (width <= onePaneUpTo) await page.getByRole('button', { name: 'Review inbox' }).click();
+    await page.getByRole('button', { name: secondTitle }).click();
+    await expect(page.getByRole('heading', { name: secondTitle })).toBeVisible();
     await settled(page);
     await stopService(page);
     await expect(page.getByText('Decisions wait for the local service')).toBeVisible();
@@ -426,7 +517,7 @@ for (const width of [320, 360]) {
     page,
   }) => {
     await page.clock.install();
-    await openWorkspace(page, width, 740);
+    await openWorkspace(page, width, 740, spacedTitles);
     await stopService(page);
     await everyExplorerTab(page);
     await expect(page.getByText('Changes wait until the service answers.')).toBeVisible();
