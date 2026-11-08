@@ -129,15 +129,17 @@ test('"Show all reviews" clears the search as well as the filter', async ({ page
   await expect(page).not.toHaveURL(/[?&](q|filter)=/u);
 });
 
+/** What a hover style here changes: the text, the fill and the border. */
+const look = (button: Locator) =>
+  button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return `${style.color} on ${style.backgroundColor}, border ${style.borderTopColor}`;
+  });
+
 test('the backup button looks as unavailable as it is', async ({ page }) => {
   await page.goto('./');
   const backup = page.getByRole('button', { name: /^Workspace backup/u });
   const theme = page.getByRole('button', { name: /^Switch to (light|dark) theme$/u });
-  const look = (button: Locator) =>
-    button.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return `${style.color} on ${style.backgroundColor}`;
-    });
 
   await expect(backup).toBeDisabled();
   await expect(backup).toHaveAttribute('title', 'Workspace backup needs the local service');
@@ -153,6 +155,99 @@ test('the backup button looks as unavailable as it is', async ({ page }) => {
   const themeAtRest = await look(theme);
   await theme.hover();
   await expect.poll(() => look(theme)).not.toBe(themeAtRest);
+});
+
+test('the navigation items with nothing to open stay still under the pointer', async ({ page }) => {
+  await page.goto('./');
+  const items = page
+    .getByRole('complementary', { name: 'Primary navigation' })
+    .getByRole('navigation')
+    .getByRole('button');
+  await expect(items).toHaveCount(6);
+
+  for (const item of await items.all()) {
+    await expect(item).toBeDisabled();
+    const atRest = await look(item);
+    await item.hover({ force: true });
+    expect(await look(item), await item.innerText()).toBe(atRest);
+  }
+
+  // The theme button below them does light up, so this browser applies the hover style.
+  const theme = page.getByRole('button', { name: /^Switch to (light|dark) theme$/u });
+  const themeAtRest = await look(theme);
+  await theme.hover();
+  await expect.poll(() => look(theme)).not.toBe(themeAtRest);
+});
+
+// The page disables buttons of these classes while a check runs or a backup is read too, states a test cannot hold
+// still, so buttons made here stand in for them.
+test('a disabled button of every class with a hover style stays still under the pointer', async ({
+  page,
+}) => {
+  await page.goto('./');
+  await expect(page.getByRole('heading', { name: 'Review inbox' })).toBeVisible();
+  const classes = await page.evaluate(() => {
+    const onHover = new Set<string>();
+    const whenDisabled = new Set<string>();
+    const read = (rules: CSSRuleList) => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSStyleRule) {
+          for (const selector of rule.selectorText.split(',').map((part) => part.trim())) {
+            const hovered = /^\.([\w-]+)(?::not\(:disabled\))?:hover$/u.exec(selector)?.[1];
+            if (hovered) onHover.add(hovered);
+            const disabled = /^\.([\w-]+):disabled$/u.exec(selector)?.[1];
+            if (disabled) whenDisabled.add(disabled);
+          }
+        } else if ('cssRules' in rule) {
+          read((rule as CSSGroupingRule).cssRules);
+        }
+      }
+    };
+    for (const sheet of Array.from(document.styleSheets)) read(sheet.cssRules);
+    return [...onHover].filter((name) => whenDisabled.has(name)).sort();
+  });
+  // An unread stylesheet would leave nothing to check.
+  expect(classes).toEqual(
+    expect.arrayContaining([
+      'icon-button',
+      'nav-item',
+      'override-action',
+      'reject-action',
+      'run-button',
+      'text-button',
+      'workspace-action',
+    ]),
+  );
+
+  await page.evaluate((names) => {
+    const box = document.createElement('div');
+    box.style.cssText =
+      'position: fixed; inset: 80px auto auto 300px; z-index: 10000; display: grid; grid-template-columns: repeat(2, 200px); gap: 8px;';
+    for (const name of names) {
+      for (const disabled of [false, true]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = name;
+        button.disabled = disabled;
+        button.textContent = `${name} ${disabled ? 'disabled' : 'enabled'}`;
+        box.append(button);
+      }
+    }
+    document.body.append(box);
+  }, classes);
+
+  for (const name of classes) {
+    // The enabled one lights up, so this browser applies the class's hover style.
+    const enabled = page.getByRole('button', { name: `${name} enabled`, exact: true });
+    const enabledAtRest = await look(enabled);
+    await enabled.hover();
+    await expect.poll(() => look(enabled), name).not.toBe(enabledAtRest);
+
+    const disabled = page.getByRole('button', { name: `${name} disabled`, exact: true });
+    const disabledAtRest = await look(disabled);
+    await disabled.hover({ force: true });
+    expect(await look(disabled), name).toBe(disabledAtRest);
+  }
 });
 
 for (const [device, other] of [

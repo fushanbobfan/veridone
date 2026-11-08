@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 import { expectNoWcagViolations } from './accessibility.js';
 import {
@@ -391,4 +391,52 @@ test('an empty workspace says when its service stops too', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Add first source' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Restore a backup' })).toBeEnabled();
   await expect(serviceStopped(page)).toHaveCount(0);
+});
+
+/** What a hover style here changes: the text, the fill and the border. */
+const look = (button: Locator) =>
+  button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return `${style.color} on ${style.backgroundColor}, border ${style.borderTopColor}`;
+  });
+
+test('the buttons a stopped service turns off stay still under the pointer', async ({ page }) => {
+  // A work item that is not ready, so the dock offers "Override lock" as well.
+  const service = await standInService(page, {
+    ...workspace,
+    readiness: { 'work-item': { ...workspace.readiness['work-item'], ready: false } },
+  });
+  await page.clock.install();
+  await page.goto('/');
+  const reject = page.getByRole('button', { name: 'Reject', exact: true });
+  await expect(page.getByRole('button', { name: 'Override lock' })).toBeVisible();
+
+  // While the service answers, Reject lights up under the pointer, so this browser applies the hover style.
+  const answering = await look(reject);
+  await reject.hover();
+  await expect.poll(() => look(reject)).not.toBe(answering);
+  await page.mouse.move(0, 0);
+
+  service.answer = refused;
+  await page.clock.fastForward(15_000);
+  await expect(serviceStopped(page)).toBeVisible();
+  const turnedOff = page.locator('button:disabled:visible');
+  const names = (await turnedOff.allInnerTexts()).map((text) => text.trim());
+  expect(names).toEqual(
+    expect.arrayContaining([
+      'Approve a check',
+      'Export packet',
+      'Remove work item',
+      'Override lock',
+      'Reject',
+      'Request changes',
+      'Accept work',
+    ]),
+  );
+
+  for (const [index, button] of (await turnedOff.all()).entries()) {
+    const atRest = await look(button);
+    await button.hover({ force: true });
+    expect(await look(button), names[index]).toBe(atRest);
+  }
 });
