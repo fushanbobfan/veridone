@@ -43,17 +43,23 @@ describe('review desk', () => {
     );
     const accept = screen.getByRole('button', { name: /accept work/i });
     await user.click(accept);
-    expect(screen.getByText('Accepted by you')).toBeTruthy();
+    // The evidence rail and the decision bar both say it.
+    expect(screen.getAllByText('Accepted by you')).toHaveLength(2);
+    expect(screen.getAllByRole('status').map((element) => element.textContent)).toContain(
+      'Accepted by you',
+    );
   });
 
-  it('persists the selected theme', async () => {
+  it('persists the selected theme, and follows the device again on its theme', async () => {
     const user = userEvent.setup();
     render(<App />);
+    // The stubbed device is dark.
     await user.click(screen.getByRole('button', { name: /switch to light theme/i }));
     expect(localStorage.getItem('veridone-theme')).toBe('light');
     await user.click(screen.getByRole('button', { name: /switch to dark theme/i }));
-    await user.click(screen.getByRole('button', { name: /switch to light theme/i }));
     expect(localStorage.getItem('veridone-theme')).toBe('system');
+    await user.click(screen.getByRole('button', { name: /switch to light theme/i }));
+    expect(localStorage.getItem('veridone-theme')).toBe('light');
   });
 
   it('persists search, filter, sort, and the selected review in the URL', async () => {

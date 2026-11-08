@@ -73,6 +73,29 @@ async function connectSource(
   await expect(page.getByRole('dialog')).toBeHidden();
 }
 
+test('sets the restore preview summary apart from the sentence after it', async ({
+  page,
+  request,
+}) => {
+  const backup = await (await request.get('/api/v1/workspace/export')).body();
+  await page.goto('/');
+  // An empty workspace opens the dialog from its first screen, and any other from the navigation.
+  await page
+    .getByRole('button', { name: /^(Restore a backup|Open workspace backup and restore)$/u })
+    .click();
+  await page.getByLabel('Choose a VeriDone workspace JSON backup').setInputFiles({
+    name: 'backup.json',
+    mimeType: 'application/json',
+    buffer: backup,
+  });
+
+  const preview = page.getByLabel('Restore preview');
+  const summary = await preview.locator('> strong').boundingBox();
+  const detail = await preview.locator('> small').boundingBox();
+  if (!summary || !detail) throw new Error('The restore preview shows no summary.');
+  expect(detail.y).toBeGreaterThanOrEqual(summary.y + summary.height);
+});
+
 test('onboards, verifies, decides, and exports without trusting the claim', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'No evidence sources yet' })).toBeVisible();

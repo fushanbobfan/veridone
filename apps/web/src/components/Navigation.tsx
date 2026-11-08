@@ -18,6 +18,7 @@ export function Navigation({
   theme,
   reviewCount,
   serviceMode,
+  serviceStopped,
   themePreference,
   onToggleTheme,
   onOpenWorkspace,
@@ -26,11 +27,16 @@ export function Navigation({
   theme: 'light' | 'dark';
   reviewCount: number;
   serviceMode: 'local' | 'demo';
+  serviceStopped: boolean;
   themePreference: 'light' | 'dark' | 'system';
   onToggleTheme: () => void;
   onOpenWorkspace?: () => void;
   onOpenSection?: (section: WorkspaceSection) => void;
 }) {
+  const backupLabel = onOpenWorkspace
+    ? 'Open workspace backup and restore'
+    : 'Workspace backup needs the local service';
+
   return (
     <aside className="navigation" aria-label="Primary navigation">
       <div className="brand-lockup">
@@ -104,10 +110,16 @@ export function Navigation({
 
       <div className="navigation-footer">
         <div className="local-status">
-          <span className="local-dot" aria-hidden="true" />
+          <span className={serviceStopped ? 'local-dot stopped' : 'local-dot'} aria-hidden="true" />
           <span>
             {serviceMode === 'local' ? 'Local service' : 'Demo workspace'}
-            <small>{serviceMode === 'local' ? 'Loopback only' : 'Synthetic data'}</small>
+            <small>
+              {serviceStopped
+                ? 'Not answering'
+                : serviceMode === 'local'
+                  ? 'Loopback only'
+                  : 'Synthetic data'}
+            </small>
           </span>
         </div>
         <button
@@ -128,11 +140,10 @@ export function Navigation({
           type="button"
           onClick={onOpenWorkspace}
           disabled={!onOpenWorkspace}
+          title={backupLabel}
         >
           <Settings2 aria-hidden="true" size={17} />
-          <span className="sr-only">
-            {onOpenWorkspace ? 'Open workspace backup and restore' : 'Workspace backup unavailable'}
-          </span>
+          <span className="sr-only">{backupLabel}</span>
         </button>
       </div>
     </aside>

@@ -206,9 +206,18 @@ export interface ReadinessDto {
   }>;
 }
 
+export const serviceDidNotAnswer = 'The local service did not answer.';
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const body = (await response.json()) as T & { error?: string; message?: string };
+  let response: Response;
+  let body: T & { error?: string; message?: string };
+  try {
+    response = await fetch(url, init);
+    body = (await response.json()) as typeof body;
+  } catch {
+    // No connection, or an answer the service never gives: Vite's proxy answers for a stopped one with an empty 502.
+    throw new Error(serviceDidNotAnswer);
+  }
   if (!response.ok)
     throw new Error(body.message ?? body.error ?? `Request failed (${response.status}).`);
   return body;

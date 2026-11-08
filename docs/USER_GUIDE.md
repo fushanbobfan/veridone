@@ -58,6 +58,8 @@ The dialog holds on to the state it showed when it opened: the repository finger
 
 While a repository cannot be read, because its folder is gone, its root waits for approval, or Git will not start, the review says why and a plain acceptance stays locked. **Reject**, **Request changes**, and **Override lock** still record, against the last state VeriDone captured.
 
+If the local service stops answering, the page says so at the top and keeps showing the last data it received, with the time it arrived. The buttons for verdicts, checks, exports, removals, and other changes are off, and the page goes back to normal at the service's first answer. A dialog you were writing in keeps its text; sending from it fails until the service answers, and then works again.
+
 VeriDone never records an automated verdict. Even a fully green work item waits for a person.
 
 ## 6. Export or move the workspace
@@ -68,7 +70,7 @@ The settings button opens workspace backup and restore. Backups include approved
 
 A backup restores up to 500 MB. Export refuses to write a larger one and names the data directory, which you can copy while VeriDone is stopped. An empty workspace offers **Restore a backup** on its first screen.
 
-Restored roots wait for your approval. VeriDone reads nothing under one until you choose **Approve** for it under **Roots** in the workspace explorer, and it refuses a root whose directory is missing on this machine or now resolves to another place. The backup checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
+Restored roots wait for your approval. One grants no read access until you choose **Approve** for it under **Roots** in the workspace explorer, and VeriDone refuses a root whose directory is missing on this machine or now resolves to another place. The backup checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
 
 ## 7. Remove what no longer belongs
 
@@ -88,4 +90,4 @@ A packet states the removal of its work item and of the repository that work ite
 - Dialog focus is trapped and returns to the trigger on close.
 - Escape closes dialogs.
 - Every required decision remains available in the 360 px decision dock.
-- Theme cycles through system, light, and dark; reduced-motion system preferences disable nonessential animation.
+- Each press of the theme button switches between light and dark; when it lands on your device's theme, the page follows the device's setting again. Reduced-motion system preferences disable nonessential animation.

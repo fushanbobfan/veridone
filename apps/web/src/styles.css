@@ -106,6 +106,26 @@ a:focus-visible {
   overflow: hidden;
 }
 
+.app-shell.service-down {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.service-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  grid-column: 1 / -1;
+  padding: 9px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: color-mix(in srgb, var(--warning) 14%, var(--canvas));
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.service-banner + .empty-workspace {
+  min-height: 0;
+}
+
 .navigation {
   position: relative;
   z-index: 2;
@@ -228,6 +248,11 @@ a:focus-visible {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
+.local-dot.stopped {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
 .icon-button {
   display: grid;
   place-items: center;
@@ -240,7 +265,7 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.icon-button:hover {
+.icon-button:not(:disabled):hover {
   color: var(--ink);
   background: var(--surface-raised);
 }
@@ -335,6 +360,14 @@ a:focus-visible {
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.last-data-note {
+  font-size: 11px;
+}
+
+.last-data-note span {
+  white-space: normal;
 }
 
 .filter-strip {
@@ -1094,6 +1127,15 @@ a:focus-visible {
   background: var(--surface-raised);
 }
 
+.text-button:disabled,
+.reject-action:disabled,
+.override-action:disabled,
+.secondary-action:disabled,
+.icon-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .primary-action {
   display: inline-flex;
   align-items: center;
@@ -1393,6 +1435,11 @@ a:focus-visible {
 .receipt-preview small {
   flex: 0 0 auto;
   color: var(--ink-faint);
+}
+
+.receipt-preview > small {
+  display: block;
+  margin-top: 6px;
 }
 
 .receipt-preview .preview-degraded {
@@ -1973,6 +2020,21 @@ h1[tabindex='-1']:focus {
   .local-status,
   .navigation-footer .icon-button:last-child {
     display: none;
+  }
+
+  /* The banner stays in view as the page scrolls, so the shell cannot be the scroll container it sticks to. */
+  .app-shell.service-down {
+    overflow: clip;
+  }
+
+  .service-down .navigation {
+    position: static;
+  }
+
+  .service-banner {
+    position: sticky;
+    z-index: 3;
+    top: 0;
   }
 
   .navigation-footer {

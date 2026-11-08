@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   approveRoot,
@@ -14,6 +14,7 @@ import {
   removeRoot,
   retireCheck,
   runCheck,
+  serviceDidNotAnswer,
   type BootstrapDto,
   type CheckDto,
   type ToolCandidate,
@@ -125,6 +126,16 @@ function verdictLabel(verdict: VerdictDto, currentFingerprint: string | undefine
   return `${verdict.decision}${override}${superseded}`;
 }
 
+/** Names the moment of a page's last answer; the date counts on a page left open overnight. */
+function receivedLabel(receivedAt: Date): string {
+  return receivedAt.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export function App() {
   const [initial] = useState(initialView);
   const [selectedId, setSelectedId] = useState(initial.reviewId);
@@ -141,6 +152,7 @@ export function App() {
   const focusTimer = useRef<number | undefined>(undefined);
   const [decisions, setDecisions] = useState<Record<string, string>>({});
   const [bootstrap, setBootstrap] = useState<BootstrapDto | null>(null);
+  const [lastReceivedAt, setLastReceivedAt] = useState<Date | null>(null);
   const [connectionState, setConnectionState] = useState<'loading' | 'ready' | 'demo'>(
     noService ? 'demo' : 'loading',
   );
@@ -162,12 +174,14 @@ export function App() {
   const [actionBusy, setActionBusy] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Moves with the polling rounds, so that "3 min ago" stays true on a page that hears nothing.
+  const [pollRound, setPollRound] = useState(0);
   const reviews = useMemo(
     () =>
       bootstrap?.mode === 'local'
         ? bootstrap.workItems.map((item) => workItemToReview(item, bootstrap))
         : demoReviews,
-    [bootstrap],
+    [bootstrap, pollRound],
   );
   const selected = useMemo(
     () => reviews.find((item) => item.id === selectedId) ?? reviews[0],
@@ -177,38 +191,63 @@ export function App() {
   // The link dialog names the work item it binds, and a removal elsewhere can move the selection under it.
   useEffect(() => setRepositoryDialogOpen(false), [selected?.id]);
 
-  const reloadWorkspace = async () => {
-    const next = await fetchBootstrap();
+  const receiveBootstrap = useCallback((next: BootstrapDto) => {
     setBootstrap(next);
+    setLastReceivedAt(new Date());
     setConnectionState(next.mode === 'local' ? 'ready' : 'demo');
-    setSelectedId((current) => selectionAfterRefresh(current, next));
+    setServiceUnavailable(false);
+    setActionError((current) => (current === serviceDidNotAnswer ? null : current));
+    if (next.mode === 'local') {
+      setSelectedId((current) => selectionAfterRefresh(current, next));
+    }
+  }, []);
+
+  const reloadWorkspace = async () => {
+    receiveBootstrap(await fetchBootstrap());
   };
 
   useEffect(() => {
     if (noService) return;
     const controller = new AbortController();
-    const update = () =>
-      fetchBootstrap(controller.signal)
+    // A service that hangs never fails a request, so its silence has to count. A workspace with large changed files
+    // answers slowly (about 20 seconds for 4 GiB), so the silence has to outlast its slowest answer by two rounds. The
+    // request stays open, and a late answer still counts.
+    let waiting = false;
+    let silentRounds = 0;
+    let slowestAnswer = 0;
+    const update = () => {
+      setPollRound((round) => round + 1);
+      if (waiting) {
+        silentRounds += 1;
+        if (silentRounds >= slowestAnswer + 2) setServiceUnavailable(true);
+        return;
+      }
+      waiting = true;
+      silentRounds = 0;
+      void fetchBootstrap(controller.signal)
         .then((next) => {
-          setBootstrap(next);
-          setConnectionState(next.mode === 'local' ? 'ready' : 'demo');
-          setServiceUnavailable(false);
-          if (next.mode === 'local') {
-            setSelectedId((current) => selectionAfterRefresh(current, next));
-          }
+          slowestAnswer = Math.max(slowestAnswer, silentRounds);
+          receiveBootstrap(next);
         })
         .catch(() => {
-          // A page that has not reached the service shows the labeled synthetic demo and says why.
+          // The page's own abort says nothing of the service; StrictMode makes one on each development load.
+          if (controller.signal.aborted) return;
+          // A page that has not reached the service shows the labeled synthetic demo and says why; one that has keeps
+          // its last data and marks it.
           setConnectionState('demo');
           setServiceUnavailable(true);
+        })
+        .finally(() => {
+          waiting = false;
         });
-    void update();
-    const interval = window.setInterval(() => void update(), 15_000);
+    };
+    update();
+    const interval = window.setInterval(update, 15_000);
     return () => {
       controller.abort();
       window.clearInterval(interval);
     };
-  }, []);
+  }, [receiveBootstrap]);
 
   useEffect(() => {
     const timers = focusTimer;
@@ -251,10 +290,34 @@ export function App() {
         </div>
         <span className="loading-line" />
         <span className="loading-line short" />
-        <p>Refreshing repository fingerprints and local evidence…</p>
+        <p>
+          {serviceUnavailable
+            ? 'The local service has not answered yet. Check that VeriDone is still running.'
+            : 'Refreshing repository fingerprints and local evidence…'}
+        </p>
       </main>
     );
   }
+
+  // Set while a page that reached its service hears nothing from it, and names when the data on the page arrived.
+  const lastData =
+    bootstrap?.mode === 'local' && serviceUnavailable && lastReceivedAt
+      ? receivedLabel(lastReceivedAt)
+      : null;
+  // Empty until then, and in the page from the start, so that a screen reader announces what appears in it.
+  const serviceNotice = (
+    <div className={lastData ? 'service-banner' : 'sr-only'} role="status">
+      {lastData && (
+        <>
+          <strong>Local service unavailable</strong>
+          <span>
+            Showing the last data received, {lastData}. Actions that need the service return when it
+            answers. Check that VeriDone is still running.
+          </span>
+        </>
+      )}
+    </div>
+  );
 
   // The next item takes its place, or the empty page does; the button that opened the dialog left with the old review.
   const afterWorkItemRemoved = async () => {
@@ -265,9 +328,9 @@ export function App() {
   };
 
   // Rendered at one place in both views, so that their messages survive the first work item arriving or the last one
-  // leaving.
+  // leaving. The key keeps them the same dialogs while the views place them at different positions.
   const sharedDialogs = (
-    <>
+    <Fragment key="shared-dialogs">
       {bootstrap && (
         <AddSourceDialog
           open={sourceDialogOpen}
@@ -318,6 +381,7 @@ export function App() {
         <WorkspaceDialog
           open={workspaceDialogOpen}
           bootstrap={bootstrap}
+          {...(lastData ? { lastDataReceived: lastData } : {})}
           onClose={() => setWorkspaceDialogOpen(false)}
           onImported={reloadWorkspace}
         />
@@ -329,7 +393,8 @@ export function App() {
           bootstrap={bootstrap}
           onSection={setWorkspaceSection}
           onClose={() => setWorkspaceSection(null)}
-          {...(bootstrap.mode === 'local'
+          {...(lastData ? { lastDataReceived: lastData } : {})}
+          {...(bootstrap.mode === 'local' && !lastData
             ? {
                 onReviewTool: fetchToolCandidate,
                 onPinTool: async (checkId: string, expected: ToolCandidate) => {
@@ -370,7 +435,7 @@ export function App() {
             : {})}
         />
       )}
-    </>
+    </Fragment>
   );
 
   // The form for a new check on this repository, or for the check being replaced.
@@ -402,6 +467,7 @@ export function App() {
     );
     return (
       <>
+        {serviceNotice}
         <div className="empty-workspace">
           <div className="brand-lockup">
             <span className="brand-mark" aria-hidden="true">
@@ -420,6 +486,7 @@ export function App() {
             className="primary-action"
             type="button"
             onClick={() => setSourceDialogOpen(true)}
+            disabled={Boolean(lastData)}
           >
             {recorded ? 'Add source' : 'Add first source'}
           </button>
@@ -439,6 +506,7 @@ export function App() {
               className="secondary-action"
               type="button"
               onClick={() => setWorkspaceDialogOpen(true)}
+              disabled={Boolean(lastData)}
             >
               Restore a backup
             </button>
@@ -585,29 +653,25 @@ export function App() {
 
   return (
     <>
-      <div className={`app-shell mobile-${mobilePane}`}>
+      <div className={`app-shell mobile-${mobilePane}${lastData ? ' service-down' : ''}`}>
         <a className="skip-link" href="#review-detail">
           Skip to selected review
         </a>
+        {serviceNotice}
         <Navigation
           theme={theme}
           reviewCount={reviews.length}
           serviceMode={bootstrap?.mode ?? 'demo'}
+          serviceStopped={Boolean(lastData)}
           themePreference={themePreference}
-          onToggleTheme={() =>
-            setThemePreference((current) =>
-              current === 'system'
-                ? theme === 'dark'
-                  ? 'light'
-                  : 'dark'
-                : current === 'light'
-                  ? 'dark'
-                  : 'system',
-            )
-          }
+          onToggleTheme={() => {
+            // Every press changes what the page shows; landing on the device's theme follows the device again.
+            const next = theme === 'dark' ? 'light' : 'dark';
+            setThemePreference(next === systemTheme ? 'system' : next);
+          }}
           {...(bootstrap?.mode === 'local'
             ? {
-                onOpenWorkspace: () => setWorkspaceDialogOpen(true),
+                ...(lastData ? {} : { onOpenWorkspace: () => setWorkspaceDialogOpen(true) }),
                 onOpenSection: (section: WorkspaceSection) => setWorkspaceSection(section),
               }
             : {})}
@@ -619,14 +683,19 @@ export function App() {
           query={query}
           sort={sort}
           dataLabel={
-            bootstrap?.mode === 'local'
-              ? 'Live local evidence'
-              : serviceUnavailable
-                ? 'Local service unavailable · synthetic demo'
-                : 'Synthetic demo data'
+            lastData
+              ? 'Last data received'
+              : bootstrap?.mode === 'local'
+                ? 'Live local evidence'
+                : serviceUnavailable
+                  ? 'Local service unavailable · synthetic demo'
+                  : 'Synthetic demo data'
           }
+          updatedLabel={lastData ?? (bootstrap?.mode === 'local' ? 'Updated now' : null)}
           sourceIssues={bootstrap?.sourceIssues ?? []}
-          {...(bootstrap?.mode === 'local' ? { onAddSource: () => setSourceDialogOpen(true) } : {})}
+          {...(bootstrap?.mode === 'local' && !lastData
+            ? { onAddSource: () => setSourceDialogOpen(true) }
+            : {})}
           onFilter={setFilter}
           onQuery={setQuery}
           onSort={setSort}
@@ -639,8 +708,11 @@ export function App() {
               ? verdictLabel(localVerdict, localRepository?.snapshot.fingerprint)
               : (decisions[selected.id] ?? null)
           }
+          // A decision on a page with no workspace opens no dialog, so the decision bar says it.
+          decisionInBar={!isLocal}
           {...(evidenceActionLabel ? { evidenceActionLabel } : {})}
           evidenceActionBusy={actionBusy}
+          {...(lastData ? { lastDataReceived: lastData } : {})}
           {...(activeRunId ? { onCancelEvidence: cancelEvidenceAction } : {})}
           onBack={() => setMobilePane('inbox')}
           {...(isLocal
