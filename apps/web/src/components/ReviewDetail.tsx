@@ -124,12 +124,14 @@ export function ReviewDetail({
   return (
     <main className="review-detail" id="review-detail" tabIndex={-1}>
       <AnimatePresence mode="wait">
+        {/* A fade only: a transform here would make this box the one the fixed decision bar is placed in, so the bar
+            would leave the window and widen the pane for as long as the change of work item lasts. */}
         <motion.div
           className="detail-inner"
           key={item.id}
-          initial={{ opacity: 0, x: 12 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -8 }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
           transition={{ duration: 0.22, ease: 'easeOut' }}
         >
           <button className="mobile-back" type="button" onClick={onBack}>

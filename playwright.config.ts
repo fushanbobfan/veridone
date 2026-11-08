@@ -123,17 +123,17 @@ export default defineConfig({
     },
     {
       name: 'chromium-built',
-      testMatch: /built-page\.spec\.ts/u,
+      testMatch: /(built-page|layout)\.spec\.ts/u,
       use: { ...devices['Desktop Chrome'], baseURL: builtPageUrl },
     },
     {
       name: 'firefox-built',
-      testMatch: /built-page\.spec\.ts/u,
+      testMatch: /(built-page|layout)\.spec\.ts/u,
       use: { ...devices['Desktop Firefox'], baseURL: builtPageUrl },
     },
     {
       name: 'webkit-built',
-      testMatch: /built-page\.spec\.ts/u,
+      testMatch: /(built-page|layout)\.spec\.ts/u,
       use: { ...devices['Desktop Safari'], baseURL: builtPageUrl },
     },
     {

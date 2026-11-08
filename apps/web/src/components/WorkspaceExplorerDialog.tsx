@@ -533,7 +533,7 @@ export function WorkspaceExplorerDialog({
                       </div>
                       <div>
                         <dt>Directory</dt>
-                        <dd className="mono">{check.cwdRelative}</dd>
+                        <dd className="mono tool-path">{check.cwdRelative}</dd>
                       </div>
                       <div>
                         <dt>Approved</dt>
