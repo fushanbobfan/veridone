@@ -8,6 +8,7 @@ import {
   type BootstrapDto,
   type RestoreResultDto,
 } from '../api.js';
+import { LastDataNote } from './LastDataNote.js';
 import { useDialogFocus } from './useDialogFocus.js';
 
 const total = (counts: Record<string, number>) =>
@@ -34,11 +35,14 @@ function PreviewList({ title, items }: { title: string; items: string[] }) {
 export function WorkspaceDialog({
   open,
   bootstrap,
+  lastDataReceived,
   onClose,
   onImported,
 }: {
   open: boolean;
   bootstrap: BootstrapDto;
+  /** When this data arrived, given while the service is not answering. */
+  lastDataReceived?: string;
   onClose: () => void;
   onImported: () => Promise<void>;
 }) {
@@ -135,6 +139,11 @@ export function WorkspaceDialog({
           carries a SHA-256 integrity hash.
         </p>
 
+        <LastDataNote
+          received={lastDataReceived}
+          waiting="Downloads wait until the service answers."
+        />
+
         <div className="workspace-stat" aria-label={`${totalRecords} portable records`}>
           <ArchiveRestore aria-hidden="true" size={22} />
           <div>
@@ -148,13 +157,16 @@ export function WorkspaceDialog({
         </div>
 
         <div className="workspace-actions">
-          <a className="workspace-action" href="/api/v1/workspace/export" download>
-            <Download aria-hidden="true" size={18} />
-            <span>
-              <strong>Export verified JSON</strong>
-              <small>Includes local paths and approved check definitions.</small>
-            </span>
-          </a>
+          {/* A link to a stopped service fails its own way in each browser; WebKit saves an empty file. */}
+          {!lastDataReceived && (
+            <a className="workspace-action" href="/api/v1/workspace/export" download>
+              <Download aria-hidden="true" size={18} />
+              <span>
+                <strong>Export verified JSON</strong>
+                <small>Includes local paths and approved check definitions.</small>
+              </span>
+            </a>
+          )}
           <button
             className="workspace-action"
             type="button"
@@ -180,16 +192,18 @@ export function WorkspaceDialog({
             disabled={busy}
             onChange={chooseFile}
           />
-          <a className="workspace-action" href="/api/v1/workspace/signing-key" download>
-            <KeyRound aria-hidden="true" size={18} />
-            <span>
-              <strong>Download the packet signing key</strong>
-              <small>
-                Key {bootstrap.signingKey.keyId.slice(0, 12)}… signs every packet. Publish this
-                public key so readers can check packets with it; backups leave the key out.
-              </small>
-            </span>
-          </a>
+          {!lastDataReceived && (
+            <a className="workspace-action" href="/api/v1/workspace/signing-key" download>
+              <KeyRound aria-hidden="true" size={18} />
+              <span>
+                <strong>Download the packet signing key</strong>
+                <small>
+                  Key {bootstrap.signingKey.keyId.slice(0, 12)}… signs every packet. Publish this
+                  public key so readers can check packets with it; backups leave the key out.
+                </small>
+              </span>
+            </a>
+          )}
         </div>
 
         {pending && (
