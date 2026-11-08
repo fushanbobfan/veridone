@@ -70,7 +70,9 @@ async function connectSource(
   } else {
     await page.getByRole('button', { name: 'Connect source' }).click();
   }
-  await expect(page.getByRole('dialog')).toBeHidden();
+  // The dialog closes after the add request, a bootstrap and 650 ms, which together have taken
+  // more than the default 10 s.
+  await expect(page.getByRole('dialog')).toBeHidden({ timeout: 25_000 });
 }
 
 test('sets the restore preview summary apart from the sentence after it', async ({
