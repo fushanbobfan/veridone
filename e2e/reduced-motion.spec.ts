@@ -2,15 +2,20 @@ import { expect, test, type Page } from '@playwright/test';
 
 declare global {
   interface Window {
-    motionRecord: { lastFrame: number; caught: { element: string; state: string }[] };
+    motionRecord: {
+      lastFrame: number;
+      caught: { element: string; state: string }[];
+      unsettled: { element: string; state: string }[];
+    };
   }
 }
 
 // Runs before the page's own scripts and looks at every frame the page draws. An element is caught when it can be seen
 // between two resting states: a review pane, a criterion row or an inbox row part-faded or off its place, or a
-// readiness bar whose width changes after it first shows.
+// readiness bar whose width changes after it first shows. Each frame also lists the elements away from their final
+// look, seen or not, so a test can tell an element that appears in place from one that never appears.
 function recordMotion() {
-  const record: Window['motionRecord'] = { lastFrame: 0, caught: [] };
+  const record: Window['motionRecord'] = { lastFrame: 0, caught: [], unsettled: [] };
   window.motionRecord = record;
   const watched = {
     '.detail-inner': 'review pane',
@@ -20,25 +25,36 @@ function recordMotion() {
   const barWidths = new Map<Element, number>();
   const look = (time: number) => {
     record.lastFrame = time;
+    const unsettled: Window['motionRecord']['unsettled'] = [];
     for (const [selector, element] of Object.entries(watched)) {
       for (const node of document.querySelectorAll(selector)) {
         const { opacity, transform } = getComputedStyle(node);
         const atRest =
           Number(opacity) > 0.999 &&
           (transform === 'none' || new DOMMatrixReadOnly(transform).isIdentity);
-        if (Number(opacity) > 0.001 && !atRest) {
-          record.caught.push({ element, state: `opacity ${opacity}, ${transform}` });
-        }
+        if (atRest) continue;
+        const state = `opacity ${opacity}, ${transform}`;
+        unsettled.push({ element, state });
+        if (Number(opacity) > 0.001) record.caught.push({ element, state });
       }
     }
     for (const bar of document.querySelectorAll('.progress-track > span')) {
       const width = bar.getBoundingClientRect().width;
+      // At rest a bar fills the share of gates its progress bar reports, which the pane rounds to a whole percent.
+      const track = bar.parentElement as HTMLElement;
+      const share =
+        Number(track.getAttribute('aria-valuenow')) / Number(track.getAttribute('aria-valuemax'));
+      const trackWidth = track.getBoundingClientRect().width;
+      if (Math.abs(width - trackWidth * share) > trackWidth / 200 + 0.5) {
+        unsettled.push({ element: 'readiness bar', state: `${width} px of ${trackWidth} px` });
+      }
       const before = barWidths.get(bar);
       if (before !== undefined && before > 0.5 && Math.abs(width - before) > 0.5) {
         record.caught.push({ element: 'readiness bar', state: `${before} px to ${width} px` });
       }
       barWidths.set(bar, width);
     }
+    record.unsettled = unsettled;
     requestAnimationFrame(look);
   };
   requestAnimationFrame(look);
@@ -55,7 +71,7 @@ async function waitForFrameAfter(page: Page, ms: number) {
 /**
  * Opens each demo review in turn, then shows only ready reviews and all of them again, so two inbox rows enter once more
  * on a page that has finished loading: on Linux WebKit the recorder once saw no frame of the entrance at load. Then
- * watches for a second, longer than any animation in the app.
+ * watches for a second, longer than any animation in the app, and checks that everything ended at its final look.
  */
 async function useTheInbox(page: Page) {
   for (const title of [
@@ -72,6 +88,8 @@ async function useTheInbox(page: Page) {
   await filters.getByRole('button', { name: /^All/u }).click();
   await expect(page.locator('.review-row')).toHaveCount(3);
   await waitForFrameAfter(page, 1_000);
+  // The caught frames leave out what cannot be seen, so an element left transparent would pass them.
+  expect(await page.evaluate(() => window.motionRecord.unsettled)).toEqual([]);
 }
 
 /** How many frames caught each kind of element. */
