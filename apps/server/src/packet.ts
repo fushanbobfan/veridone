@@ -98,6 +98,22 @@ function publicEvidence(evidence: EvidenceRecord[], pseudonym: Pseudonym) {
   }));
 }
 
+/** Where a Markdown reader or a text editor can start a new line. */
+const lineEnd = /\r\n|[\n\v\f\r\x85\p{Zl}\p{Zp}]/u;
+
+/**
+ * A text on one line: a line break in it could otherwise pass for a line of the packet, such as a second verdict.
+ * Nothing else in it changes, so two spaces in a row stay.
+ */
+const oneLine: Sanitize = (value) => value.split(lineEnd).join(' ');
+
+/** Free text as a Markdown quotation: each line is marked, so a heading or a list in it stays inside the quote. */
+const quotation = (text: string) =>
+  text
+    .split(lineEnd)
+    .map((line) => (line ? `> ${line}` : '>'))
+    .join('\n');
+
 /** A value with every string in it, object keys included, passed through `sanitize`. */
 function sanitizeDeep(value: unknown, sanitize: Sanitize): unknown {
   if (typeof value === 'string') return sanitize(value);
@@ -438,9 +454,20 @@ export async function buildAcceptancePacket(database: VeriDoneDatabase, workItem
   return { packet, json, markdown: renderMarkdown(view), html: renderHtml(view) };
 }
 
-/** A check's command as a reader would type it, each argument quoted when it holds spaces or quotes. */
+/**
+ * A check's command as a reader would type it, each argument quoted when it holds a space, a quote or a line break.
+ * JSON leaves three line breaks as they are, so they are escaped here: the packet view shows a line break as a space,
+ * which would change what the argument says.
+ */
 function commandLine(check: { executable: string; args: string[] }): string {
-  const quoted = check.args.map((arg) => (/[\s"'\\]/u.test(arg) ? JSON.stringify(arg) : arg));
+  const quoted = check.args.map((arg) =>
+    /[\s"'\\]/u.test(arg) || lineEnd.test(arg)
+      ? JSON.stringify(arg).replace(
+          new RegExp(lineEnd, 'gu'),
+          (mark) => `\\u${mark.charCodeAt(0).toString(16).padStart(4, '0')}`,
+        )
+      : arg,
+  );
   return [check.executable, ...quoted].join(' ');
 }
 
@@ -492,14 +519,12 @@ interface PacketViewInput {
 
 /**
  * The facts the readable formats show, read from the JSON packet itself so that the three formats cannot drift
- * apart. Every string in it is already sanitized.
+ * apart. Every string in it is already sanitized. Each fact sits on one line, except the claim, which is free text
+ * under its own heading.
  */
 function packetView(packet: PacketViewInput) {
   const removal = (record: { removedAt: string | null; removedReason: string | null } | null) =>
-    // One line whatever the reason holds: a line break in it could otherwise pass for a line of the packet.
-    record?.removedAt
-      ? `${record.removedAt}: ${(record.removedReason ?? 'no reason').replace(/\s+/gu, ' ')}`
-      : null;
+    record?.removedAt ? `${record.removedAt}: ${record.removedReason ?? 'no reason'}` : null;
   const clauses = (packet.contract?.criteria ?? []).map((clause) => {
     const record = (clause ?? {}) as { title?: unknown; required?: unknown };
     return {
@@ -507,10 +532,9 @@ function packetView(packet: PacketViewInput) {
       required: record.required === true,
     };
   });
-  return {
+  const facts = {
     title: packet.workItem.title,
     source: packet.workItem.sourceLabel,
-    claim: packet.workItem.claim,
     removed: removal(packet.workItem),
     repository: packet.repository?.name ?? 'Unlinked',
     repositoryRemoved: removal(packet.repository),
@@ -550,6 +574,7 @@ function packetView(packet: PacketViewInput) {
     payloadHash: packet.manifest.payloadHash,
     keyId: packet.manifest.signature.keyId,
   };
+  return { ...(sanitizeDeep(facts, oneLine) as typeof facts), claim: packet.workItem.claim };
 }
 
 type PacketView = ReturnType<typeof packetView>;
@@ -572,7 +597,7 @@ function renderMarkdown(view: PacketView): string {
 
 ### Claim
 
-${escapeMarkdown(view.claim)}
+${quotation(escapeMarkdown(view.claim))}
 
 ### Contract clauses
 

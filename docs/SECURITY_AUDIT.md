@@ -40,7 +40,7 @@ This review followed the local JavaScript/TypeScript and React security specific
 
 ### VDS-005 — Medium — portable evidence needed deterministic privacy verification
 
-- **Location:** `apps/server/src/packet.ts:88-111`, `apps/server/src/packet.ts:333-439`, `apps/server/src/packet.ts:159-271`
+- **Location:** `apps/server/src/packet.ts:88-99`, `apps/server/src/packet.ts:118-127`, `apps/server/src/packet.ts:349-455`, `apps/server/src/packet.ts:175-287`
 - **Evidence:** packet text is credential/path-redacted, raw stdout/stderr are excluded, generation time derives from stable review state, and the verifier recomputes the payload hash and compares the manifest's artifact hashes with the evidence records.
 - **Impact before fix:** packets could expose common local paths and repeated exports of unchanged state produced different hashes.
 - **Fix:** strict privacy payloads, deterministic serialization, three-format parity tests, and a standalone verifier.

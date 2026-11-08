@@ -70,7 +70,7 @@ The settings button opens workspace backup and restore. Backups include approved
 
 A backup restores up to 500 MB. Export refuses to write a larger one and names the data directory, which you can copy while VeriDone is stopped. An empty workspace offers **Restore a backup** on its first screen.
 
-Restored roots wait for your approval. VeriDone reads nothing under one until you choose **Approve** for it under **Roots** in the workspace explorer, and it refuses a root whose directory is missing on this machine or now resolves to another place. The backup checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
+Restored roots wait for your approval. One grants no read access until you choose **Approve** for it under **Roots** in the workspace explorer, and VeriDone refuses a root whose directory is missing on this machine or now resolves to another place. The backup checksum detects accidental damage and carries no signature, so restore only backups you made or received through a channel you trust.
 
 ## 7. Remove what no longer belongs
 

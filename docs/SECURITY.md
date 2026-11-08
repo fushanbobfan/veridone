@@ -60,7 +60,7 @@ A hash of local data in a packet would let a reader confirm a guess: the reposit
 
 **Threat:** old results or edited artifacts are presented as current.
 
-**Control:** bind evidence to repository and check-definition fingerprints, hash each check result, recompute packet and workspace checksums when they are verified or imported, classify source provenance, and never upgrade unbound imported claims into executable evidence. Evidence restored from a backup is marked imported and never satisfies a gate.
+**Control:** bind evidence to repository and check-definition fingerprints, hash each check result, recompute packet and workspace checksums when they are verified or imported, classify source provenance, and never upgrade unbound imported claims into executable evidence. Evidence restored from a backup is marked imported and never satisfies a gate. In a Markdown packet each fact stays on its own line and the claim stays inside a quotation, so a line break in imported text adds no line that reads as the packet's own.
 
 Packets are signed with an Ed25519 key that the workspace creates on first use and leaves out of backups. The verifier checks the signature against the public key the packet carries, which must be an Ed25519 key, and with `--key` it also requires that key to be one the reader trusts. The operator publishes the public key; a reader who checks against it can tell a changed packet from the one the workspace signed, even when the changer recomputed every hash and signed again with a key of their own. A packet rewritten as schema 1 without its signature verifies only as unsigned, and fails once the reader gives a key. Workspace backup checksums stay unsigned and detect accidental changes only.
 
