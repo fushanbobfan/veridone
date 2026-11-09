@@ -446,3 +446,34 @@ test('the buttons a stopped service turns off stay still under the pointer', asy
     expect(on, names[index]).toBe(away);
   }
 });
+
+test('the evidence button shows a busy cursor only while its action runs', async ({ page }) => {
+  const service = await standInService(page, movedOn);
+  let answerBind = () => {};
+  await page.route('**/api/v1/work-items/*/link', async (route) => {
+    await new Promise<void>((resolve) => {
+      answerBind = resolve;
+    });
+    await route.fulfill({ json: {} });
+  });
+  await page.clock.install();
+  await page.goto('/');
+  const rebind = page.getByRole('button', { name: 'Rebind to current state' });
+  await expect(rebind).toHaveCSS('cursor', 'pointer');
+
+  // The action runs until its request is answered.
+  await rebind.click();
+  const working = page.getByRole('button', { name: 'Working…' });
+  await expect(working).toBeDisabled();
+  await expect(working).toHaveCSS('cursor', 'wait');
+  answerBind();
+  await expect(rebind).toBeEnabled();
+  await expect(rebind).toHaveCSS('cursor', 'pointer');
+
+  // A stopped service turns the button off, and nothing is running.
+  service.answer = refused;
+  await page.clock.fastForward(15_000);
+  await expect(serviceStopped(page)).toBeVisible();
+  await expect(rebind).toBeDisabled();
+  await expect(rebind).toHaveCSS('cursor', 'not-allowed');
+});
