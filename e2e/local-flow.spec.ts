@@ -99,6 +99,8 @@ test('sets the restore preview summary apart from the sentence after it', async 
 });
 
 test('onboards, verifies, decides, and exports without trusting the claim', async ({ page }) => {
+  // Each source dialog may wait 25 s and the check run 60 s; the default 60 s total ran out once.
+  test.setTimeout(120_000);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'No evidence sources yet' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Restore a backup' })).toBeVisible();
