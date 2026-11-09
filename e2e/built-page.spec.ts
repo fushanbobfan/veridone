@@ -395,15 +395,27 @@ test('an empty workspace says when its service stops too', async ({ page }) => {
 });
 
 test('the buttons a stopped service turns off stay still under the pointer', async ({ page }) => {
-  // A work item that is not ready, so the dock offers "Override lock" as well.
   const service = await standInService(page, {
     ...workspace,
+    // A second repository, so the review offers "Change repository".
+    repositories: workspace.repositories.flatMap((repository) => [
+      repository,
+      {
+        ...repository,
+        id: 'other-repository',
+        path: '/stand-in/other-repository',
+        name: 'other-repository',
+        snapshot: { ...repository.snapshot, repositoryId: 'other-repository' },
+      },
+    ]),
+    // A work item that is not ready, so the dock offers "Override lock".
     readiness: { 'work-item': { ...workspace.readiness['work-item'], ready: false } },
   });
   await page.clock.install();
   await page.goto('/');
   const reject = page.getByRole('button', { name: 'Reject', exact: true });
   await expect(page.getByRole('button', { name: 'Override lock' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Change repository' })).toBeVisible();
 
   // While the service answers, Reject lights up under the pointer, so this browser applies the hover style.
   const answering = await look(reject);
@@ -419,6 +431,7 @@ test('the buttons a stopped service turns off stay still under the pointer', asy
   expect(names).toEqual(
     expect.arrayContaining([
       'Approve a check',
+      'Change repository',
       'Export packet',
       'Remove work item',
       'Override lock',
