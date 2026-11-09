@@ -325,6 +325,7 @@ export function ReviewDetail({
                         type="button"
                         onClick={evidenceActionBusy ? onCancelEvidence : onEvidenceAction}
                         disabled={evidenceActionBusy ? !onCancelEvidence : paused}
+                        aria-busy={evidenceActionBusy && !onCancelEvidence ? true : undefined}
                       >
                         <Play aria-hidden="true" size={14} fill="currentColor" />
                         {evidenceActionBusy && onCancelEvidence
