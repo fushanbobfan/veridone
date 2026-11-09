@@ -8,8 +8,9 @@ export const look = (button: Locator) =>
   });
 
 /**
- * A button's look with the pointer away from it, then with the pointer on it. Each is read once the browser places the
- * pointer there, so a hover style that has not applied yet cannot pass for one that never applies.
+ * A button's look with the pointer away from it, then with the pointer on it. Each is read once `:hover` matches as
+ * expected, so a pointer that has not reached the button yet cannot pass for a hover style that never applies. A hover
+ * style with a transition would also need a wait for the transition to end.
  */
 export async function lookAwayAndOn(button: Locator): Promise<{ away: string; on: string }> {
   const underPointer = () => button.evaluate((element) => element.matches(':hover'));
