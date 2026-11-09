@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 import { expectNoWcagViolations } from './accessibility.js';
+import { look, lookAwayAndOn } from './pointer.js';
 import {
   answers,
   movedOn,
@@ -391,4 +392,57 @@ test('an empty workspace says when its service stops too', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Add first source' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Restore a backup' })).toBeEnabled();
   await expect(serviceStopped(page)).toHaveCount(0);
+});
+
+test('the buttons a stopped service turns off stay still under the pointer', async ({ page }) => {
+  const service = await standInService(page, {
+    ...workspace,
+    // A second repository, so the review offers "Change repository".
+    repositories: workspace.repositories.flatMap((repository) => [
+      repository,
+      {
+        ...repository,
+        id: 'other-repository',
+        path: '/stand-in/other-repository',
+        name: 'other-repository',
+        snapshot: { ...repository.snapshot, repositoryId: 'other-repository' },
+      },
+    ]),
+    // A work item that is not ready, so the dock offers "Override lock".
+    readiness: { 'work-item': { ...workspace.readiness['work-item'], ready: false } },
+  });
+  await page.clock.install();
+  await page.goto('/');
+  const reject = page.getByRole('button', { name: 'Reject', exact: true });
+  await expect(page.getByRole('button', { name: 'Override lock' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Change repository' })).toBeVisible();
+
+  // While the service answers, Reject lights up under the pointer, so this browser applies the hover style.
+  const answering = await look(reject);
+  await reject.hover();
+  await expect.poll(() => look(reject)).not.toBe(answering);
+  await page.mouse.move(0, 0);
+
+  service.answer = refused;
+  await page.clock.fastForward(15_000);
+  await expect(serviceStopped(page)).toBeVisible();
+  const turnedOff = page.locator('button:disabled:visible');
+  const names = (await turnedOff.allInnerTexts()).map((text) => text.trim());
+  expect(names).toEqual(
+    expect.arrayContaining([
+      'Approve a check',
+      'Change repository',
+      'Export packet',
+      'Remove work item',
+      'Override lock',
+      'Reject',
+      'Request changes',
+      'Accept work',
+    ]),
+  );
+
+  for (const [index, button] of (await turnedOff.all()).entries()) {
+    const { away, on } = await lookAwayAndOn(button);
+    expect(on, names[index]).toBe(away);
+  }
 });

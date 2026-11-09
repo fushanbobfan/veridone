@@ -191,7 +191,7 @@ a:focus-visible {
   cursor: not-allowed;
 }
 
-.nav-item:hover,
+.nav-item:not(:disabled):hover,
 .nav-item.active {
   color: var(--ink);
   background: var(--surface);
@@ -809,7 +809,7 @@ a:focus-visible {
   color: var(--ink-muted);
 }
 
-.text-button:hover {
+.text-button:not(:disabled):hover {
   color: var(--ink);
 }
 
@@ -1044,7 +1044,7 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.run-button:hover {
+.run-button:not(:disabled):hover {
   border-color: var(--accent);
 }
 
@@ -1146,7 +1146,7 @@ a:focus-visible {
   color: var(--danger);
 }
 
-.reject-action:hover {
+.reject-action:not(:disabled):hover {
   border-color: var(--danger);
 }
 
@@ -1154,7 +1154,7 @@ a:focus-visible {
   color: var(--warning);
 }
 
-.override-action:hover {
+.override-action:not(:disabled):hover {
   border-color: var(--warning);
 }
 
@@ -1596,7 +1596,7 @@ textarea.text-field.compact-code-field {
   cursor: pointer;
 }
 
-.workspace-action:hover {
+.workspace-action:not(:disabled):hover {
   color: var(--ink);
   background: color-mix(in srgb, var(--surface-raised) 65%, transparent);
 }
