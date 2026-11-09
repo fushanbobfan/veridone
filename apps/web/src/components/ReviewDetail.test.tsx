@@ -165,6 +165,26 @@ describe('while the service is not answering', () => {
     }
   });
 
+  it('marks the evidence button busy only while its action runs with no way to cancel', () => {
+    const { rerender } = render(
+      <ReviewDetail item={item} {...actions} {...offers} evidenceActionBusy />,
+    );
+    expect(button('Working…').getAttribute('aria-busy')).toBe('true');
+    rerender(
+      <ReviewDetail
+        item={item}
+        {...actions}
+        {...offers}
+        evidenceActionBusy
+        onCancelEvidence={() => undefined}
+      />,
+    );
+    expect(button('Cancel check').getAttribute('aria-busy')).toBeNull();
+    rerender(<ReviewDetail item={item} {...actions} {...offers} {...lastData} />);
+    expect(button('Run approved checks').disabled).toBe(true);
+    expect(button('Run approved checks').getAttribute('aria-busy')).toBeNull();
+  });
+
   it('offers all of it again once the service answers', () => {
     render(<ReviewDetail item={{ ...item, gatesReady: false }} {...actions} {...offers} />);
     for (const name of [

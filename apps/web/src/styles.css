@@ -1050,6 +1050,10 @@ a:focus-visible {
 
 .run-button:disabled {
   opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.run-button[aria-busy='true'] {
   cursor: wait;
 }
 
