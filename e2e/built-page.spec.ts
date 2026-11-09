@@ -466,6 +466,7 @@ test('the evidence button shows a busy cursor only while its action runs', async
   const working = page.getByRole('button', { name: 'Working…' });
   await expect(working).toBeDisabled();
   await expect(working).toHaveCSS('cursor', 'wait');
+  await expectNoWcagViolations(page);
   answerBind();
   await expect(rebind).toBeEnabled();
   await expect(rebind).toHaveCSS('cursor', 'pointer');
